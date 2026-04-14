@@ -327,6 +327,10 @@ else:
 
 DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DATA_DIR}/webui.db")
 
+# Secondary database (OBS data store)
+# If not provided, OBS data will be stored in the primary database.
+OBS_DATABASE_URL = os.environ.get("OBS_DATABASE_URL", "")
+
 DATABASE_TYPE = os.environ.get("DATABASE_TYPE")
 DATABASE_USER = os.environ.get("DATABASE_USER")
 DATABASE_PASSWORD = os.environ.get("DATABASE_PASSWORD")
@@ -354,6 +358,9 @@ elif DATABASE_TYPE == "sqlite+sqlcipher" and not os.environ.get("DATABASE_URL"):
 # Replace the postgres:// with postgresql://
 if "postgres://" in DATABASE_URL:
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://")
+
+if OBS_DATABASE_URL and "postgres://" in OBS_DATABASE_URL:
+    OBS_DATABASE_URL = OBS_DATABASE_URL.replace("postgres://", "postgresql://")
 
 DATABASE_SCHEMA = os.environ.get("DATABASE_SCHEMA", None)
 

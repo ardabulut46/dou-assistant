@@ -1670,11 +1670,17 @@ DEFAULT_USER_PERMISSIONS = {
         "folders": USER_PERMISSIONS_FEATURES_FOLDERS,
         "channels": USER_PERMISSIONS_FEATURES_CHANNELS,
         "direct_tool_servers": USER_PERMISSIONS_FEATURES_DIRECT_TOOL_SERVERS,
+        # OBS (read-only by default, write is controlled separately)
+        "obs": True,
         # Chat features
         "web_search": USER_PERMISSIONS_FEATURES_WEB_SEARCH,
         "image_generation": USER_PERMISSIONS_FEATURES_IMAGE_GENERATION,
         "code_interpreter": USER_PERMISSIONS_FEATURES_CODE_INTERPRETER,
         "memories": USER_PERMISSIONS_FEATURES_MEMORIES,
+    },
+    # OBS: only group members with obs.write=True should be able to POST/PUT/DELETE
+    "obs": {
+        "write": False,
     },
     "settings": {
         "interface": USER_PERMISSIONS_SETTINGS_INTERFACE,
