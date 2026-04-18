@@ -33,6 +33,11 @@
 
 	let mode = $config?.features.enable_ldap ? 'ldap' : 'signin';
 
+	// OBS-style login role selection (UI only; backend role comes from session)
+	type LoginRole = 'admin' | 'akademisyen' | 'ogrenci';
+	let loginStep: 'role' | 'form' = 'role';
+	let selectedLoginRole: LoginRole | null = null;
+
 	let form = null;
 
 	let name = '';
@@ -60,7 +65,13 @@
 			}
 
 			if (!redirectPath) {
-				redirectPath = $page.url.searchParams.get('redirect') || '/';
+				// Önce explicit redirect paramı (mevcut akışı bozmamak için)
+				redirectPath = $page.url.searchParams.get('redirect');
+				// Yoksa role göre varsayılan yönlendirme
+				if (!redirectPath) {
+					// Login sonrası OBS ana ekrana düş
+					redirectPath = '/obs';
+				}
 			}
 
 			goto(redirectPath);
@@ -167,7 +178,8 @@
 
 	onMount(async () => {
 		const redirectPath = $page.url.searchParams.get('redirect');
-		if ($user !== undefined) {
+		// Store initial değeri null olabildiği için sadece gerçek user varken redirect yap.
+		if ($user) {
 			goto(redirectPath || '/');
 		} else {
 			if (redirectPath) {
@@ -247,13 +259,61 @@
 									/>
 								</div>
 							{/if}
-							<form
-								class=" flex flex-col justify-center"
-								on:submit={(e) => {
-									e.preventDefault();
-									submitHandler();
-								}}
-							>
+							{#if loginStep === 'role' && !(mode === 'signup')}
+								<div class="w-full">
+									<div class="mb-4">
+										<div class="text-2xl font-medium">Doğuş Üniversitesi</div>
+										<div class="mt-1 text-sm text-gray-600 dark:text-gray-400">
+											Öğrenci Bilgi Sistemi
+										</div>
+									</div>
+
+									<div class="rounded-2xl border border-gray-700/10 dark:border-gray-100/10 overflow-hidden">
+										<div class="bg-sky-600 text-white text-sm font-semibold px-4 py-2">
+											Önlisans / Lisans / Enstitü
+										</div>
+										<div class="bg-white dark:bg-black">
+											<button
+												type="button"
+												class="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 dark:hover:bg-gray-900 transition border-b border-gray-700/10 dark:border-gray-100/10"
+												on:click={() => {
+													selectedLoginRole = 'ogrenci';
+													loginStep = 'form';
+												}}
+											>
+												Öğrenci Girişi
+											</button>
+											<button
+												type="button"
+												class="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 dark:hover:bg-gray-900 transition border-b border-gray-700/10 dark:border-gray-100/10"
+												on:click={() => {
+													selectedLoginRole = 'akademisyen';
+													loginStep = 'form';
+												}}
+											>
+												Akademisyen Girişi
+											</button>
+											<button
+												type="button"
+												class="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 dark:hover:bg-gray-900 transition"
+												on:click={() => {
+													selectedLoginRole = 'admin';
+													loginStep = 'form';
+												}}
+											>
+												Admin Girişi
+											</button>
+										</div>
+									</div>
+								</div>
+							{:else}
+								<form
+									class=" flex flex-col justify-center"
+									on:submit={(e) => {
+										e.preventDefault();
+										submitHandler();
+									}}
+								>
 								<div class="mb-1">
 									<div class=" text-2xl font-medium">
 										{#if $config?.onboarding ?? false}
@@ -261,7 +321,15 @@
 										{:else if mode === 'ldap'}
 											{$i18n.t(`Sign in to {{WEBUI_NAME}} with LDAP`, { WEBUI_NAME: $WEBUI_NAME })}
 										{:else if mode === 'signin'}
-											{$i18n.t(`Sign in to {{WEBUI_NAME}}`, { WEBUI_NAME: $WEBUI_NAME })}
+											{#if selectedLoginRole === 'admin'}
+												Admin Girişi
+											{:else if selectedLoginRole === 'akademisyen'}
+												Akademisyen Girişi
+											{:else if selectedLoginRole === 'ogrenci'}
+												Öğrenci Girişi
+											{:else}
+												{$i18n.t(`Sign in to {{WEBUI_NAME}}`, { WEBUI_NAME: $WEBUI_NAME })}
+											{/if}
 										{:else}
 											{$i18n.t(`Sign up to {{WEBUI_NAME}}`, { WEBUI_NAME: $WEBUI_NAME })}
 										{/if}
@@ -279,6 +347,18 @@
 
 								{#if $config?.features.enable_login_form || $config?.features.enable_ldap || form}
 									<div class="flex flex-col mt-4">
+										{#if loginStep === 'form' && selectedLoginRole}
+											<button
+												type="button"
+												class="text-xs text-left text-sky-600 dark:text-sky-400 mb-2 w-fit"
+												on:click={() => {
+													loginStep = 'role';
+													selectedLoginRole = null;
+												}}
+											>
+												← Rol seçimine dön
+											</button>
+										{/if}
 										{#if mode === 'signup'}
 											<div class="mb-2">
 												<label for="name" class="text-sm font-medium text-left mb-1 block"
@@ -415,6 +495,7 @@
 									{/if}
 								</div>
 							</form>
+							{/if}
 
 							{#if Object.keys($config?.oauth?.providers ?? {}).length > 0}
 								<div class="inline-flex items-center justify-center w-full">
