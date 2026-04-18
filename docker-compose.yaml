@@ -15,6 +15,12 @@ services:
     extra_hosts:
       - host.docker.internal:host-gateway
     restart: unless-stopped
+    networks:
+      - dokploy-network
 
 volumes:
   open-webui: {}
+
+networks:
+  dokploy-network:
+    external: true
