@@ -145,6 +145,18 @@
 			items: g.items.map((label) => ({ label, href: `${baseHref}/${toSlug(label)}` }))
 		};
 	});
+
+	$: aiAskHref = `/?back=${encodeURIComponent(activePath)}`;
+	$: {
+		// AI ekranında "OBS'ye dön" butonu için son konumu hatırla
+		try {
+			if (typeof localStorage !== 'undefined') {
+				localStorage.setItem('obs:lastPath', activePath);
+			}
+		} catch {
+			// ignore
+		}
+	}
 </script>
 
 <div class="min-h-[100dvh] bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
@@ -245,7 +257,7 @@
 					</div>
 					<div class="flex shrink-0 items-center gap-2">
 						<a
-							href="/"
+							href={aiAskHref}
 							class="rounded-xl bg-sky-500 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-400"
 						>
 							AI’a Sor
