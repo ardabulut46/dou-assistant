@@ -25,7 +25,9 @@ def _require_obs_write(request: Request, user, db: Session):
     # Admin always allowed; others need obs.write permission via groups/default config.
     if user.role == "admin":
         return
-    if not has_permission(user.id, "obs.write", request.app.state.config.USER_PERMISSIONS, db=db):
+    if not has_permission(
+        user.id, "obs.write", request.app.state.config.USER_PERMISSIONS, db=db
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=ERROR_MESSAGES.UNAUTHORIZED,
@@ -122,4 +124,3 @@ async def delete_obs_item(
     if not ok:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     return {"status": True}
-

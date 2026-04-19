@@ -62,4 +62,3 @@ def get_obs_db_context(db: "Session" = None):
     else:
         with get_obs_db() as session:
             yield session
-

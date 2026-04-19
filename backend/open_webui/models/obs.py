@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 
 from open_webui.internal.obs_db import ObsBase, obs_engine, get_obs_db_context
 
-
 ####################
 # OBS DB Schema
 ####################
@@ -71,7 +70,9 @@ class ObsItemsTable:
             q = q.order_by(ObsItem.updated_at.desc()).offset(skip).limit(limit)
             return [ObsItemModel.model_validate(x) for x in q.all()]
 
-    def get_item(self, item_id: str, db: Optional[Session] = None) -> Optional[ObsItemModel]:
+    def get_item(
+        self, item_id: str, db: Optional[Session] = None
+    ) -> Optional[ObsItemModel]:
         with get_obs_db_context(db) as session:
             item = session.query(ObsItem).filter(ObsItem.id == item_id).first()
             return ObsItemModel.model_validate(item) if item else None
@@ -127,4 +128,3 @@ class ObsItemsTable:
 
 
 ObsItems = ObsItemsTable()
-
