@@ -41,8 +41,20 @@ async function authFetch<T>(
 	}
 
 	if (!res.ok) {
-		const detail = (data as { detail?: string })?.detail;
-		throw new Error(detail ?? `HTTP ${res.status}: ${res.statusText}`);
+		const raw = (data as { detail?: unknown })?.detail;
+		let msg: string;
+		if (typeof raw === 'string') {
+			msg = raw;
+		} else if (Array.isArray(raw) && raw.length > 0) {
+			// FastAPI validation errors: [{loc, msg, type}, ...]
+			const first = raw[0] as { msg?: string; message?: string };
+			msg = first?.msg ?? first?.message ?? JSON.stringify(raw);
+		} else if (raw != null) {
+			msg = JSON.stringify(raw);
+		} else {
+			msg = `HTTP ${res.status}: ${res.statusText}`;
+		}
+		throw new Error(msg);
 	}
 
 	return data as T;
@@ -748,3 +760,216 @@ export const createDouCreditTransfer = (
 		source_credits: number; target_course_code: string; target_course_name: string; notes?: string;
 	}
 ) => authFetch<DouCreditTransfer>('/student/me/credit-transfer', token, { method: 'POST', body: JSON.stringify(body) });
+
+// ---------------------------------------------------------------------------
+// Öğrenci profil düzenleme
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Ek tip alias'ları (admin sayfaları için)
+// ---------------------------------------------------------------------------
+export type DouCourse = { id: string; code: string; name: string; credits: number; akts: number; department_id?: string };
+export type DouClassroom = { id: string; code: string; name: string; capacity: number; building?: string; floor?: number };
+
+// Admin kısa isim alias'ları
+export const getDouCourses      = (t: string | null) => getDouAdminCourses(t);
+export const getDouClassrooms   = (t: string | null) => getDouAdminClassrooms(t);
+export const createDouDepartment = (t: string | null, body: { code: string; name: string }) =>
+	createDouAdminDepartment(t, body);
+export const createDouTerm = (t: string | null, body: Partial<DouTerm>) =>
+	createDouAdminTerm(t, body);
+export const createDouCourse = (
+	token: string | null,
+	body: { code: string; name: string; credits?: number; akts?: number; department_id?: string }
+) => authFetch<DouCourse>('/admin/courses', token, { method: 'POST', body: JSON.stringify(body) });
+export const createDouClassroom = (
+	token: string | null,
+	body: { code: string; name: string; capacity?: number; building?: string; floor?: number }
+) => authFetch<DouClassroom>('/admin/classrooms', token, { method: 'POST', body: JSON.stringify(body) });
+export const completeDouDocumentRequest = (token: string | null, requestId: string) =>
+	authFetch<{ id: string; status: string }>(`/admin/document-requests/${requestId}`, token, { method: 'PATCH', body: '{}' });
+
+export const updateDouStudentProfile = (
+	token: string | null,
+	body: { full_name?: string; phone?: string; address?: string; emergency_contact?: string; emergency_phone?: string }
+) => authFetch<{ user_id: string; full_name: string; phone: string; address: string; _mock?: boolean }>(
+	'/student/me/profile', token, { method: 'PUT', body: JSON.stringify(body) }
+);
+
+export type AvailableCourse = {
+	id: string; course_code: string; course_name: string;
+	credits: number; akts: number; instructor_name: string;
+	day_of_week: string; start_time: string; end_time: string;
+	classroom: string; capacity: number; enrolled: number;
+};
+
+export const getDouAvailableCourses = (token: string | null, termId?: string) => {
+	const q = termId ? `?term_id=${encodeURIComponent(termId)}` : '';
+	return authFetch<{ term_id: string | null; sections: AvailableCourse[]; _mock?: boolean }>(
+		`/student/available-courses${q}`, token
+	);
+};
+
+export const createDouEnrollmentRequest = (
+	token: string | null,
+	sectionIds: string[],
+	note?: string
+) => authFetch<{ requests: unknown[]; count: number; _mock?: boolean }>(
+	'/student/me/enrollment-requests', token,
+	{ method: 'POST', body: JSON.stringify({ section_ids: sectionIds, note }) }
+);
+
+export const createDouDropRequest = (
+	token: string | null,
+	enrollmentId: string,
+	reason?: string
+) => authFetch<{ id: string; status: string; _mock?: boolean }>(
+	'/student/me/drop-requests', token,
+	{ method: 'POST', body: JSON.stringify({ enrollment_id: enrollmentId, reason }) }
+);
+
+export const sendDouMessageApi = (
+	token: string | null,
+	body: { receiver_user_id?: string; receiver_name?: string; receiver_type?: string; subject: string; body: string }
+) => authFetch<DouMessage>('/messages', token, { method: 'POST', body: JSON.stringify(body) });
+
+// ---------------------------------------------------------------------------
+// Akademisyen — not girişi, yoklama, sınav
+// ---------------------------------------------------------------------------
+
+export type AcademicStudent = {
+	student_no: string; name: string; enrollment_id: string;
+	enrollment_status: string; gpa: number;
+};
+export type AcademicGradeRow = {
+	student_no: string; name: string; enrollment_id: string;
+	midterm: number | null; final: number | null;
+	letter_grade: string | null; is_finalized: boolean;
+};
+export type AcademicExam = {
+	id: string; course_section_id: string; exam_type: string;
+	exam_date: string; exam_time: string; classroom: string; weight_percent: number;
+};
+
+export const getDouSectionGrades = (token: string | null, sectionId: string) =>
+	authFetch<{ section_id: string; students: AcademicGradeRow[]; _mock?: boolean }>(
+		`/academic/sections/${sectionId}/grades`, token
+	);
+
+export const putDouSectionGrades = (
+	token: string | null, sectionId: string,
+	grades: { enrollment_id: string; midterm?: number; final?: number }[]
+) => authFetch<{ section_id: string; updated: number }>(
+	`/academic/sections/${sectionId}/grades`, token, { method: 'PUT', body: JSON.stringify({ grades }) }
+);
+
+export const finalizeDouSectionGrades = (token: string | null, sectionId: string) =>
+	authFetch<{ section_id: string; finalized: boolean }>(
+		`/academic/sections/${sectionId}/grades/finalize`, token, { method: 'POST', body: '{}' }
+	);
+
+export const getDouSectionExams = (token: string | null, sectionId: string) =>
+	authFetch<{ section_id: string; exams: AcademicExam[]; _mock?: boolean }>(
+		`/academic/sections/${sectionId}/exams`, token
+	);
+
+export const createDouSectionExam = (
+	token: string | null, sectionId: string,
+	body: { exam_type: string; exam_date: string; exam_time?: string; classroom?: string; weight_percent?: number }
+) => authFetch<AcademicExam>(
+	`/academic/sections/${sectionId}/exams`, token, { method: 'POST', body: JSON.stringify(body) }
+);
+
+export const putDouSectionAttendance = (
+	token: string | null, sectionId: string,
+	week_no: number, records: { enrollment_id: string; status: 'present' | 'absent' | 'excused' }[]
+) => authFetch<{ section_id: string; week_no: number; recorded: number }>(
+	`/academic/sections/${sectionId}/attendance`, token,
+	{ method: 'PUT', body: JSON.stringify({ week_no, records }) }
+);
+
+export type AcademicAnnouncementBody = {
+	title: string;
+	content: string;
+	audience_type: 'section' | 'advisees' | 'student' | 'all';
+	course_section_id?: string;
+	student_no?: string;
+	department_id?: string;
+};
+
+export const createDouAcademicAnnouncement = (token: string | null, body: AcademicAnnouncementBody) =>
+	authFetch<Record<string, unknown>>('/academic/announcements', token, {
+		method: 'POST', body: JSON.stringify(body)
+	});
+
+// ---------------------------------------------------------------------------
+// Admin — kullanıcı ve rol yönetimi
+// ---------------------------------------------------------------------------
+
+export type AdminUser = {
+	id: string; email: string; full_name: string;
+	role: string; is_active: boolean; created_at: string;
+};
+export type AdminRole = {
+	id: string; name: string; description: string; permissions: string[];
+};
+
+export const getDouAdminUsers = (token: string | null, params?: { role?: string; search?: string }) => {
+	const q = new URLSearchParams(params as Record<string, string> ?? {}).toString();
+	return authFetch<{ users: AdminUser[]; total: number; _mock?: boolean }>(
+		`/admin/users${q ? `?${q}` : ''}`, token
+	);
+};
+
+export const createDouAdminUser = (
+	token: string | null,
+	body: { email: string; full_name: string; role?: string; password?: string }
+) => authFetch<AdminUser>('/admin/users', token, { method: 'POST', body: JSON.stringify(body) });
+
+export const patchDouAdminUser = (
+	token: string | null, userId: string,
+	body: { full_name?: string; role?: string; is_active?: boolean }
+) => authFetch<AdminUser>(`/admin/users/${userId}`, token, { method: 'PATCH', body: JSON.stringify(body) });
+
+export const resetDouAdminUserPassword = (token: string | null, userId: string) =>
+	authFetch<{ user_id: string; temp_password: string }>(
+		`/admin/users/${userId}/reset-password`, token, { method: 'POST', body: '{}' }
+	);
+
+export const getDouAdminRoles = (token: string | null) =>
+	authFetch<{ roles: AdminRole[]; _mock?: boolean }>('/admin/roles', token);
+
+export const putDouAdminRolePermissions = (token: string | null, roleId: string, permissions: string[]) =>
+	authFetch<AdminRole>(`/admin/roles/${roleId}/permissions`, token, { method: 'PUT', body: JSON.stringify({ permissions }) });
+
+// ---------------------------------------------------------------------------
+// Admin — Şube Açma
+// ---------------------------------------------------------------------------
+export type AdminInstructor = { id: string; email: string; full_name: string; role: string };
+
+export const getDouAdminInstructors = (token: string | null) =>
+	authFetch<AdminInstructor[]>('/admin/instructors', token);
+
+export type SectionCreateBody = {
+	course_id: string; course_code?: string; course_name?: string;
+	term_id: string; term_name?: string;
+	instructor_id?: string; instructor_label?: string;
+	classroom_id?: string; classroom_code?: string;
+	section_no?: number; day_of_week?: string; start_time?: string; end_time?: string; capacity?: number;
+};
+
+export const createDouAdminSection = (token: string | null, body: SectionCreateBody) =>
+	authFetch<Record<string, unknown>>('/admin/course-sections', token, {
+		method: 'POST', body: JSON.stringify(body)
+	});
+
+// ---------------------------------------------------------------------------
+// DEV helpers
+// ---------------------------------------------------------------------------
+export type DevAccount = { email: string; password: string; name: string; obs_role: string; existed: boolean };
+
+export const devSeedUsers = (token: string | null) =>
+	authFetch<{ accounts: DevAccount[] }>('/dev/seed-users', token, { method: 'POST', body: '{}' });
+
+export const devGetObsRole = (token: string | null) =>
+	authFetch<{ obs_role: string; email: string }>('/dev/obs-role', token);

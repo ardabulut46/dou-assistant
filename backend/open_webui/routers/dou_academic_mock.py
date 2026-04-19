@@ -18,8 +18,13 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
-from open_webui.utils.auth import get_admin_user, get_verified_user
+from open_webui.utils.auth import get_admin_user, get_verified_user, create_token
+from open_webui.utils.utils import get_password_hash
+from open_webui.models.auths import Auths
+from open_webui.models.users import Users
+from open_webui.internal.db import get_db
 
 # ---------------------------------------------------------------------------
 # Bellek içi sabit veri
@@ -285,6 +290,77 @@ admin_router         = APIRouter(tags=["dou-mock-admin"])
 
 
 # ===========================================================================
+# DEV / TEST — şifresiz seed
+# ===========================================================================
+
+_DEV_ACCOUNTS = [
+    {"email": "ogrenci@dou.edu.tr",     "name": "Ramazan Öğrenci",   "password": "Obs1234!",  "role": "user"},
+    {"email": "akademisyen@dou.edu.tr", "name": "Dr. Ayşe Yılmaz",   "password": "Obs1234!",  "role": "user"},
+    {"email": "admin@dou.edu.tr",       "name": "Sistem Yöneticisi", "password": "Obs1234!",  "role": "admin"},
+]
+
+# OBS rolü (obsRole field) — Open WebUI'nin "role" alanı admin/user, OBS rolü ayrı tutulur
+_OBS_ROLE_MAP = {
+    "ogrenci@dou.edu.tr":     "ogrenci",
+    "akademisyen@dou.edu.tr": "Akademisyen",
+    "admin@dou.edu.tr":       "Admin",
+}
+
+
+@public_router.post("/dev/seed-users", summary="[DEV] Test kullanıcıları oluştur veya döndür", include_in_schema=True)
+async def dev_seed_users(db: Session = Depends(get_db)):
+    """
+    Geliştirme ortamı için 3 test hesabı oluşturur.
+    Hesap zaten varsa atlar. Oluşturulan / mevcut hesap bilgilerini döndürür.
+    """
+    result = []
+    for acc in _DEV_ACCOUNTS:
+        email = acc["email"]
+        existing = Users.get_user_by_email(email, db=db)
+        if not existing:
+            hashed = get_password_hash(acc["password"])
+            new_user = Auths.insert_new_auth(
+                email=email,
+                password=hashed,
+                name=acc["name"],
+                profile_image_url="",
+                role=acc["role"],
+                db=db,
+            )
+            if new_user:
+                # admin@dou.edu.tr'yi admin yap
+                if acc["role"] == "admin":
+                    Users.update_user_role_by_id(new_user.id, "admin", db=db)
+            user_id = new_user.id if new_user else "?"
+        else:
+            user_id = existing.id
+        result.append({
+            "email":    email,
+            "password": acc["password"],
+            "name":     acc["name"],
+            "obs_role": _OBS_ROLE_MAP[email],
+            "user_id":  user_id,
+            "existed":  existing is not None,
+        })
+    return {"accounts": result, "_mock": True}
+
+
+@public_router.get("/dev/obs-role", summary="[DEV] Kullanıcının OBS rolünü döndür")
+async def dev_obs_role(user=Depends(get_verified_user)):
+    """Giriş yapan kullanıcının e-postasına göre OBS rolünü döndürür."""
+    email = getattr(user, "email", "") or ""
+    obs_role = _OBS_ROLE_MAP.get(email)
+    if not obs_role:
+        # Admin Open WebUI rolü varsa Admin OBS rolü ver
+        role = getattr(user, "role", "user")
+        if role == "admin":
+            obs_role = "Admin"
+        else:
+            obs_role = "ogrenci"
+    return {"obs_role": obs_role, "email": email, "_mock": True}
+
+
+# ===========================================================================
 # ORTAK (giriş yapmış herkes)
 # ===========================================================================
 
@@ -345,7 +421,7 @@ async def messages_sent(
 
 
 class MessageCreate(BaseModel):
-    receiver_user_id: str
+    receiver_user_id: Optional[str] = None
     receiver_name: str = ""
     receiver_type: str = "akademisyen"
     subject: str
@@ -395,7 +471,8 @@ async def delete_message(message_id: str, _user=Depends(get_verified_user)):
 
 @student_router.get("/me/profile", summary="Öğrenci profili")
 async def student_me_profile(user=Depends(get_verified_user)):
-    return {
+    overrides = _STUDENT_PROFILE_OVERRIDES.get(user.id, {})
+    base = {
         "user_id":          user.id,
         "email":            user.email,
         "full_name":        getattr(user, "name", "Ad Soyad"),
@@ -405,12 +482,21 @@ async def student_me_profile(user=Depends(get_verified_user)):
         "faculty_name":     "İktisadi ve İdari Bilimler Fakültesi",
         "program":          "Lisans",
         "class_level":      3,
-        "gpa":              3.21,
+        "gpa":              3.21,   # AGNO — kümülatif
+        "dno":              3.42,   # dönem not ortalaması (aktif dönem)
+        "completed_akts":   87,
+        "total_akts_required": 120,
+        "phone":            "",
+        "address":          "",
+        "emergency_contact": "",
+        "emergency_phone":  "",
         "status":           "active",
         "enrollment_date":  "2021-09-15",
         "is_financially_eligible": True,
         "_mock":            True,
     }
+    base.update(overrides)
+    return base
 
 
 @student_router.get("/me/advisor", summary="Danışman bilgisi")
@@ -653,6 +739,102 @@ async def student_create_document_request(body: DocumentRequestCreate, user=Depe
 async def student_me_announcements(user=Depends(get_verified_user)):
     result = [a for a in _ANNOUNCEMENTS if a["is_active"] and a["audience_type"] in ("all", "department")]
     return {"student_user_id": user.id, "announcements": result, "_mock": True}
+
+
+class StudentProfileUpdate(BaseModel):
+    full_name: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    emergency_phone: Optional[str] = None
+
+
+_STUDENT_PROFILE_OVERRIDES: dict[str, dict] = {}
+
+
+@student_router.get("/available-courses", summary="Açılan ders listesi (kayıt dönemi)")
+async def student_available_courses(
+    term_id: Optional[str] = Query(None),
+    _user=Depends(get_verified_user),
+):
+    already_enrolled_codes = {"BLM101", "BLM102", "YBS492", "YBS301", "YBS201"}
+    available = [
+        s for s in _SECTIONS
+        if s["course_code"] not in already_enrolled_codes
+        and (not term_id or s.get("term_id") == term_id)
+    ]
+    if not available:
+        available = [
+            {"id": "sec-a1", "course_code": "YBS401", "course_name": "Proje Yönetimi",            "credits": 3, "akts": 5,  "instructor_name": "Dr. Ayşe Yılmaz",    "day_of_week": "Pazartesi", "start_time": "13:00", "end_time": "16:00", "classroom": "B-201", "capacity": 30, "enrolled": 22},
+            {"id": "sec-a2", "course_code": "YBS402", "course_name": "Bilgi Güvenliği",           "credits": 3, "akts": 5,  "instructor_name": "Dr. Mehmet Demir",   "day_of_week": "Salı",      "start_time": "11:00", "end_time": "14:00", "classroom": "A-301", "capacity": 25, "enrolled": 18},
+            {"id": "sec-a3", "course_code": "YBS403", "course_name": "Yapay Zeka",                "credits": 3, "akts": 6,  "instructor_name": "Prof. Ahmet Kaya",   "day_of_week": "Çarşamba",  "start_time": "09:00", "end_time": "12:00", "classroom": "B-101", "capacity": 35, "enrolled": 35},
+            {"id": "sec-a4", "course_code": "BLM301", "course_name": "Ağ ve İletişim Sistemleri", "credits": 3, "akts": 5,  "instructor_name": "Dr. Zeynep Demir",   "day_of_week": "Perşembe",  "start_time": "14:00", "end_time": "17:00", "classroom": "A-201", "capacity": 30, "enrolled": 10},
+            {"id": "sec-a5", "course_code": "BLM302", "course_name": "Mobil Uygulama Geliştirme", "credits": 3, "akts": 5,  "instructor_name": "Öğr. Gör. Can Aydın","day_of_week": "Cuma",      "start_time": "10:00", "end_time": "13:00", "classroom": "Lab-3", "capacity": 20, "enrolled": 15},
+            {"id": "sec-a6", "course_code": "YBS490", "course_name": "Staj",                      "credits": 0, "akts": 4,  "instructor_name": "—",                  "day_of_week": "—",         "start_time": "—",     "end_time": "—",     "classroom": "—",    "capacity": 99, "enrolled": 30},
+        ]
+    return {"term_id": term_id, "sections": available, "_mock": True}
+
+
+class EnrollmentRequest(BaseModel):
+    section_ids: list[str]
+    note: Optional[str] = None
+
+
+@student_router.post("/me/enrollment-requests", status_code=status.HTTP_201_CREATED, summary="Ders kayıt isteği gönder")
+async def student_enrollment_request(body: EnrollmentRequest, user=Depends(get_verified_user)):
+    requests = []
+    for sid in body.section_ids:
+        section = next((s for s in _SECTIONS if s["id"] == sid), None)
+        req_id = f"enr-req-{uuid.uuid4().hex[:8]}"
+        req = {
+            "id": req_id,
+            "student_user_id": user.id,
+            "section_id": sid,
+            "course_code": section["course_code"] if section else sid,
+            "course_name": section["course_name"] if section else "Bilinmiyor",
+            "request_type": "enrollment_request",
+            "status": "pending",
+            "created_at": "2026-04-19T12:00:00",
+        }
+        requests.append(req)
+        _APPROVAL_REQUESTS.append({**req, "student_name": getattr(user, "name", "Öğrenci"), "note": body.note})
+    return {"requests": requests, "count": len(requests), "_mock": True}
+
+
+class DropRequest(BaseModel):
+    enrollment_id: str
+    reason: Optional[str] = None
+
+
+@student_router.post("/me/drop-requests", status_code=status.HTTP_201_CREATED, summary="Ders bırakma isteği")
+async def student_drop_request(body: DropRequest, user=Depends(get_verified_user)):
+    req_id = f"drop-req-{uuid.uuid4().hex[:8]}"
+    req = {
+        "id": req_id,
+        "student_user_id": user.id,
+        "enrollment_id": body.enrollment_id,
+        "request_type": "drop_request",
+        "status": "pending",
+        "reason": body.reason,
+        "created_at": "2026-04-19T12:00:00",
+    }
+    _APPROVAL_REQUESTS.append({**req, "student_name": getattr(user, "name", "Öğrenci")})
+    return req
+
+
+@student_router.put("/me/profile", summary="Öğrenci profili güncelle")
+async def student_update_profile(body: StudentProfileUpdate, user=Depends(get_verified_user)):
+    patch = {k: v for k, v in body.model_dump().items() if v is not None}
+    _STUDENT_PROFILE_OVERRIDES.setdefault(user.id, {}).update(patch)
+    return {
+        "user_id":           user.id,
+        "full_name":         patch.get("full_name", getattr(user, "name", "Ad Soyad")),
+        "phone":             patch.get("phone", "—"),
+        "address":           patch.get("address", "—"),
+        "emergency_contact": patch.get("emergency_contact", "—"),
+        "emergency_phone":   patch.get("emergency_phone", "—"),
+        "_mock": True,
+    }
 
 
 @student_router.get("/me/graduation-status", summary="Mezuniyet onay bilgileri")
@@ -995,11 +1177,63 @@ async def academic_section_students(section_id: str, _user=Depends(get_verified_
     if not section:
         raise HTTPException(status_code=404, detail="Şube bulunamadı")
     students = [
-        {"student_no": "20240001", "name": "Ali Veli",     "enrollment_id": "enr-1", "enrollment_status": "active"},
-        {"student_no": "20240002", "name": "Fatma Kaya",   "enrollment_id": "enr-2", "enrollment_status": "active"},
-        {"student_no": "20240003", "name": "Mehmet Demir", "enrollment_id": "enr-3", "enrollment_status": "active"},
+        {"student_no": "20240001", "name": "Ali Veli",     "enrollment_id": "enr-1", "enrollment_status": "active", "gpa": 3.21},
+        {"student_no": "20240002", "name": "Fatma Kaya",   "enrollment_id": "enr-2", "enrollment_status": "active", "gpa": 3.45},
+        {"student_no": "20240003", "name": "Mehmet Demir", "enrollment_id": "enr-3", "enrollment_status": "active", "gpa": 2.88},
+        {"student_no": "20240004", "name": "Zeynep Arslan","enrollment_id": "enr-4", "enrollment_status": "active", "gpa": 3.72},
+        {"student_no": "20240005", "name": "Can Yıldız",   "enrollment_id": "enr-5", "enrollment_status": "active", "gpa": 2.55},
     ]
     return {"section_id": section_id, "section": section, "students": students, "_mock": True}
+
+
+@academic_user_router.get("/sections/{section_id}/exams", summary="Şube sınav listesi")
+async def academic_section_exams(section_id: str, _user=Depends(get_verified_user)):
+    exams = [e for e in _EXAMS if e.get("course_section_id") == section_id]
+    if not exams:
+        # fallback: ilk iki sınavı döndür
+        exams = _EXAMS[:2]
+    return {"section_id": section_id, "exams": exams, "_mock": True}
+
+
+@academic_user_router.get("/sections/{section_id}/grades", summary="Şube not listesi")
+async def academic_section_grades(section_id: str, _user=Depends(get_verified_user)):
+    students = [
+        {"student_no": "20240001", "name": "Ali Veli",     "enrollment_id": "enr-1", "midterm": 72, "final": None, "letter_grade": None, "is_finalized": False},
+        {"student_no": "20240002", "name": "Fatma Kaya",   "enrollment_id": "enr-2", "midterm": 85, "final": None, "letter_grade": None, "is_finalized": False},
+        {"student_no": "20240003", "name": "Mehmet Demir", "enrollment_id": "enr-3", "midterm": 60, "final": None, "letter_grade": None, "is_finalized": False},
+        {"student_no": "20240004", "name": "Zeynep Arslan","enrollment_id": "enr-4", "midterm": 90, "final": None, "letter_grade": None, "is_finalized": False},
+        {"student_no": "20240005", "name": "Can Yıldız",   "enrollment_id": "enr-5", "midterm": 55, "final": None, "letter_grade": None, "is_finalized": False},
+    ]
+    return {"section_id": section_id, "students": students, "_mock": True}
+
+
+class ExamCreate(BaseModel):
+    exam_type: str = Field(..., description="midterm / final / makeup / project")
+    exam_date: str
+    exam_time: str = "09:00"
+    classroom: Optional[str] = None
+    weight_percent: float = 40.0
+
+
+@academic_user_router.post("/sections/{section_id}/exams", status_code=status.HTTP_201_CREATED, summary="Sınav tanımla")
+async def academic_create_exam(section_id: str, body: ExamCreate, _user=Depends(get_verified_user)):
+    row = {
+        "id": f"exam-{uuid.uuid4().hex[:8]}",
+        "course_section_id": section_id,
+        "exam_type":     body.exam_type,
+        "exam_date":     body.exam_date,
+        "exam_time":     body.exam_time,
+        "classroom":     body.classroom or "A-101",
+        "weight_percent": body.weight_percent,
+        "_mock": True,
+    }
+    _created.setdefault("exams", []).append(row)
+    return row
+
+
+@academic_user_router.post("/sections/{section_id}/grades/finalize", summary="Notları kesinleştir")
+async def academic_finalize_grades(section_id: str, _user=Depends(get_verified_user)):
+    return {"section_id": section_id, "finalized": True, "_mock": True}
 
 
 @academic_user_router.get("/me/advisees", summary="Danışmanlık öğrencileri")
@@ -1069,25 +1303,61 @@ async def academic_put_attendance(section_id: str, body: AttendanceInput, user=D
 class AcademicAnnouncementCreate(BaseModel):
     title: str
     content: str
-    audience_type: str = "department"
+    # section   → o şubedeki tüm öğrencilere
+    # advisees  → danışmanlık öğrencilerine
+    # student   → belirli bir öğrenciye (student_no veya student_id ile)
+    # all       → tüm öğrencilere
+    audience_type: str = "section"
     department_id: Optional[str] = None
     course_section_id: Optional[str] = None
+    student_no: Optional[str] = None  # audience_type=student için
 
 
 @academic_user_router.post("/announcements", status_code=status.HTTP_201_CREATED, summary="Duyuru oluştur")
 async def academic_create_announcement(body: AcademicAnnouncementCreate, user=Depends(get_verified_user)):
     row = {
-        "id":          f"ann-{uuid.uuid4().hex[:8]}",
-        "title":       body.title,
-        "content":     body.content,
-        "audience_type": body.audience_type,
-        "department_id": body.department_id,
-        "is_active":   True,
-        "published_at": "2026-04-19T12:00:00",
-        "created_by":  user.id,
-        "_mock":       True,
+        "id":               f"ann-{uuid.uuid4().hex[:8]}",
+        "title":            body.title,
+        "content":          body.content,
+        "audience_type":    body.audience_type,
+        "department_id":    body.department_id,
+        "course_section_id": body.course_section_id,
+        "student_no":       body.student_no,
+        "is_active":        True,
+        "published_at":     "2026-04-19T12:00:00",
+        "created_by":       user.id,
+        "created_by_name":  getattr(user, "name", "Akademisyen"),
+        "_mock":            True,
     }
     _ANNOUNCEMENTS.append(row)
+
+    # Bildirim: hedef öğrenciye mesaj düşür (mock)
+    target_info = ""
+    if body.audience_type == "section" and body.course_section_id:
+        sec = next((s for s in _SECTIONS if s["id"] == body.course_section_id), None)
+        target_info = f"({sec['course_code']} şubesi)" if sec else ""
+    elif body.audience_type == "advisees":
+        target_info = "(danışmanlık öğrencileri)"
+    elif body.audience_type == "student" and body.student_no:
+        target_info = f"(Öğrenci: {body.student_no})"
+    elif body.audience_type == "all":
+        target_info = "(tüm öğrenciler)"
+
+    notif_msg = {
+        "id":              f"msg-ann-{uuid.uuid4().hex[:8]}",
+        "sender_user_id":  user.id,
+        "sender_name":     getattr(user, "name", "Akademisyen"),
+        "sender_type":     "akademisyen",
+        "receiver_type":   "öğrenci",
+        "subject":         f"[Duyuru] {body.title}",
+        "body":            body.content,
+        "is_read":         False,
+        "status":          "new",
+        "sent_at":         "2026-04-19T12:00:00",
+        "audience_type":   body.audience_type,
+        "note":            target_info,
+    }
+    _MESSAGES.append(notif_msg)
     return row
 
 
@@ -1130,9 +1400,14 @@ class ClassroomCreate(BaseModel):
 
 class CourseSectionCreate(BaseModel):
     course_id:        str
+    course_code:      str = ""
+    course_name:      str = ""
     term_id:          str
+    term_name:        str = ""
     section_no:       int = 1
     classroom_id:     str = ""
+    classroom_code:   str = ""
+    instructor_id:    str = ""
     instructor_label: str = "Mock Eğitmen"
     day_of_week:      str = "Pazartesi"
     start_time:       str = "09:00"
@@ -1238,6 +1513,14 @@ async def admin_create_classroom(body: ClassroomCreate, _user=Depends(get_admin_
 
 
 # --- Şube ---
+
+@admin_router.get("/instructors")
+async def admin_list_instructors(_user=Depends(get_admin_user)):
+    """Akademisyen listesi — şube atamada kullanılır."""
+    all_users = _MOCK_USERS + _created.get("users", [])
+    instructors = [u for u in all_users if u.get("role") == "Akademisyen"]
+    return instructors
+
 
 @admin_router.get("/course-sections")
 async def admin_list_sections(
@@ -1353,10 +1636,117 @@ async def admin_audit_logs(
     return {"logs": logs[:limit], "total": len(logs), "_mock": True}
 
 
+# --- Kullanıcı Yönetimi ---
+
+_MOCK_USERS: list[dict] = [
+    {"id": "usr-1", "email": "ali.veli@dou.edu.tr",      "full_name": "Ali Veli",          "role": "Öğrenci",     "is_active": True,  "created_at": "2024-09-01"},
+    {"id": "usr-2", "email": "fatma.kaya@dou.edu.tr",    "full_name": "Fatma Kaya",         "role": "Öğrenci",     "is_active": True,  "created_at": "2024-09-01"},
+    {"id": "usr-3", "email": "ayse.yilmaz@dou.edu.tr",   "full_name": "Dr. Ayşe Yılmaz",    "role": "Akademisyen", "is_active": True,  "created_at": "2023-01-15"},
+    {"id": "usr-4", "email": "mehmet.demir@dou.edu.tr",  "full_name": "Prof. Mehmet Demir", "role": "Akademisyen", "is_active": True,  "created_at": "2022-09-01"},
+    {"id": "usr-5", "email": "admin@dou.edu.tr",         "full_name": "Sistem Yöneticisi",  "role": "Admin",       "is_active": True,  "created_at": "2020-01-01"},
+    {"id": "usr-6", "email": "zeynep.arslan@dou.edu.tr", "full_name": "Zeynep Arslan",      "role": "Öğrenci",     "is_active": False, "created_at": "2024-09-01"},
+]
+
+_MOCK_ROLES: list[dict] = [
+    {
+        "id": "role-1", "name": "Admin", "description": "Tam yetki",
+        "permissions": ["users.manage","roles.manage","catalog.manage","sections.manage","calendar.manage","audit.read","grades.put","announcements.post","document_requests.manage"],
+    },
+    {
+        "id": "role-2", "name": "Akademisyen", "description": "Not, yoklama, danışmanlık",
+        "permissions": ["grades.get","grades.put","attendance.get","attendance.put","enrollments.approve","sections.get","exams.get","exams.post","messages.get","messages.post","messages.delete","announcements.get","announcements.post","calendar.get","auth.change_password"],
+    },
+    {
+        "id": "role-3", "name": "Öğrenci", "description": "Kendi verilerini görme ve ders kayıt",
+        "permissions": ["courses.get","grades.get","attendance.get","enrollments.post","messages.get","messages.post","messages.delete","document_requests.post","document_requests.get","announcements.get","calendar.get","auth.change_password"],
+    },
+]
+
+
+class UserCreate(BaseModel):
+    email: str
+    full_name: str
+    role: str = "Öğrenci"
+    password: str = "Abc123!"
+
+
+class UserUpdate(BaseModel):
+    full_name: Optional[str] = None
+    role: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+@admin_router.get("/users")
+async def admin_list_users(
+    role_filter: Optional[str] = Query(None, alias="role"),
+    search: Optional[str] = Query(None),
+    _user=Depends(get_admin_user),
+):
+    users = _MOCK_USERS + _created.setdefault("users", [])
+    if role_filter:
+        users = [u for u in users if u["role"] == role_filter]
+    if search:
+        s = search.lower()
+        users = [u for u in users if s in u["full_name"].lower() or s in u["email"].lower()]
+    return {"users": users, "total": len(users), "_mock": True}
+
+
+@admin_router.post("/users", status_code=status.HTTP_201_CREATED)
+async def admin_create_user(body: UserCreate, _user=Depends(get_admin_user)):
+    row = {
+        "id": f"usr-{uuid.uuid4().hex[:8]}",
+        "email":     body.email,
+        "full_name": body.full_name,
+        "role":      body.role,
+        "is_active": True,
+        "created_at": "2026-04-19",
+        "_mock": True,
+    }
+    _created.setdefault("users", []).append(row)
+    return row
+
+
+@admin_router.patch("/users/{user_id}")
+async def admin_update_user(user_id: str, body: UserUpdate, _user=Depends(get_admin_user)):
+    for u in _MOCK_USERS + _created.get("users", []):
+        if u["id"] == user_id:
+            if body.full_name is not None: u["full_name"] = body.full_name
+            if body.role      is not None: u["role"]      = body.role
+            if body.is_active is not None: u["is_active"] = body.is_active
+            return {**u, "_mock": True}
+    raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
+
+
+@admin_router.post("/users/{user_id}/reset-password")
+async def admin_reset_password(user_id: str, _user=Depends(get_admin_user)):
+    return {"user_id": user_id, "temp_password": "Abc123!", "_mock": True}
+
+
+# --- Rol Yönetimi ---
+
+class RolePermissionsUpdate(BaseModel):
+    permissions: list[str]
+
+
+@admin_router.get("/roles")
+async def admin_list_roles(_user=Depends(get_admin_user)):
+    return {"roles": _MOCK_ROLES, "_mock": True}
+
+
+@admin_router.put("/roles/{role_id}/permissions")
+async def admin_update_role_permissions(role_id: str, body: RolePermissionsUpdate, _user=Depends(get_admin_user)):
+    for r in _MOCK_ROLES:
+        if r["id"] == role_id:
+            r["permissions"] = body.permissions
+            return {**r, "_mock": True}
+    raise HTTPException(status_code=404, detail="Rol bulunamadı")
+
+
 # --- Genel İstatistik ---
 
 @admin_router.get("/stats")
 async def admin_stats(_user=Depends(get_admin_user)):
+    all_users = _MOCK_USERS + _created.get("users", [])
     return {
         "departments": len(_DEPARTMENTS) + len(_created["departments"]),
         "terms":       len(_TERMS)       + len(_created["terms"]),
@@ -1364,5 +1754,7 @@ async def admin_stats(_user=Depends(get_admin_user)):
         "classrooms":  len(_CLASSROOMS)  + len(_created["classrooms"]),
         "sections":    len(_SECTIONS)    + len(_created["course_sections"]),
         "announcements": len(_ANNOUNCEMENTS),
+        "users_total": len(all_users),
+        "users_active": len([u for u in all_users if u.get("is_active", True)]),
         "_mock": True,
     }
