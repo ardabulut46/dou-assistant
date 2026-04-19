@@ -99,6 +99,7 @@ from open_webui.routers import (
     terminals,
     obs,
 )
+from open_webui.routers import dou_academic_mock
 
 from open_webui.routers.retrieval import (
     get_embedding_function,
@@ -1546,6 +1547,12 @@ app.include_router(channels.router, prefix="/api/v1/channels", tags=["channels"]
 app.include_router(chats.router, prefix="/api/v1/chats", tags=["chats"])
 app.include_router(notes.router, prefix="/api/v1/notes", tags=["notes"])
 app.include_router(obs.router, prefix="/api/v1/obs", tags=["obs"])
+
+# --- Faz 2 Akademik Çekirdek (Mock — DB yok) ---
+app.include_router(dou_academic_mock.public_router,        prefix="/api/v1")
+app.include_router(dou_academic_mock.student_router,       prefix="/api/v1/student")
+app.include_router(dou_academic_mock.academic_user_router, prefix="/api/v1/academic")
+app.include_router(dou_academic_mock.admin_router,         prefix="/api/v1/admin")
 
 
 app.include_router(models.router, prefix="/api/v1/models", tags=["models"])
