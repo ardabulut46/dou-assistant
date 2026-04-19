@@ -1,8 +1,9 @@
 <script lang="ts">
+	import { user } from '$lib/stores';
+
 	export let title = 'Öğrenci Bilgi Sistemi';
 	export let subtitle = 'Doğuş Üniversitesi';
 	export let termLabel = '2025-2026 Bahar';
-
 	export let activePath: string = '/obs';
 
 	type NavItem = {
@@ -163,13 +164,15 @@
 	<div class="flex min-h-[100dvh]">
 		<aside class="w-[320px] shrink-0 bg-slate-950 text-slate-100">
 			<div class="sticky top-0 z-10 bg-slate-950 px-5 py-5">
-				<div class="flex items-center gap-3">
-					<div class="size-12 rounded-full bg-white/10 ring-1 ring-white/15" />
-					<div class="min-w-0">
-						<div class="truncate text-sm font-semibold">{subtitle}</div>
-						<div class="truncate text-xs text-slate-300">{title}</div>
-					</div>
+			<div class="flex items-center gap-3">
+				<div class="flex size-12 shrink-0 items-center justify-center rounded-full bg-white/10 ring-1 ring-white/15 text-sm font-bold text-white">
+					{($user?.name ?? 'U').charAt(0).toUpperCase()}
 				</div>
+				<div class="min-w-0">
+					<div class="truncate text-sm font-semibold">{$user?.name ?? subtitle}</div>
+					<div class="truncate text-xs text-slate-300">{title}</div>
+				</div>
+			</div>
 			</div>
 
 			<nav class="h-[calc(100dvh-88px)] overflow-y-auto px-3 pb-8">
