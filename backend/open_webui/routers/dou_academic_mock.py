@@ -20,8 +20,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from open_webui.utils.auth import get_admin_user, get_verified_user, create_token
-from open_webui.utils.utils import get_password_hash
+from open_webui.utils.auth import (
+    get_admin_user,
+    get_verified_user,
+    create_token,
+    get_password_hash,
+)
 from open_webui.models.auths import Auths
 from open_webui.models.users import Users
 from open_webui.internal.db import get_db
