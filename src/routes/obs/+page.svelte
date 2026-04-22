@@ -13,7 +13,12 @@
 
 		if (baseRole === 'Admin' || baseRole === 'admin') {
 			goto('/obs/admin', { replaceState: true });
-		} else if (baseRole === 'Akademisyen' || baseRole === 'akademisyen') {
+		} else if (
+			baseRole === 'Akademisyen' ||
+			baseRole === 'akademisyen' ||
+			baseRole === 'Academician' ||
+			baseRole === 'academician'
+		) {
 			goto('/obs/akademisyen', { replaceState: true });
 		} else {
 			// Öğrenci, user, boş veya bilinmeyen → öğrenci paneline

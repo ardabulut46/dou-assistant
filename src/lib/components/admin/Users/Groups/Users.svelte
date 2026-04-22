@@ -237,7 +237,7 @@
 										<Badge
 											type={user.role === 'admin'
 												? 'info'
-												: user.role === 'user'
+												: user.role === 'user' || user.role === 'academician'
 													? 'success'
 													: 'muted'}
 											content={$i18n.t(user.role)}
