@@ -72,9 +72,7 @@ log.info(
     "[OBS-DB] tek_db=%s | motor_url=%s | OBS_DATABASE_URL=%s",
     OBS_USES_PRIMARY_DATABASE,
     OBS_ENGINE_URL_SAFE,
-    "bos veya DATABASE_URL ile ayni"
-    if OBS_USES_PRIMARY_DATABASE
-    else "ayri sunucu",
+    "bos veya DATABASE_URL ile ayni" if OBS_USES_PRIMARY_DATABASE else "ayri sunucu",
 )
 ObsSessionLocal = sessionmaker(
     autocommit=False, autoflush=False, bind=obs_engine, expire_on_commit=False

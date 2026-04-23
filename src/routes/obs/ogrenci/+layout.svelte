@@ -37,16 +37,14 @@
 </script>
 
 {#if allowed}
-	<ObsShell
-		activePath={$page.url.pathname}
-		role="ogrenci"
-		termLabel={activeTerm?.name ?? '—'}
-	>
+	<ObsShell activePath={$page.url.pathname} role="ogrenci" termLabel={activeTerm?.name ?? '—'}>
 		<span slot="userline">{$user?.name ?? 'Öğrenci'} • {subTitle}</span>
 		<slot />
 	</ObsShell>
 {:else}
-	<div class="flex min-h-[50vh] items-center justify-center bg-slate-100 text-sm text-slate-500 dark:bg-slate-950">
+	<div
+		class="flex min-h-[50vh] items-center justify-center bg-slate-100 text-sm text-slate-500 dark:bg-slate-950"
+	>
 		Erişim kontrol ediliyor…
 	</div>
 {/if}

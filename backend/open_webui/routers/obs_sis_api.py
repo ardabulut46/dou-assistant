@@ -73,9 +73,24 @@ def get_obs_admin_user(user=Depends(get_verified_user)):
 # ---------------------------------------------------------------------------
 
 _DEV_ACCOUNTS = [
-    {"email": "ogrenci@dou.edu.tr", "name": "Ramazan Öğrenci", "password": "Obs1234!", "role": "user"},
-    {"email": "akademisyen@dou.edu.tr", "name": "Dr. Ayşe Yılmaz", "password": "Obs1234!", "role": "user"},
-    {"email": "admin@dou.edu.tr", "name": "Sistem Yöneticisi", "password": "Obs1234!", "role": "admin"},
+    {
+        "email": "ogrenci@dou.edu.tr",
+        "name": "Ramazan Öğrenci",
+        "password": "Obs1234!",
+        "role": "user",
+    },
+    {
+        "email": "akademisyen@dou.edu.tr",
+        "name": "Dr. Ayşe Yılmaz",
+        "password": "Obs1234!",
+        "role": "user",
+    },
+    {
+        "email": "admin@dou.edu.tr",
+        "name": "Sistem Yöneticisi",
+        "password": "Obs1234!",
+        "role": "admin",
+    },
 ]
 
 
@@ -139,17 +154,25 @@ async def dev_clear_my_student_enrollments(
 
 
 @public_router.get("/terms")
-async def list_terms(obs_db: Session = Depends(get_obs_session), _u=Depends(get_verified_user)):
+async def list_terms(
+    obs_db: Session = Depends(get_obs_session), _u=Depends(get_verified_user)
+):
     return repo.list_terms(obs_db)
 
 
 @public_router.get("/terms/{term_id}/calendar")
-async def term_calendar(term_id: str, obs_db: Session = Depends(get_obs_session), _u=Depends(get_verified_user)):
+async def term_calendar(
+    term_id: str,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_verified_user),
+):
     return {"term_id": term_id, "events": repo.term_calendar(obs_db, term_id)}
 
 
 @public_router.get("/departments")
-async def list_departments(obs_db: Session = Depends(get_obs_session), _u=Depends(get_verified_user)):
+async def list_departments(
+    obs_db: Session = Depends(get_obs_session), _u=Depends(get_verified_user)
+):
     return repo.list_departments(obs_db)
 
 
@@ -160,7 +183,11 @@ async def list_announcements(
     obs_db: Session = Depends(get_obs_session),
     _u=Depends(get_verified_user),
 ):
-    return {"announcements": repo.list_announcements_filtered(obs_db, audience_type, department_id)}
+    return {
+        "announcements": repo.list_announcements_filtered(
+            obs_db, audience_type, department_id
+        )
+    }
 
 
 @public_router.get("/messages/inbox")
@@ -192,7 +219,11 @@ class MessageCreate(BaseModel):
 
 
 @public_router.post("/messages", status_code=status.HTTP_201_CREATED)
-async def send_message(body: MessageCreate, user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)):
+async def send_message(
+    body: MessageCreate,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
     rid = body.receiver_user_id or ""
     if not rid:
         raise HTTPException(status_code=400, detail="receiver_user_id gerekli")
@@ -200,7 +231,11 @@ async def send_message(body: MessageCreate, user=Depends(get_verified_user), obs
 
 
 @public_router.patch("/messages/{message_id}/read")
-async def mark_read(message_id: str, user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)):
+async def mark_read(
+    message_id: str,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
     ok = repo.mark_message_read(obs_db, message_id, user.id)
     if not ok:
         raise HTTPException(status_code=404, detail="Mesaj bulunamadı")
@@ -208,7 +243,11 @@ async def mark_read(message_id: str, user=Depends(get_verified_user), obs_db: Se
 
 
 @public_router.delete("/messages/{message_id}")
-async def delete_message(message_id: str, user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)):
+async def delete_message(
+    message_id: str,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
     ok = repo.soft_delete_message(obs_db, message_id, user.id)
     if not ok:
         raise HTTPException(status_code=404, detail="Mesaj bulunamadı")
@@ -221,15 +260,21 @@ async def delete_message(message_id: str, user=Depends(get_verified_user), obs_d
 
 
 @student_router.get("/me/profile")
-async def student_me_profile(user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)):
+async def student_me_profile(
+    user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)
+):
     row = repo.get_student_profile_api(obs_db, user.id)
     if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Öğrenci profili bulunamadı")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Öğrenci profili bulunamadı"
+        )
     return row
 
 
 @student_router.get("/me/advisor")
-async def student_me_advisor(user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)):
+async def student_me_advisor(
+    user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)
+):
     return repo.get_advisor_api(obs_db, user.id)
 
 
@@ -322,7 +367,9 @@ async def student_me_gpa(
 
 
 @student_router.get("/me/transcript")
-async def student_me_transcript(user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)):
+async def student_me_transcript(
+    user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)
+):
     return repo.transcript(obs_db, user.id)
 
 
@@ -337,7 +384,9 @@ async def student_me_attendance(
 
 
 @student_router.get("/me/document-requests")
-async def student_doc_req(user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)):
+async def student_doc_req(
+    user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)
+):
     rows = repo.list_document_requests(obs_db, user.id)
     return {"student_user_id": user.id, "requests": rows}
 
@@ -350,7 +399,11 @@ class DocReqCreate(BaseModel):
 
 
 @student_router.post("/me/document-requests", status_code=status.HTTP_201_CREATED)
-async def student_doc_create(body: DocReqCreate, user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)):
+async def student_doc_create(
+    body: DocReqCreate,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
     row = repo.create_document_request(
         obs_db,
         user.id,
@@ -365,7 +418,9 @@ async def student_doc_create(body: DocReqCreate, user=Depends(get_verified_user)
 
 
 @student_router.get("/me/announcements")
-async def student_me_announcements(user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)):
+async def student_me_announcements(
+    user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)
+):
     prof = repo.get_student_profile_api(obs_db, user.id)
     dept = prof.get("department_id") if prof else None
     anns = repo.list_student_feed_announcements(obs_db, dept or None)
@@ -388,11 +443,20 @@ class EnrollmentRequest(BaseModel):
 
 
 @student_router.post("/me/enrollment-requests", status_code=status.HTTP_201_CREATED)
-async def student_enrollment_request(body: EnrollmentRequest, user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)):
+async def student_enrollment_request(
+    body: EnrollmentRequest,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
     adv = repo.get_advisor_api(obs_db, user.id)
     appr = (adv.get("advisor") or {}).get("academic_user_id")
     reqs = repo.create_enrollment_requests(
-        obs_db, user.id, getattr(user, "name", "") or "", body.section_ids, body.note, appr
+        obs_db,
+        user.id,
+        getattr(user, "name", "") or "",
+        body.section_ids,
+        body.note,
+        appr,
     )
     if not reqs and not repo.resolve_student_profile_id(obs_db, user.id):
         raise HTTPException(status_code=404, detail="Öğrenci profili bulunamadı")
@@ -405,11 +469,20 @@ class DropRequest(BaseModel):
 
 
 @student_router.post("/me/drop-requests", status_code=status.HTTP_201_CREATED)
-async def student_drop_request(body: DropRequest, user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)):
+async def student_drop_request(
+    body: DropRequest,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
     adv = repo.get_advisor_api(obs_db, user.id)
     appr = (adv.get("advisor") or {}).get("academic_user_id")
     row = repo.create_drop_request(
-        obs_db, user.id, getattr(user, "name", "") or "", body.enrollment_id, body.reason, appr
+        obs_db,
+        user.id,
+        getattr(user, "name", "") or "",
+        body.enrollment_id,
+        body.reason,
+        appr,
     )
     if not row:
         raise HTTPException(status_code=404, detail="Kayıt bulunamadı")
@@ -469,13 +542,17 @@ def _empty_graduation(user_id: str, prof: Optional[dict]) -> dict[str, Any]:
 
 
 @student_router.get("/me/graduation-status")
-async def student_graduation(user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)):
+async def student_graduation(
+    user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)
+):
     prof = repo.get_student_profile_api(obs_db, user.id)
     return _empty_graduation(user.id, prof)
 
 
 @student_router.get("/me/financial")
-async def student_financial(user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)):
+async def student_financial(
+    user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)
+):
     _ = obs_db
     return {
         "student_user_id": user.id,
@@ -489,7 +566,9 @@ async def student_financial(user=Depends(get_verified_user), obs_db: Session = D
 
 
 @student_router.get("/me/curriculum-status")
-async def student_curriculum(user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)):
+async def student_curriculum(
+    user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)
+):
     data = repo.student_curriculum_status(obs_db, user.id)
     cats = data.get("categories") or []
     n_courses = sum(len(c.get("courses") or []) for c in cats)
@@ -528,7 +607,9 @@ class ApplicationCreate(BaseModel):
 
 
 @student_router.post("/me/applications", status_code=status.HTTP_201_CREATED)
-async def student_applications_create(body: ApplicationCreate, user=Depends(get_verified_user)):
+async def student_applications_create(
+    body: ApplicationCreate, user=Depends(get_verified_user)
+):
     return {
         "id": str(uuid.uuid4()),
         "application_type": body.application_type,
@@ -570,7 +651,9 @@ async def prep_exams(
 
 
 @student_router.get("/me/prep/grades")
-async def prep_grades(user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)):
+async def prep_grades(
+    user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)
+):
     _prep_guard(obs_db, user.id)
     grades = repo.list_student_grades(obs_db, user.id, None)
     out = []
@@ -632,11 +715,19 @@ async def academic_me_sections(
     obs_db: Session = Depends(get_obs_session),
 ):
     sections = repo.academic_sections(obs_db, user.id, term_id)
-    return {"academic_user_id": user.id, "term_id_filter": term_id, "sections": sections}
+    return {
+        "academic_user_id": user.id,
+        "term_id_filter": term_id,
+        "sections": sections,
+    }
 
 
 @academic_user_router.get("/me/sections/{section_id}/students")
-async def academic_section_students(section_id: str, user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)):
+async def academic_section_students(
+    section_id: str,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
     sec, students = repo.section_students(obs_db, section_id)
     if not sec:
         raise HTTPException(status_code=404, detail="Şube bulunamadı")
@@ -646,7 +737,11 @@ async def academic_section_students(section_id: str, user=Depends(get_verified_u
 
 
 @academic_user_router.get("/sections/{section_id}/exams")
-async def academic_section_exams(section_id: str, user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)):
+async def academic_section_exams(
+    section_id: str,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
     if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
         raise HTTPException(status_code=403, detail="Bu şube size ait değil")
     return {"section_id": section_id, "exams": repo.section_exams(obs_db, section_id)}
@@ -660,22 +755,40 @@ class ExamCreate(BaseModel):
     weight_percent: float = 40.0
 
 
-@academic_user_router.post("/sections/{section_id}/exams", status_code=status.HTTP_201_CREATED)
+@academic_user_router.post(
+    "/sections/{section_id}/exams", status_code=status.HTTP_201_CREATED
+)
 async def academic_create_exam(
-    section_id: str, body: ExamCreate, user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)
+    section_id: str,
+    body: ExamCreate,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
 ):
     if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
         raise HTTPException(status_code=403, detail="Bu şube size ait değil")
     return repo.insert_exam(
-        obs_db, section_id, body.exam_type, body.exam_date, body.exam_time, body.classroom, body.weight_percent
+        obs_db,
+        section_id,
+        body.exam_type,
+        body.exam_date,
+        body.exam_time,
+        body.classroom,
+        body.weight_percent,
     )
 
 
 @academic_user_router.get("/sections/{section_id}/grades")
-async def academic_section_grades(section_id: str, user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)):
+async def academic_section_grades(
+    section_id: str,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
     if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
         raise HTTPException(status_code=403, detail="Bu şube size ait değil")
-    return {"section_id": section_id, "students": repo.section_grade_rows(obs_db, section_id)}
+    return {
+        "section_id": section_id,
+        "students": repo.section_grade_rows(obs_db, section_id),
+    }
 
 
 class GradeInput(BaseModel):
@@ -684,7 +797,10 @@ class GradeInput(BaseModel):
 
 @academic_user_router.put("/sections/{section_id}/grades")
 async def academic_put_grades(
-    section_id: str, body: GradeInput, user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)
+    section_id: str,
+    body: GradeInput,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
 ):
     if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
         raise HTTPException(status_code=403, detail="Bu şube size ait değil")
@@ -693,7 +809,11 @@ async def academic_put_grades(
 
 
 @academic_user_router.post("/sections/{section_id}/grades/finalize")
-async def academic_finalize_grades(section_id: str, user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)):
+async def academic_finalize_grades(
+    section_id: str,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
     if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
         raise HTTPException(status_code=403, detail="Bu şube size ait değil")
     repo.finalize_section_grades(obs_db, section_id)
@@ -707,7 +827,10 @@ class AttendanceInput(BaseModel):
 
 @academic_user_router.put("/sections/{section_id}/attendance")
 async def academic_put_attendance(
-    section_id: str, body: AttendanceInput, user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)
+    section_id: str,
+    body: AttendanceInput,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
 ):
     if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
         raise HTTPException(status_code=403, detail="Bu şube size ait değil")
@@ -716,8 +839,13 @@ async def academic_put_attendance(
 
 
 @academic_user_router.get("/me/advisees")
-async def academic_me_advisees(user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)):
-    return {"academic_user_id": user.id, "advisees": repo.academic_advisees(obs_db, user.id)}
+async def academic_me_advisees(
+    user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)
+):
+    return {
+        "academic_user_id": user.id,
+        "advisees": repo.academic_advisees(obs_db, user.id),
+    }
 
 
 @academic_user_router.get("/me/approval-requests")
@@ -737,12 +865,20 @@ class ApprovalAction(BaseModel):
 
 @academic_user_router.patch("/approval-requests/{request_id}")
 async def academic_approve_request(
-    request_id: str, body: ApprovalAction, user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)
+    request_id: str,
+    body: ApprovalAction,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
 ):
-    ok = repo.resolve_approval(obs_db, request_id, user.id, body.action == "approve", body.note)
+    ok = repo.resolve_approval(
+        obs_db, request_id, user.id, body.action == "approve", body.note
+    )
     if not ok:
         raise HTTPException(status_code=404, detail="Talep bulunamadı")
-    return {"id": request_id, "status": "approved" if body.action == "approve" else "rejected"}
+    return {
+        "id": request_id,
+        "status": "approved" if body.action == "approve" else "rejected",
+    }
 
 
 class AcademicAnnouncementCreate(BaseModel):
@@ -756,7 +892,9 @@ class AcademicAnnouncementCreate(BaseModel):
 
 @academic_user_router.post("/announcements", status_code=status.HTTP_201_CREATED)
 async def academic_create_announcement(
-    body: AcademicAnnouncementCreate, user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)
+    body: AcademicAnnouncementCreate,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
 ):
     aid = repo.insert_announcement(
         obs_db,
@@ -767,7 +905,12 @@ async def academic_create_announcement(
         body.department_id,
         body.course_section_id,
     )
-    return {"id": aid, "title": body.title, "content": body.content, "audience_type": body.audience_type}
+    return {
+        "id": aid,
+        "title": body.title,
+        "content": body.content,
+        "audience_type": body.audience_type,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -776,7 +919,11 @@ async def academic_create_announcement(
 
 
 @admin_router.get("/stats")
-async def admin_stats(obs_db: Session = Depends(get_obs_session), db: Session = Depends(get_session), _u=Depends(get_obs_admin_user)):
+async def admin_stats(
+    obs_db: Session = Depends(get_obs_session),
+    db: Session = Depends(get_session),
+    _u=Depends(get_obs_admin_user),
+):
     c = repo.admin_counts(obs_db)
     ures = Users.get_users(filter=None, skip=0, limit=10_000, db=db)
     users = ures.get("users", [])
@@ -788,7 +935,9 @@ async def admin_stats(obs_db: Session = Depends(get_obs_session), db: Session = 
 
 
 @admin_router.get("/departments")
-async def admin_list_departments(obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)):
+async def admin_list_departments(
+    obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)
+):
     return repo.list_departments(obs_db)
 
 
@@ -798,12 +947,18 @@ class DepartmentCreate(BaseModel):
 
 
 @admin_router.post("/departments", status_code=status.HTTP_201_CREATED)
-async def admin_create_department(body: DepartmentCreate, obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)):
+async def admin_create_department(
+    body: DepartmentCreate,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
     return repo.admin_insert_department(obs_db, body.code, body.name)
 
 
 @admin_router.get("/terms")
-async def admin_list_terms(obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)):
+async def admin_list_terms(
+    obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)
+):
     return repo.list_terms(obs_db)
 
 
@@ -817,14 +972,26 @@ class TermCreate(BaseModel):
 
 
 @admin_router.post("/terms", status_code=status.HTTP_201_CREATED)
-async def admin_create_term(body: TermCreate, obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)):
+async def admin_create_term(
+    body: TermCreate,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
     return repo.admin_insert_term(
-        obs_db, body.name, body.academic_year, body.season, body.starts_at, body.ends_at, body.is_active
+        obs_db,
+        body.name,
+        body.academic_year,
+        body.season,
+        body.starts_at,
+        body.ends_at,
+        body.is_active,
     )
 
 
 @admin_router.get("/courses")
-async def admin_list_courses(obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)):
+async def admin_list_courses(
+    obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)
+):
     return repo.list_courses_raw(obs_db)
 
 
@@ -841,7 +1008,11 @@ class CourseCreate(BaseModel):
 
 
 @admin_router.post("/courses", status_code=status.HTTP_201_CREATED)
-async def admin_create_course(body: CourseCreate, obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)):
+async def admin_create_course(
+    body: CourseCreate,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
     return repo.admin_insert_course(
         obs_db,
         body.department_id,
@@ -857,7 +1028,9 @@ async def admin_create_course(body: CourseCreate, obs_db: Session = Depends(get_
 
 
 @admin_router.get("/classrooms")
-async def admin_list_classrooms(obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)):
+async def admin_list_classrooms(
+    obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)
+):
     return repo.list_classrooms_raw(obs_db)
 
 
@@ -869,12 +1042,20 @@ class ClassroomCreate(BaseModel):
 
 
 @admin_router.post("/classrooms", status_code=status.HTTP_201_CREATED)
-async def admin_create_classroom(body: ClassroomCreate, obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)):
-    return repo.admin_insert_classroom(obs_db, body.building, body.name, body.capacity, body.is_online)
+async def admin_create_classroom(
+    body: ClassroomCreate,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
+    return repo.admin_insert_classroom(
+        obs_db, body.building, body.name, body.capacity, body.is_online
+    )
 
 
 @admin_router.get("/instructors")
-async def admin_instructors(obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)):
+async def admin_instructors(
+    obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)
+):
     return repo.list_instructors(obs_db)
 
 
@@ -912,7 +1093,11 @@ class CourseSectionCreate(BaseModel):
 
 
 @admin_router.post("/course-sections", status_code=status.HTTP_201_CREATED)
-async def admin_create_section(body: CourseSectionCreate, obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)):
+async def admin_create_section(
+    body: CourseSectionCreate,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
     log.info(
         "[OBS-ADMIN] POST /admin/course-sections -> PostgreSQL obs_course_sections | course_id=%s term_id=%s section_no=%s instructor_user_id=%s classroom_id=%s | db=%s",
         body.course_id,
@@ -986,9 +1171,18 @@ class CalendarEventCreate(BaseModel):
 
 
 @admin_router.post("/calendar-events", status_code=status.HTTP_201_CREATED)
-async def admin_calendar_create(body: CalendarEventCreate, obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)):
+async def admin_calendar_create(
+    body: CalendarEventCreate,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
     return repo.admin_insert_calendar_event(
-        obs_db, body.term_id, body.event_type, body.title, body.start_date, body.end_date
+        obs_db,
+        body.term_id,
+        body.event_type,
+        body.title,
+        body.start_date,
+        body.end_date,
     )
 
 
@@ -1019,7 +1213,9 @@ async def admin_reg_settings_post(
 ):
     tid = term_id or repo.resolve_active_term_id(obs_db)
     if not tid:
-        raise HTTPException(status_code=400, detail="Dönem belirtilmedi veya aktif dönem yok.")
+        raise HTTPException(
+            status_code=400, detail="Dönem belirtilmedi veya aktif dönem yok."
+        )
     return repo.upsert_registration_settings(obs_db, tid, body.model_dump())
 
 
@@ -1032,10 +1228,18 @@ class AdminAnnouncementCreate(BaseModel):
 
 @admin_router.post("/announcements", status_code=status.HTTP_201_CREATED)
 async def admin_ann_create(
-    body: AdminAnnouncementCreate, user=Depends(get_obs_admin_user), obs_db: Session = Depends(get_obs_session)
+    body: AdminAnnouncementCreate,
+    user=Depends(get_obs_admin_user),
+    obs_db: Session = Depends(get_obs_session),
 ):
     aid = repo.insert_announcement(
-        obs_db, user.id, body.title, body.content, body.audience_type, body.department_id, None
+        obs_db,
+        user.id,
+        body.title,
+        body.content,
+        body.audience_type,
+        body.department_id,
+        None,
     )
     return {"id": aid}
 
@@ -1051,7 +1255,11 @@ async def admin_doc_list(
 
 
 @admin_router.patch("/document-requests/{request_id}")
-async def admin_doc_patch(request_id: str, obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)):
+async def admin_doc_patch(
+    request_id: str,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
     ok = repo.patch_document_request(obs_db, request_id, "tamamlandı")
     if not ok:
         raise HTTPException(status_code=404, detail="Bulunamadı")
@@ -1059,7 +1267,11 @@ async def admin_doc_patch(request_id: str, obs_db: Session = Depends(get_obs_ses
 
 
 @admin_router.get("/audit-logs")
-async def admin_audit(limit: int = 20, obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)):
+async def admin_audit(
+    limit: int = 20,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
     logs, total = repo.list_audit_logs(obs_db, limit)
     return {"logs": logs, "total": total}
 
@@ -1107,7 +1319,9 @@ class UserCreate(BaseModel):
 
 
 @admin_router.post("/users", status_code=status.HTTP_201_CREATED)
-async def admin_create_user(body: UserCreate, db: Session = Depends(get_session), _u=Depends(get_obs_admin_user)):
+async def admin_create_user(
+    body: UserCreate, db: Session = Depends(get_session), _u=Depends(get_obs_admin_user)
+):
     hashed = get_password_hash(body.password)
     nu = Auths.insert_new_auth(
         email=body.email,
@@ -1136,7 +1350,12 @@ class UserUpdate(BaseModel):
 
 
 @admin_router.patch("/users/{user_id}")
-async def admin_update_user(user_id: str, body: UserUpdate, db: Session = Depends(get_session), _u=Depends(get_obs_admin_user)):
+async def admin_update_user(
+    user_id: str,
+    body: UserUpdate,
+    db: Session = Depends(get_session),
+    _u=Depends(get_obs_admin_user),
+):
     patch: dict[str, Any] = {}
     if body.full_name is not None:
         patch["name"] = body.full_name
@@ -1158,14 +1377,18 @@ async def admin_update_user(user_id: str, body: UserUpdate, db: Session = Depend
 
 
 @admin_router.post("/users/{user_id}/reset-password")
-async def admin_reset_password(user_id: str, db: Session = Depends(get_session), _u=Depends(get_obs_admin_user)):
+async def admin_reset_password(
+    user_id: str, db: Session = Depends(get_session), _u=Depends(get_obs_admin_user)
+):
     temp = "Abc123!"
     Auths.update_user_password_by_id(user_id, get_password_hash(temp), db=db)
     return {"user_id": user_id, "temp_password": temp}
 
 
 @admin_router.get("/roles")
-async def admin_roles(obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)):
+async def admin_roles(
+    obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)
+):
     roles = repo.list_roles_with_permissions(obs_db)
     return {"roles": roles}
 
@@ -1176,7 +1399,10 @@ class RolePermissionsUpdate(BaseModel):
 
 @admin_router.put("/roles/{role_id}/permissions")
 async def admin_role_perm(
-    role_id: str, body: RolePermissionsUpdate, obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)
+    role_id: str,
+    body: RolePermissionsUpdate,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
 ):
     ok = repo.update_role_permissions(obs_db, role_id, body.permissions)
     if not ok:

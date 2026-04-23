@@ -6,4 +6,4 @@
 	const meta = OGRENCI_PAGES[path];
 </script>
 
-<OgrenciSubpage activePath={path} meta={meta} />
+<OgrenciSubpage activePath={path} {meta} />

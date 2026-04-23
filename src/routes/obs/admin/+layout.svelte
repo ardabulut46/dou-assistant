@@ -26,7 +26,9 @@
 {#if allowed}
 	<slot />
 {:else}
-	<div class="flex min-h-[50vh] items-center justify-center bg-slate-100 text-sm text-slate-500 dark:bg-slate-950">
+	<div
+		class="flex min-h-[50vh] items-center justify-center bg-slate-100 text-sm text-slate-500 dark:bg-slate-950"
+	>
 		Erişim kontrol ediliyor…
 	</div>
 {/if}

@@ -1,9 +1,13 @@
 name: Release
 
+# Yalnızca sürüm / changelog güncellemesinde çalışır (git diff --cached hatası önlenir).
 on:
   push:
     branches:
-      - main # or whatever branch you want to use
+      - main
+    paths:
+      - 'package.json'
+      - 'CHANGELOG.md'
 
 jobs:
   release:
@@ -15,23 +19,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Check for changes in package.json
-        run: |
-          git diff --cached --diff-filter=d package.json || {
-            echo "No changes to package.json"
-            exit 1
-          }
-
       - name: Get version number from package.json
         id: get_version
         run: |
           VERSION=$(jq -r '.version' package.json)
-          echo "::set-output name=version::$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Extract latest CHANGELOG entry
         run: |
           VERSION="${{ steps.get_version.outputs.version }}"
-          awk "/^## \[${VERSION}\]/{found=1; next} /^## \[/{if(found) exit} found{print}" CHANGELOG.md > /tmp/release-notes.md
+          awk "/^## \\[${VERSION}\\]/{found=1; next} /^## \\[/{if(found) exit} found{print}" CHANGELOG.md > /tmp/release-notes.md
 
       - name: Create GitHub release
         env:

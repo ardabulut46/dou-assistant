@@ -5,9 +5,7 @@ import { viteStaticCopy } from 'vite-plugin-static-copy';
 
 export default defineConfig(({ mode }) => {
 	const env = loadEnv(mode, process.cwd(), '');
-	const backend =
-		env.VITE_OPEN_WEBUI_BACKEND_URL?.replace(/\/$/, '') ||
-		'http://127.0.0.1:8080';
+	const backend = env.VITE_OPEN_WEBUI_BACKEND_URL?.replace(/\/$/, '') || 'http://127.0.0.1:8080';
 
 	return {
 		plugins: [

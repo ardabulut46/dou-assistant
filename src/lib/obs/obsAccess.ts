@@ -3,7 +3,10 @@ import { devGetObsRole } from '$lib/apis/douAcademic';
 export type ObsArea = 'ogrenci' | 'akademisyen' | 'admin';
 
 /** Sunucudaki obs_role / Open WebUI rolünden panel alanını üretir. */
-export function normalizeObsArea(raw: string | undefined | null, openWebUiRole?: string | null): ObsArea {
+export function normalizeObsArea(
+	raw: string | undefined | null,
+	openWebUiRole?: string | null
+): ObsArea {
 	const or = (openWebUiRole ?? '').trim().toLowerCase();
 	if (or === 'admin') return 'admin';
 	if (or === 'academician') return 'akademisyen';
@@ -24,7 +27,10 @@ export function obsAreaHome(area: ObsArea): string {
 	}
 }
 
-export async function resolveObsArea(token: string | null, openWebUiRole?: string | null): Promise<ObsArea> {
+export async function resolveObsArea(
+	token: string | null,
+	openWebUiRole?: string | null
+): Promise<ObsArea> {
 	if (!token) return normalizeObsArea(null, openWebUiRole);
 	try {
 		const res = await devGetObsRole(token);

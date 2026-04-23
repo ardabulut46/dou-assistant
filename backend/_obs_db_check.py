@@ -3,6 +3,7 @@ Hangi veritabaninin OBS icin kullanildigini gosterir (.env, open_webui import et
 
 Calistir:  cd backend && python _obs_db_check.py
 """
+
 from __future__ import annotations
 
 import os
@@ -35,7 +36,10 @@ def main() -> None:
     print(" ", primary)
     print("\nOBS_DATABASE_URL:")
     print(" ", obs_raw if obs_raw else "(bos -> Open WebUI ile TEK DB: DATABASE_URL)")
-    print("\nOBS motoru (uygulama ile ayni mi):", "EVET (tek havuz)" if tek_db else "HAYIR (ayri URL)")
+    print(
+        "\nOBS motoru (uygulama ile ayni mi):",
+        "EVET (tek havuz)" if tek_db else "HAYIR (ayri URL)",
+    )
     print("\nOBS icin efektif URL:")
     print(" ", obs_url)
 
@@ -69,7 +73,11 @@ def main() -> None:
             if tbl not in all_tabs:
                 print(f"  {tbl}: TABLO YOK")
                 continue
-            qtext = f"SELECT COUNT(*) FROM {tbl}" if is_sqlite else f'SELECT COUNT(*) FROM "{tbl}"'
+            qtext = (
+                f"SELECT COUNT(*) FROM {tbl}"
+                if is_sqlite
+                else f'SELECT COUNT(*) FROM "{tbl}"'
+            )
             n = conn.execute(text(qtext)).scalar()
             print(f"  {tbl}: {int(n or 0)} satir")
 

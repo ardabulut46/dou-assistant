@@ -80,10 +80,12 @@ def resolve_academic_profile_id(db: Session, webui_user_id: str) -> Optional[str
     return _str_id(row[0]) if row else None
 
 
-def get_student_profile_api(db: Session, webui_user_id: str) -> Optional[dict[str, Any]]:
-    row = db.execute(
-        text(
-            f"""
+def get_student_profile_api(
+    db: Session, webui_user_id: str
+) -> Optional[dict[str, Any]]:
+    row = (
+        db.execute(
+            text(f"""
         SELECT sp.id, sp.user_id, sp.student_number, sp.department_id,
                d.name AS department_name, d.faculty_name, d.code AS department_code,
                sp.program, sp.class_year, sp.gpa, sp.completed_akts, sp.total_akts_required,
@@ -94,10 +96,12 @@ def get_student_profile_api(db: Session, webui_user_id: str) -> Optional[dict[st
         LEFT JOIN obs_departments d ON sp.department_id = d.id
         LEFT JOIN {USER_TBL} u ON u.id = sp.user_id
         WHERE sp.user_id = :uid
-        """
-        ),
-        {"uid": webui_user_id},
-    ).mappings().first()
+        """),
+            {"uid": webui_user_id},
+        )
+        .mappings()
+        .first()
+    )
     if not row:
         return None
     r = dict(row)
@@ -127,12 +131,14 @@ def get_student_profile_api(db: Session, webui_user_id: str) -> Optional[dict[st
 
 
 def student_is_prep(db: Session, spid: str) -> bool:
-    row = db.execute(
-        text(
-            "SELECT program, class_year FROM obs_student_profiles WHERE id = :id"
-        ),
-        {"id": spid},
-    ).mappings().first()
+    row = (
+        db.execute(
+            text("SELECT program, class_year FROM obs_student_profiles WHERE id = :id"),
+            {"id": spid},
+        )
+        .mappings()
+        .first()
+    )
     if not row:
         return False
     p = (row.get("program") or "").lower()
@@ -142,10 +148,15 @@ def student_is_prep(db: Session, spid: str) -> bool:
 def get_advisor_api(db: Session, webui_user_id: str) -> dict[str, Any]:
     spid = resolve_student_profile_id(db, webui_user_id)
     if not spid:
-        return {"student_user_id": webui_user_id, "advisor": None, "valid_from": None, "valid_to": None}
-    row = db.execute(
-        text(
-            f"""
+        return {
+            "student_user_id": webui_user_id,
+            "advisor": None,
+            "valid_from": None,
+            "valid_to": None,
+        }
+    row = (
+        db.execute(
+            text(f"""
         SELECT sa.valid_from, sa.valid_to, ap.user_id AS academic_user_id,
                u.name AS advisor_name, u.email AS advisor_email, ap.title,
                ap.department_id, d.name AS department_name, ap.office, ap.phone
@@ -157,12 +168,19 @@ def get_advisor_api(db: Session, webui_user_id: str) -> dict[str, Any]:
           AND (sa.valid_to IS NULL OR sa.valid_to >= CURRENT_DATE)
         ORDER BY sa.valid_from DESC
         LIMIT 1
-        """
-        ),
-        {"sid": spid},
-    ).mappings().first()
+        """),
+            {"sid": spid},
+        )
+        .mappings()
+        .first()
+    )
     if not row:
-        return {"student_user_id": webui_user_id, "advisor": None, "valid_from": None, "valid_to": None}
+        return {
+            "student_user_id": webui_user_id,
+            "advisor": None,
+            "valid_from": None,
+            "valid_to": None,
+        }
     adv = {
         "academic_user_id": row["academic_user_id"],
         "name": row.get("advisor_name") or "",
@@ -182,14 +200,10 @@ def get_advisor_api(db: Session, webui_user_id: str) -> dict[str, Any]:
 
 
 def list_terms(db: Session) -> list[dict[str, Any]]:
-    rows = db.execute(
-        text(
-            """
+    rows = db.execute(text("""
         SELECT id, name, start_date, end_date, is_active FROM obs_terms
         ORDER BY start_date NULLS LAST, name
-        """
-        )
-    ).mappings().all()
+        """)).mappings().all()
     out = []
     for r in rows:
         name = r.get("name") or ""
@@ -215,25 +229,33 @@ def list_terms(db: Session) -> list[dict[str, Any]]:
 
 
 def list_departments(db: Session) -> list[dict[str, Any]]:
-    rows = db.execute(
-        text("SELECT id, code, name FROM obs_departments ORDER BY name")
-    ).mappings().all()
+    rows = (
+        db.execute(text("SELECT id, code, name FROM obs_departments ORDER BY name"))
+        .mappings()
+        .all()
+    )
     return [
-        {"id": _str_id(r["id"]), "code": r.get("code") or "", "name": r.get("name") or ""}
+        {
+            "id": _str_id(r["id"]),
+            "code": r.get("code") or "",
+            "name": r.get("name") or "",
+        }
         for r in rows
     ]
 
 
 def term_calendar(db: Session, term_id: str) -> list[dict[str, Any]]:
-    rows = db.execute(
-        text(
-            """
+    rows = (
+        db.execute(
+            text("""
         SELECT id, term_id, event_type, title, start_date, end_date
         FROM obs_calendar_events WHERE term_id = :tid ORDER BY start_date
-        """
-        ),
-        {"tid": term_id},
-    ).mappings().all()
+        """),
+            {"tid": term_id},
+        )
+        .mappings()
+        .all()
+    )
     return [
         {
             "id": _str_id(r["id"]),
@@ -278,7 +300,9 @@ def list_student_feed_announcements(
             "audience_type": r.get("audience_type") or "",
             "department_id": _str_id(r.get("department_id")),
             "is_active": bool(r.get("is_active")),
-            "published_at": r.get("published_at").isoformat() if r.get("published_at") else None,
+            "published_at": (
+                r.get("published_at").isoformat() if r.get("published_at") else None
+            ),
             "created_by": r.get("created_by_user_id"),
         }
         for r in rows
@@ -309,14 +333,18 @@ def list_announcements_filtered(
             "audience_type": r.get("audience_type") or "",
             "department_id": _str_id(r.get("department_id")),
             "is_active": bool(r.get("is_active")),
-            "published_at": r.get("published_at").isoformat() if r.get("published_at") else None,
+            "published_at": (
+                r.get("published_at").isoformat() if r.get("published_at") else None
+            ),
             "created_by": r.get("created_by_user_id"),
         }
         for r in rows
     ]
 
 
-def messages_inbox(db: Session, user_id: str, sender_type: Optional[str]) -> list[dict[str, Any]]:
+def messages_inbox(
+    db: Session, user_id: str, sender_type: Optional[str]
+) -> list[dict[str, Any]]:
     q = """
         SELECT m.id, m.sender_user_id, m.receiver_user_id, m.subject, m.body,
                m.is_read, m.status, m.sent_at,
@@ -333,7 +361,9 @@ def messages_inbox(db: Session, user_id: str, sender_type: Optional[str]) -> lis
     return [_message_row(r) for r in rows]
 
 
-def messages_sent(db: Session, user_id: str, receiver_type: Optional[str]) -> list[dict[str, Any]]:
+def messages_sent(
+    db: Session, user_id: str, receiver_type: Optional[str]
+) -> list[dict[str, Any]]:
     q = """
         SELECT m.id, m.sender_user_id, m.receiver_user_id, m.subject, m.body,
                m.is_read, m.status, m.sent_at,
@@ -374,12 +404,10 @@ def insert_message(
 ) -> dict[str, Any]:
     mid = str(uuid.uuid4())
     db.execute(
-        text(
-            """
+        text("""
         INSERT INTO obs_messages (id, sender_user_id, receiver_user_id, subject, body, is_read, status, sent_at)
         VALUES (:id, :su, :ru, :sub, :body, false, 'active', NOW())
-        """
-        ),
+        """),
         {
             "id": mid,
             "su": sender_user_id,
@@ -389,9 +417,9 @@ def insert_message(
         },
     )
     db.commit()
-    row = db.execute(
-        text(
-            """
+    row = (
+        db.execute(
+            text("""
         SELECT m.id, m.sender_user_id, m.receiver_user_id, m.subject, m.body,
                m.is_read, m.status, m.sent_at,
                su.name AS sender_name, ru.name AS receiver_name
@@ -399,21 +427,21 @@ def insert_message(
         LEFT JOIN "user" su ON su.id = m.sender_user_id
         LEFT JOIN "user" ru ON ru.id = m.receiver_user_id
         WHERE m.id = :mid
-        """
-        ),
-        {"mid": mid},
-    ).mappings().first()
+        """),
+            {"mid": mid},
+        )
+        .mappings()
+        .first()
+    )
     return _message_row(row) if row else {"id": mid, "subject": subject, "body": body}
 
 
 def mark_message_read(db: Session, message_id: str, reader_user_id: str) -> bool:
     res = db.execute(
-        text(
-            """
+        text("""
         UPDATE obs_messages SET is_read = true, read_at = NOW(), status = 'read'
         WHERE id = :mid AND receiver_user_id = :uid
-        """
-        ),
+        """),
         {"mid": message_id, "uid": reader_user_id},
     )
     db.commit()
@@ -422,12 +450,10 @@ def mark_message_read(db: Session, message_id: str, reader_user_id: str) -> bool
 
 def soft_delete_message(db: Session, message_id: str, user_id: str) -> bool:
     res = db.execute(
-        text(
-            """
+        text("""
         UPDATE obs_messages SET status = 'deleted'
         WHERE id = :mid AND (sender_user_id = :uid OR receiver_user_id = :uid)
-        """
-        ),
+        """),
         {"mid": message_id, "uid": user_id},
     )
     db.commit()
@@ -493,7 +519,9 @@ def list_enrollments(
     return spid, out
 
 
-def schedule_from_enrollments(rows: list[dict[str, Any]], term_id: str) -> list[dict[str, Any]]:
+def schedule_from_enrollments(
+    rows: list[dict[str, Any]], term_id: str
+) -> list[dict[str, Any]]:
     sched = []
     for r in rows:
         if r.get("term_id") != term_id and term_id:
@@ -512,7 +540,9 @@ def schedule_from_enrollments(rows: list[dict[str, Any]], term_id: str) -> list[
     return sched
 
 
-def list_student_exams(db: Session, webui_user_id: str, term_id: Optional[str]) -> list[dict[str, Any]]:
+def list_student_exams(
+    db: Session, webui_user_id: str, term_id: Optional[str]
+) -> list[dict[str, Any]]:
     spid = resolve_student_profile_id(db, webui_user_id)
     if not spid:
         return []
@@ -547,7 +577,9 @@ def list_student_exams(db: Session, webui_user_id: str, term_id: Optional[str]) 
     ]
 
 
-def list_student_grades(db: Session, webui_user_id: str, term_id: Optional[str]) -> list[dict[str, Any]]:
+def list_student_grades(
+    db: Session, webui_user_id: str, term_id: Optional[str]
+) -> list[dict[str, Any]]:
     spid = resolve_student_profile_id(db, webui_user_id)
     if not spid:
         return []
@@ -581,7 +613,9 @@ def list_student_grades(db: Session, webui_user_id: str, term_id: Optional[str])
     ]
 
 
-def gpa_summary(db: Session, webui_user_id: str, term_id: Optional[str]) -> dict[str, Any]:
+def gpa_summary(
+    db: Session, webui_user_id: str, term_id: Optional[str]
+) -> dict[str, Any]:
     prof = get_student_profile_api(db, webui_user_id) or {}
     grades = list_student_grades(db, webui_user_id, term_id)
     terms_gpa: dict[str, dict[str, Any]] = {}
@@ -644,23 +678,27 @@ def transcript(db: Session, webui_user_id: str) -> dict[str, Any]:
     akts_sum = 0
     for tid, tgrades in by_term.items():
         tname = (
-            db.execute(text("SELECT name FROM obs_terms WHERE id = :id"), {"id": tid}).scalar()
+            db.execute(
+                text("SELECT name FROM obs_terms WHERE id = :id"), {"id": tid}
+            ).scalar()
             or tid
         )
         courses = []
         term_akts = 0
         term_pts = 0.0
         for g in tgrades:
-            ak_row = db.execute(
-                text(
-                    """
+            ak_row = (
+                db.execute(
+                    text("""
                 SELECT c.akts, c.credits FROM obs_course_enrollments ce
                 JOIN obs_course_sections cs ON ce.course_section_id = cs.id
                 JOIN obs_courses c ON cs.course_id = c.id WHERE ce.id = :eid
-                """
-                ),
-                {"eid": g["enrollment_id"]},
-            ).mappings().first()
+                """),
+                    {"eid": g["enrollment_id"]},
+                )
+                .mappings()
+                .first()
+            )
             akts = int(ak_row["akts"] or 0) if ak_row else 0
             credits = int(ak_row["credits"] or 0) if ak_row else 0
             lg = g.get("letter_grade") or ""
@@ -755,7 +793,9 @@ def student_curriculum_status(db: Session, webui_user_id: str) -> dict[str, Any]
         seen_codes.add(code)
 
         raw_type = (r.get("type") or "").strip().lower().replace(" ", "_")
-        cat_name = type_to_cat.get(raw_type) or ("Diğer" if raw_type else "Program Dersleri")
+        cat_name = type_to_cat.get(raw_type) or (
+            "Diğer" if raw_type else "Program Dersleri"
+        )
         if cat_name not in cats:
             cats[cat_name] = []
 
@@ -807,7 +847,9 @@ def student_curriculum_status(db: Session, webui_user_id: str) -> dict[str, Any]
     return base
 
 
-def clear_student_enrollments_and_related(db: Session, webui_user_id: str) -> dict[str, Any]:
+def clear_student_enrollments_and_related(
+    db: Session, webui_user_id: str
+) -> dict[str, Any]:
     """Öğrencinin tüm şube kayıtlarını, not ve yoklama satırlarını siler (demo / test temizliği)."""
     spid = resolve_student_profile_id(db, webui_user_id)
     if not spid:
@@ -822,12 +864,20 @@ def clear_student_enrollments_and_related(db: Session, webui_user_id: str) -> di
         return {"ok": True, "deleted_enrollments": 0, "detail": "Silinecek kayıt yok"}
 
     for eid in eids:
-        db.execute(text("DELETE FROM obs_grade_entries WHERE enrollment_id = :eid"), {"eid": eid})
         db.execute(
-            text("DELETE FROM obs_approval_requests WHERE related_enrollment_id = :eid"),
+            text("DELETE FROM obs_grade_entries WHERE enrollment_id = :eid"),
             {"eid": eid},
         )
-    db.execute(text("DELETE FROM obs_attendance_records WHERE student_id = :spid"), {"spid": spid})
+        db.execute(
+            text(
+                "DELETE FROM obs_approval_requests WHERE related_enrollment_id = :eid"
+            ),
+            {"eid": eid},
+        )
+    db.execute(
+        text("DELETE FROM obs_attendance_records WHERE student_id = :spid"),
+        {"spid": spid},
+    )
     res = db.execute(
         text("DELETE FROM obs_course_enrollments WHERE student_id = :spid"),
         {"spid": spid},
@@ -837,7 +887,9 @@ def clear_student_enrollments_and_related(db: Session, webui_user_id: str) -> di
     return {"ok": True, "deleted_enrollments": deleted, "detail": "Kayıtlar silindi"}
 
 
-def attendance_summary(db: Session, webui_user_id: str, term_id: Optional[str]) -> list[dict[str, Any]]:
+def attendance_summary(
+    db: Session, webui_user_id: str, term_id: Optional[str]
+) -> list[dict[str, Any]]:
     spid = resolve_student_profile_id(db, webui_user_id)
     if not spid:
         return []
@@ -883,16 +935,18 @@ def list_document_requests(db: Session, webui_user_id: str) -> list[dict[str, An
     spid = resolve_student_profile_id(db, webui_user_id)
     if not spid:
         return []
-    rows = db.execute(
-        text(
-            """
+    rows = (
+        db.execute(
+            text("""
         SELECT id, requesting_institution, request_reason, document_type, document_subtype,
                status, created_at
         FROM obs_document_requests WHERE student_id = :sid ORDER BY created_at DESC
-        """
-        ),
-        {"sid": spid},
-    ).mappings().all()
+        """),
+            {"sid": spid},
+        )
+        .mappings()
+        .all()
+    )
     return [
         {
             "id": _str_id(r["id"]),
@@ -908,20 +962,23 @@ def list_document_requests(db: Session, webui_user_id: str) -> list[dict[str, An
 
 
 def create_document_request(
-    db: Session, webui_user_id: str, institution: str, reason: str, dtype: str, subtype: str
+    db: Session,
+    webui_user_id: str,
+    institution: str,
+    reason: str,
+    dtype: str,
+    subtype: str,
 ) -> Optional[dict[str, Any]]:
     spid = resolve_student_profile_id(db, webui_user_id)
     if not spid:
         return None
     rid = str(uuid.uuid4())
     db.execute(
-        text(
-            """
+        text("""
         INSERT INTO obs_document_requests
         (id, student_id, requesting_institution, request_reason, document_type, document_subtype, status, created_at, updated_at)
         VALUES (:id, :sid, :inst, :reason, :dtype, :subtype, 'bekliyor', NOW(), NOW())
-        """
-        ),
+        """),
         {
             "id": rid,
             "sid": spid,
@@ -946,13 +1003,19 @@ def create_document_request(
 def update_student_profile_fields(
     db: Session, webui_user_id: str, patch: dict[str, Any]
 ) -> bool:
-    allowed = {k: patch[k] for k in ("phone", "address", "emergency_contact", "emergency_phone") if k in patch and patch[k] is not None}
+    allowed = {
+        k: patch[k]
+        for k in ("phone", "address", "emergency_contact", "emergency_phone")
+        if k in patch and patch[k] is not None
+    }
     if not allowed:
         return True
     sets = ", ".join(f"{k} = :{k}" for k in allowed)
     params = {**allowed, "uid": webui_user_id}
     db.execute(
-        text(f"UPDATE obs_student_profiles SET {sets}, updated_at = NOW() WHERE user_id = :uid"),
+        text(
+            f"UPDATE obs_student_profiles SET {sets}, updated_at = NOW() WHERE user_id = :uid"
+        ),
         params,
     )
     db.commit()
@@ -968,7 +1031,9 @@ def available_sections(
     tid = term_id
     if not tid:
         row = db.execute(
-            text("SELECT id FROM obs_terms WHERE is_active = true ORDER BY start_date DESC LIMIT 1")
+            text(
+                "SELECT id FROM obs_terms WHERE is_active = true ORDER BY start_date DESC LIMIT 1"
+            )
         ).first()
         tid = _str_id(row[0]) if row else None
     q = """
@@ -1014,7 +1079,9 @@ def available_sections(
     return tid, out
 
 
-def academic_sections(db: Session, webui_user_id: str, term_id: Optional[str]) -> list[dict[str, Any]]:
+def academic_sections(
+    db: Session, webui_user_id: str, term_id: Optional[str]
+) -> list[dict[str, Any]]:
     apid = resolve_academic_profile_id(db, webui_user_id)
     if not apid:
         return []
@@ -1058,7 +1125,9 @@ def academic_sections(db: Session, webui_user_id: str, term_id: Optional[str]) -
     ]
 
 
-def section_owned_by_instructor(db: Session, section_id: str, webui_user_id: str) -> bool:
+def section_owned_by_instructor(
+    db: Session, section_id: str, webui_user_id: str
+) -> bool:
     apid = resolve_academic_profile_id(db, webui_user_id)
     if not apid:
         return False
@@ -1072,9 +1141,9 @@ def section_owned_by_instructor(db: Session, section_id: str, webui_user_id: str
 
 
 def section_students(db: Session, section_id: str) -> tuple[Optional[dict], list[dict]]:
-    sec = db.execute(
-        text(
-            """
+    sec = (
+        db.execute(
+            text("""
         SELECT cs.id, cs.course_id, c.code AS course_code, c.name AS course_name,
                cs.section_no, cs.term_id, cs.instructor_id, cs.classroom_id,
                cs.day_of_week, cs.start_time, cs.end_time, cs.capacity,
@@ -1086,10 +1155,12 @@ def section_students(db: Session, section_id: str) -> tuple[Optional[dict], list
         LEFT JOIN obs_academic_profiles ap ON cs.instructor_id = ap.id
         LEFT JOIN "user" u ON u.id = ap.user_id
         WHERE cs.id = :sid
-        """
-        ),
-        {"sid": section_id},
-    ).mappings().first()
+        """),
+            {"sid": section_id},
+        )
+        .mappings()
+        .first()
+    )
     if not sec:
         return None, []
     section_dict = {
@@ -1109,18 +1180,20 @@ def section_students(db: Session, section_id: str) -> tuple[Optional[dict], list
         "enrollment_count": int(sec.get("enrollment_count") or 0),
         "capacity": int(sec.get("capacity") or 0),
     }
-    rows = db.execute(
-        text(
-            f"""
+    rows = (
+        db.execute(
+            text(f"""
         SELECT ce.id AS enrollment_id, ce.status, sp.student_number, u.name, sp.gpa
         FROM obs_course_enrollments ce
         JOIN obs_student_profiles sp ON ce.student_id = sp.id
         LEFT JOIN {USER_TBL} u ON u.id = sp.user_id
         WHERE ce.course_section_id = :sid AND ce.status = 'active'
-        """
-        ),
-        {"sid": section_id},
-    ).mappings().all()
+        """),
+            {"sid": section_id},
+        )
+        .mappings()
+        .all()
+    )
     students = [
         {
             "student_no": r.get("student_number") or "",
@@ -1135,17 +1208,19 @@ def section_students(db: Session, section_id: str) -> tuple[Optional[dict], list
 
 
 def section_exams(db: Session, section_id: str) -> list[dict[str, Any]]:
-    rows = db.execute(
-        text(
-            """
+    rows = (
+        db.execute(
+            text("""
         SELECT id, course_section_id, exam_type, exam_date, exam_time, weight_percent, cr.code AS classroom_code
         FROM obs_exams ex
         LEFT JOIN obs_classrooms cr ON ex.classroom_id = cr.id
         WHERE ex.course_section_id = :sid
-        """
-        ),
-        {"sid": section_id},
-    ).mappings().all()
+        """),
+            {"sid": section_id},
+        )
+        .mappings()
+        .all()
+    )
     return [
         {
             "id": _str_id(r["id"]),
@@ -1161,23 +1236,28 @@ def section_exams(db: Session, section_id: str) -> list[dict[str, Any]]:
 
 
 def insert_exam(
-    db: Session, section_id: str, exam_type: str, exam_date: str, exam_time: str, classroom: Optional[str], weight: float
+    db: Session,
+    section_id: str,
+    exam_type: str,
+    exam_date: str,
+    exam_time: str,
+    classroom: Optional[str],
+    weight: float,
 ) -> dict[str, Any]:
     eid = str(uuid.uuid4())
     cr_id = None
     if classroom:
         row = db.execute(
-            text("SELECT id FROM obs_classrooms WHERE code = :c LIMIT 1"), {"c": classroom}
+            text("SELECT id FROM obs_classrooms WHERE code = :c LIMIT 1"),
+            {"c": classroom},
         ).first()
         if row:
             cr_id = str(row[0])
     db.execute(
-        text(
-            """
+        text("""
         INSERT INTO obs_exams (id, course_section_id, exam_type, exam_date, exam_time, classroom_id, weight_percent, is_published, created_at)
         VALUES (:id, :csid, :et, :ed, :etm, :crid, :wp, false, NOW())
-        """
-        ),
+        """),
         {
             "id": eid,
             "csid": section_id,
@@ -1201,9 +1281,9 @@ def insert_exam(
 
 
 def section_grade_rows(db: Session, section_id: str) -> list[dict[str, Any]]:
-    rows = db.execute(
-        text(
-            f"""
+    rows = (
+        db.execute(
+            text(f"""
         SELECT ce.id AS enrollment_id, sp.student_number, u.name,
                g.midterm, g.final, g.letter_grade, g.is_finalized
         FROM obs_course_enrollments ce
@@ -1211,10 +1291,12 @@ def section_grade_rows(db: Session, section_id: str) -> list[dict[str, Any]]:
         LEFT JOIN {USER_TBL} u ON u.id = sp.user_id
         LEFT JOIN obs_grade_entries g ON g.enrollment_id = ce.id
         WHERE ce.course_section_id = :sid AND ce.status = 'active'
-        """
-        ),
-        {"sid": section_id},
-    ).mappings().all()
+        """),
+            {"sid": section_id},
+        )
+        .mappings()
+        .all()
+    )
     return [
         {
             "student_no": r.get("student_number") or "",
@@ -1229,9 +1311,7 @@ def section_grade_rows(db: Session, section_id: str) -> list[dict[str, Any]]:
     ]
 
 
-def upsert_grades(
-    db: Session, section_id: str, grades: list[dict[str, Any]]
-) -> int:
+def upsert_grades(db: Session, section_id: str, grades: list[dict[str, Any]]) -> int:
     n = 0
     for item in grades:
         eid = item.get("enrollment_id")
@@ -1253,23 +1333,19 @@ def upsert_grades(
         ).first()
         if exists:
             db.execute(
-                text(
-                    """
+                text("""
                 UPDATE obs_grade_entries SET midterm = COALESCE(:m, midterm), final = COALESCE(:f, final), updated_at = NOW()
                 WHERE enrollment_id = :eid
-                """
-                ),
+                """),
                 {"eid": eid, "m": mid, "f": fin},
             )
         else:
             gid = str(uuid.uuid4())
             db.execute(
-                text(
-                    """
+                text("""
                 INSERT INTO obs_grade_entries (id, enrollment_id, midterm, final, is_finalized, is_published, created_at, updated_at)
                 VALUES (:gid, :eid, :m, :f, false, false, NOW(), NOW())
-                """
-                ),
+                """),
                 {"gid": gid, "eid": eid, "m": mid, "f": fin},
             )
         n += 1
@@ -1279,26 +1355,30 @@ def upsert_grades(
 
 def finalize_section_grades(db: Session, section_id: str) -> None:
     db.execute(
-        text(
-            """
+        text("""
         UPDATE obs_grade_entries g SET is_finalized = true, finalized_at = NOW()
         FROM obs_course_enrollments ce
         WHERE g.enrollment_id = ce.id AND ce.course_section_id = :sid
-        """
-        ),
+        """),
         {"sid": section_id},
     )
     db.commit()
 
 
 def record_attendance(
-    db: Session, section_id: str, week_no: int, records: list[dict[str, Any]], recorded_by: str
+    db: Session,
+    section_id: str,
+    week_no: int,
+    records: list[dict[str, Any]],
+    recorded_by: str,
 ) -> int:
     for rec in records:
         eid = rec.get("enrollment_id")
         st = rec.get("status") or "present"
         row = db.execute(
-            text("SELECT student_id FROM obs_course_enrollments WHERE id = :eid AND course_section_id = :sid"),
+            text(
+                "SELECT student_id FROM obs_course_enrollments WHERE id = :eid AND course_section_id = :sid"
+            ),
             {"eid": eid, "sid": section_id},
         ).first()
         if not row:
@@ -1312,13 +1392,18 @@ def record_attendance(
         )
         rid = str(uuid.uuid4())
         db.execute(
-            text(
-                """
+            text("""
             INSERT INTO obs_attendance_records (id, student_id, course_section_id, week_no, status, recorded_at, recorded_by)
             VALUES (:id, :spid, :sid, :w, :st, NOW(), :rb)
-            """
-            ),
-            {"id": rid, "spid": spid, "sid": section_id, "w": week_no, "st": st, "rb": recorded_by},
+            """),
+            {
+                "id": rid,
+                "spid": spid,
+                "sid": section_id,
+                "w": week_no,
+                "st": st,
+                "rb": recorded_by,
+            },
         )
     db.commit()
     return len(records)
@@ -1328,9 +1413,9 @@ def academic_advisees(db: Session, webui_user_id: str) -> list[dict[str, Any]]:
     apid = resolve_academic_profile_id(db, webui_user_id)
     if not apid:
         return []
-    rows = db.execute(
-        text(
-            f"""
+    rows = (
+        db.execute(
+            text(f"""
         SELECT sp.student_number, u.name, d.code AS dept_code, sp.class_year, sp.gpa, sp.status
         FROM obs_student_advisors sa
         JOIN obs_student_profiles sp ON sa.student_id = sp.id
@@ -1338,10 +1423,12 @@ def academic_advisees(db: Session, webui_user_id: str) -> list[dict[str, Any]]:
         LEFT JOIN obs_departments d ON sp.department_id = d.id
         WHERE sa.advisor_id = :apid
           AND (sa.valid_to IS NULL OR sa.valid_to >= CURRENT_DATE)
-        """
-        ),
-        {"apid": apid},
-    ).mappings().all()
+        """),
+            {"apid": apid},
+        )
+        .mappings()
+        .all()
+    )
     return [
         {
             "student_no": r.get("student_number") or "",
@@ -1394,16 +1481,18 @@ def list_approval_requests_for_academic(
 
 
 def resolve_approval(
-    db: Session, request_id: str, approver_user_id: str, approve: bool, note: Optional[str]
+    db: Session,
+    request_id: str,
+    approver_user_id: str,
+    approve: bool,
+    note: Optional[str],
 ) -> bool:
     st = "approved" if approve else "rejected"
     res = db.execute(
-        text(
-            """
+        text("""
         UPDATE obs_approval_requests SET status = :st, note = COALESCE(:note, note), resolved_at = NOW()
         WHERE id = :rid AND approver_id = :aid
-        """
-        ),
+        """),
         {"st": st, "note": note, "rid": request_id, "aid": approver_user_id},
     )
     db.commit()
@@ -1421,13 +1510,11 @@ def insert_announcement(
 ) -> str:
     aid = str(uuid.uuid4())
     db.execute(
-        text(
-            """
+        text("""
         INSERT INTO obs_announcements
         (id, created_by_user_id, title, content, audience_type, department_id, course_section_id, is_active, published_at, created_at)
         VALUES (:id, :cb, :t, :c, :at, :did, :csid, true, NOW(), NOW())
-        """
-        ),
+        """),
         {
             "id": aid,
             "cb": created_by,
@@ -1458,32 +1545,38 @@ def admin_counts(db: Session) -> dict[str, int]:
 
 def registration_settings_row(db: Session, term_id: Optional[str]) -> Optional[dict]:
     if term_id:
-        row = db.execute(
-            text("SELECT * FROM obs_registration_settings WHERE term_id = :t LIMIT 1"),
-            {"t": term_id},
-        ).mappings().first()
+        row = (
+            db.execute(
+                text(
+                    "SELECT * FROM obs_registration_settings WHERE term_id = :t LIMIT 1"
+                ),
+                {"t": term_id},
+            )
+            .mappings()
+            .first()
+        )
     else:
-        row = db.execute(
-            text(
-                """
+        row = db.execute(text("""
             SELECT rs.* FROM obs_registration_settings rs
             INNER JOIN obs_terms tm ON rs.term_id = tm.id
             WHERE tm.is_active = true
             LIMIT 1
-            """
-            )
-        ).mappings().first()
+            """)).mappings().first()
     return dict(row) if row else None
 
 
 def resolve_active_term_id(db: Session) -> Optional[str]:
     row = db.execute(
-        text("SELECT id FROM obs_terms WHERE is_active = true ORDER BY start_date DESC LIMIT 1")
+        text(
+            "SELECT id FROM obs_terms WHERE is_active = true ORDER BY start_date DESC LIMIT 1"
+        )
     ).first()
     return _str_id(row[0]) if row else None
 
 
-def upsert_registration_settings(db: Session, term_id: str, body: dict[str, Any]) -> dict[str, Any]:
+def upsert_registration_settings(
+    db: Session, term_id: str, body: dict[str, Any]
+) -> dict[str, Any]:
     max_akts = int(body.get("max_akts", 30))
     bonus_akts = int(body.get("bonus_akts", 0))
     gpa_threshold = float(body.get("gpa_threshold", 2.50))
@@ -1499,25 +1592,21 @@ def upsert_registration_settings(db: Session, term_id: str, body: dict[str, Any]
     }
     if existing:
         db.execute(
-            text(
-                """
+            text("""
                 UPDATE obs_registration_settings
                 SET max_akts = :ma, bonus_akts = :ba, gpa_threshold = :gt, updated_at = NOW()
                 WHERE term_id = :tid
-                """
-            ),
+                """),
             params,
         )
     else:
         rid = str(uuid.uuid4())
         db.execute(
-            text(
-                """
+            text("""
                 INSERT INTO obs_registration_settings
                     (id, term_id, max_akts, bonus_akts, gpa_threshold, created_at, updated_at)
                 VALUES (:id, :tid, :ma, :ba, :gt, NOW(), NOW())
-                """
-            ),
+                """),
             {**params, "id": rid},
         )
     db.commit()
@@ -1525,14 +1614,22 @@ def upsert_registration_settings(db: Session, term_id: str, body: dict[str, Any]
 
 
 def list_audit_logs(db: Session, limit: int) -> tuple[list, int]:
-    rows = db.execute(
-        text("SELECT * FROM obs_audit_logs ORDER BY created_at DESC NULLS LAST LIMIT :lim"),
-        {"lim": limit},
-    ).mappings().all()
+    rows = (
+        db.execute(
+            text(
+                "SELECT * FROM obs_audit_logs ORDER BY created_at DESC NULLS LAST LIMIT :lim"
+            ),
+            {"lim": limit},
+        )
+        .mappings()
+        .all()
+    )
     return [dict(r) for r in rows], len(rows)
 
 
-def list_document_requests_admin(db: Session, status_filter: Optional[str]) -> tuple[list, int]:
+def list_document_requests_admin(
+    db: Session, status_filter: Optional[str]
+) -> tuple[list, int]:
     q = "SELECT dr.*, sp.user_id AS student_user_id FROM obs_document_requests dr JOIN obs_student_profiles sp ON dr.student_id = sp.id WHERE 1=1"
     params: dict[str, Any] = {}
     if status_filter:
@@ -1567,15 +1664,17 @@ def patch_document_request(db: Session, request_id: str, new_status: str) -> boo
 
 
 def list_instructors(db: Session) -> list[dict[str, Any]]:
-    rows = db.execute(
-        text(
-            f"""
+    rows = (
+        db.execute(
+            text(f"""
         SELECT ap.user_id, u.email, u.name, u.role
         FROM obs_academic_profiles ap
         LEFT JOIN {USER_TBL} u ON u.id = ap.user_id
-        """
-        ),
-    ).mappings().all()
+        """),
+        )
+        .mappings()
+        .all()
+    )
     return [
         {
             "id": _str_id(r.get("user_id")),
@@ -1611,26 +1710,26 @@ def create_enrollment_requests(
     student_no = sp_row[0] if sp_row else ""
     out = []
     for sid in section_ids:
-        row = db.execute(
-            text(
-                """
+        row = (
+            db.execute(
+                text("""
             SELECT c.code, c.name FROM obs_course_sections cs
             JOIN obs_courses c ON cs.course_id = c.id WHERE cs.id = :csid
-            """
-            ),
-            {"csid": sid},
-        ).mappings().first()
+            """),
+                {"csid": sid},
+            )
+            .mappings()
+            .first()
+        )
         cc = row.get("course_code") if row else ""
         cn = row.get("course_name") if row else ""
         rid = str(uuid.uuid4())
         db.execute(
-            text(
-                """
+            text("""
             INSERT INTO obs_approval_requests
             (id, student_id, approver_id, request_type, related_enrollment_id, status, note, created_at)
             VALUES (:id, :spid, :appr, 'enrollment_request', NULL, 'pending', :note, NOW())
-            """
-            ),
+            """),
             {
                 "id": rid,
                 "spid": spid,
@@ -1682,13 +1781,11 @@ def create_drop_request(
     student_no = sp_row[0] if sp_row else ""
     rid = str(uuid.uuid4())
     db.execute(
-        text(
-            """
+        text("""
         INSERT INTO obs_approval_requests
         (id, student_id, approver_id, request_type, related_enrollment_id, status, note, created_at)
         VALUES (:id, :spid, :appr, 'drop_request', :eid, 'pending', :reason, NOW())
-        """
-        ),
+        """),
         {
             "id": rid,
             "spid": spid,
@@ -1712,16 +1809,12 @@ def create_drop_request(
 
 
 def list_roles_with_permissions(db: Session) -> list[dict[str, Any]]:
-    rows = db.execute(
-        text(
-            """
+    rows = db.execute(text("""
         SELECT rp.role_name, p.code
         FROM obs_role_permissions rp
         JOIN obs_permissions p ON p.id = rp.permission_id
         ORDER BY rp.role_name, p.code
-        """
-        )
-    ).mappings().all()
+        """)).mappings().all()
     by_role: dict[str, list[str]] = {}
     for r in rows:
         by_role.setdefault(r["role_name"] or "", []).append(r["code"] or "")
@@ -1758,7 +1851,13 @@ def admin_insert_department(db: Session, code: str, name: str) -> dict[str, Any]
 
 
 def admin_insert_term(
-    db: Session, name: str, academic_year: str, season: str, starts_at: str, ends_at: str, is_active: bool
+    db: Session,
+    name: str,
+    academic_year: str,
+    season: str,
+    starts_at: str,
+    ends_at: str,
+    is_active: bool,
 ) -> dict[str, Any]:
     _ = academic_year
     _ = season
@@ -1766,12 +1865,10 @@ def admin_insert_term(
     sd = starts_at if starts_at else None
     ed = ends_at if ends_at else None
     db.execute(
-        text(
-            """
+        text("""
         INSERT INTO obs_terms (id, name, start_date, end_date, is_active, created_at)
         VALUES (:id, :name, CAST(:sd AS date), CAST(:ed AS date), :ia, NOW())
-        """
-        ),
+        """),
         {"id": tid, "name": name, "sd": sd, "ed": ed, "ia": is_active},
     )
     db.commit()
@@ -1800,12 +1897,10 @@ def admin_insert_course(
 ) -> dict[str, Any]:
     cid = str(uuid.uuid4())
     db.execute(
-        text(
-            """
+        text("""
         INSERT INTO obs_courses (id, department_id, code, name, credits, akts, class_year, type, theory_hours, language, created_at)
         VALUES (:id, :did, :code, :name, :cr, :ak, :cy, :typ, :th, :lang, NOW())
-        """
-        ),
+        """),
         {
             "id": cid,
             "did": department_id,
@@ -1840,16 +1935,27 @@ def admin_insert_classroom(
     rid = str(uuid.uuid4())
     code = name or rid[:8]
     db.execute(
-        text(
-            """
+        text("""
         INSERT INTO obs_classrooms (id, code, name, building, capacity, is_online)
         VALUES (:id, :code, :name, :b, :cap, :io)
-        """
-        ),
-        {"id": rid, "code": code, "name": name, "b": building, "cap": capacity, "io": is_online},
+        """),
+        {
+            "id": rid,
+            "code": code,
+            "name": name,
+            "b": building,
+            "cap": capacity,
+            "io": is_online,
+        },
     )
     db.commit()
-    return {"id": rid, "building": building, "name": name, "capacity": capacity, "is_online": is_online}
+    return {
+        "id": rid,
+        "building": building,
+        "name": name,
+        "capacity": capacity,
+        "is_online": is_online,
+    }
 
 
 def resolve_classroom_id_by_code(db: Session, code: str) -> Optional[str]:
@@ -1876,13 +1982,11 @@ def admin_insert_section(
         apid = resolve_academic_profile_id(db, instructor_user_id)
     sid = str(uuid.uuid4())
     db.execute(
-        text(
-            """
+        text("""
         INSERT INTO obs_course_sections
         (id, course_id, term_id, instructor_id, section_no, classroom_id, day_of_week, start_time, end_time, capacity, created_at)
         VALUES (:id, :cid, :tid, :iid, :sn, :crid, :dow, CAST(:st AS time), CAST(:et AS time), :cap, NOW())
-        """
-        ),
+        """),
         {
             "id": sid,
             "cid": course_id,
@@ -1901,20 +2005,37 @@ def admin_insert_section(
 
 
 def admin_insert_calendar_event(
-    db: Session, term_id: str, event_type: str, title: str, start_date: str, end_date: str
+    db: Session,
+    term_id: str,
+    event_type: str,
+    title: str,
+    start_date: str,
+    end_date: str,
 ) -> dict[str, Any]:
     cid = str(uuid.uuid4())
     db.execute(
-        text(
-            """
+        text("""
         INSERT INTO obs_calendar_events (id, term_id, event_type, title, start_date, end_date, created_at)
         VALUES (:id, :tid, :et, :ti, CAST(:sd AS date), CAST(:ed AS date), NOW())
-        """
-        ),
-        {"id": cid, "tid": term_id, "et": event_type, "ti": title, "sd": start_date, "ed": end_date},
+        """),
+        {
+            "id": cid,
+            "tid": term_id,
+            "et": event_type,
+            "ti": title,
+            "sd": start_date,
+            "ed": end_date,
+        },
     )
     db.commit()
-    return {"id": cid, "term_id": term_id, "event_type": event_type, "title": title, "start_date": start_date, "end_date": end_date}
+    return {
+        "id": cid,
+        "term_id": term_id,
+        "event_type": event_type,
+        "title": title,
+        "start_date": start_date,
+        "end_date": end_date,
+    }
 
 
 def list_courses_raw(db: Session) -> list[dict[str, Any]]:
@@ -1923,7 +2044,9 @@ def list_courses_raw(db: Session) -> list[dict[str, Any]]:
 
 
 def list_classrooms_raw(db: Session) -> list[dict[str, Any]]:
-    rows = db.execute(text("SELECT * FROM obs_classrooms ORDER BY code")).mappings().all()
+    rows = (
+        db.execute(text("SELECT * FROM obs_classrooms ORDER BY code")).mappings().all()
+    )
     out = []
     for r in rows:
         d = dict(r)
@@ -1963,7 +2086,11 @@ def list_sections_raw(db: Session, term_id: Optional[str]) -> list[dict[str, Any
         d["start_time"] = _fmt_time(d.get("start_time"))
         d["end_time"] = _fmt_time(d.get("end_time"))
         if d.get("created_at"):
-            d["created_at"] = d["created_at"].isoformat() if hasattr(d["created_at"], "isoformat") else str(d["created_at"])
+            d["created_at"] = (
+                d["created_at"].isoformat()
+                if hasattr(d["created_at"], "isoformat")
+                else str(d["created_at"])
+            )
         out.append(d)
     return out
 
