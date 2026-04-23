@@ -27,6 +27,7 @@
 		isLastActiveTab,
 		isApp,
 		appInfo,
+		appData,
 		toolServers,
 		playingNotificationSound,
 		channels,
@@ -54,7 +55,7 @@
 	import { getAllTags, getChatList } from '$lib/apis/chats';
 	import { chatCompletion } from '$lib/apis/openai';
 
-	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL, WEBUI_HOSTNAME } from '$lib/constants';
+	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 	import { bestMatchingLanguage, displayFileHandler } from '$lib/utils';
 	import { setTextScale } from '$lib/utils/text-scale';
 
@@ -105,7 +106,7 @@
 	const BREAKPOINT = 768;
 
 	const setupSocket = async (enableWebsocket) => {
-		const _socket = io(`${WEBUI_BASE_URL}` || undefined, {
+		const _socket = io(WEBUI_BASE_URL || undefined, {
 			reconnection: true,
 			reconnectionDelay: 1000,
 			reconnectionDelayMax: 5000,
@@ -141,7 +142,7 @@
 			// Send heartbeat every 30 seconds
 			heartbeatInterval = setInterval(() => {
 				if (_socket.connected) {
-					console.log('Sending heartbeat');
+					console.debug('[socket] heartbeat');
 					_socket.emit('heartbeat', {});
 				}
 			}, 30000);

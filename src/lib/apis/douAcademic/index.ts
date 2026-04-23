@@ -1,8 +1,5 @@
 /**
- * OBS Mock API istemcisi — Faz 2–4
- *
- * Tüm çağrılar bellek içi mock backend'e gider (DB yok).
- * Üretime geçişte yalnızca bu dosyadaki endpoint yolları ve tipler güncellenir.
+ * OBS akademik API istemcisi — uçlar Open WebUI altında PostgreSQL obs_* verisine bağlıdır.
  */
 
 import { WEBUI_API_BASE_URL } from '$lib/constants';
@@ -106,8 +103,8 @@ export type DouAdvisor = {
 
 export type DouAdvisorResponse = {
 	student_user_id: string;
-	advisor: DouAdvisor;
-	valid_from?: string;
+	advisor: DouAdvisor | null;
+	valid_from?: string | null;
 	valid_to?: string | null;
 	_mock?: boolean;
 };
@@ -527,8 +524,37 @@ export const getDouAdminCalendarEvents = (token: string | null, termId?: string)
 	return authFetch<DouCalendarEvent[]>(`/admin/calendar-events${q}`, token);
 };
 
-export const getDouAdminRegistrationSettings = (token: string | null) =>
-	authFetch<unknown>('/admin/registration-settings', token);
+export const getDouAdminRegistrationSettings = (token: string | null, termId?: string) => {
+	const q = termId ? `?term_id=${encodeURIComponent(termId)}` : '';
+	return authFetch<unknown>(`/admin/registration-settings${q}`, token);
+};
+
+export const postDouAdminRegistrationSettings = (
+	token: string | null,
+	body: {
+		max_akts: number;
+		bonus_akts: number;
+		gpa_threshold: number;
+		enrollment_deadline?: string;
+		add_drop_deadline?: string;
+	},
+	termId?: string
+) => {
+	const q = termId ? `?term_id=${encodeURIComponent(termId)}` : '';
+	return authFetch<unknown>(`/admin/registration-settings${q}`, token, {
+		method: 'POST',
+		body: JSON.stringify(body)
+	});
+};
+
+export const createDouAdminAnnouncement = (
+	token: string | null,
+	body: { title: string; content: string; audience_type?: string; department_id?: string | null }
+) =>
+	authFetch<{ id: string }>('/admin/announcements', token, {
+		method: 'POST',
+		body: JSON.stringify(body)
+	});
 
 export const getDouAdminAuditLogs = (token: string | null, limit = 20) =>
 	authFetch<{ logs: unknown[]; total: number }>(`/admin/audit-logs?limit=${limit}`, token);
@@ -973,3 +999,11 @@ export const devSeedUsers = (token: string | null) =>
 
 export const devGetObsRole = (token: string | null) =>
 	authFetch<{ obs_role: string; email: string }>('/dev/obs-role', token);
+
+/** [DEV] Oturumdaki öğrencinin obs_course_enrollments + not + yoklama kayıtlarını siler. */
+export const devClearMyStudentEnrollments = (token: string | null) =>
+	authFetch<{ ok: boolean; deleted_enrollments: number; detail?: string }>(
+		'/dev/clear-my-student-enrollments',
+		token,
+		{ method: 'POST', body: '{}' }
+	);

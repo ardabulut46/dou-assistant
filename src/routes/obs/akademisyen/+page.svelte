@@ -7,7 +7,6 @@
 		getDouAcademicSections,
 		getDouAcademicApprovalRequests,
 		getDouTerms,
-		getDouAdminStats,
 		type DouSection,
 		type DouTerm,
 	} from '$lib/apis/douAcademic';

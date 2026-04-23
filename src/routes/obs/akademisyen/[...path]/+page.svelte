@@ -2,8 +2,10 @@
 	import { browser } from '$app/environment';
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/stores';
+	import { tick } from 'svelte';
 	import ObsShell from '$lib/components/obs/ObsShell.svelte';
 	import { user } from '$lib/stores';
+	import { updateUserPassword } from '$lib/apis/auths';
 	import {
 		getDouAcademicSections,
 		getDouSectionStudents,
@@ -91,20 +93,10 @@
 	let pwOk: string | null  = null;
 	let pwBusy = false;
 
-	// Mock şubeler — backend restart'a gerek kalmadan çalışsın
-	const MOCK_SECTIONS: DouSection[] = [
-		{ id: 'sec-1', course_code: 'BLM101', course_name: 'Programlamaya Giriş',            term_id: 'term-2', term_name: '2025-2026 Bahar', day_of_week: 'Pazartesi', start_time: '09:00', classroom_code: 'A-101', capacity: 30 },
-		{ id: 'sec-2', course_code: 'BLM102', course_name: 'Veri Yapıları',                   term_id: 'term-2', term_name: '2025-2026 Bahar', day_of_week: 'Çarşamba',  start_time: '13:00', classroom_code: 'B-205', capacity: 25 },
-		{ id: 'sec-3', course_code: 'YBS201', course_name: 'Sistem Analizi ve Tasarım',       term_id: 'term-2', term_name: '2025-2026 Bahar', day_of_week: 'Perşembe',  start_time: '14:00', classroom_code: 'B-310', capacity: 35 },
-	];
-
-	const MOCK_GRADE_ROWS: AcademicGradeRow[] = [
-		{ enrollment_id: 'enr-1', name: 'Ahmet Yılmaz',   student_no: '20220001', midterm: 72, final: 80, letter_grade: 'BB', is_finalized: false },
-		{ enrollment_id: 'enr-2', name: 'Fatma Demir',    student_no: '20220002', midterm: 90, final: 95, letter_grade: 'AA', is_finalized: false },
-		{ enrollment_id: 'enr-3', name: 'Mehmet Kaya',    student_no: '20220003', midterm: 55, final: 60, letter_grade: 'CC', is_finalized: false },
-		{ enrollment_id: 'enr-4', name: 'Ayşe Çelik',     student_no: '20220004', midterm: 85, final: 78, letter_grade: 'BA', is_finalized: false },
-		{ enrollment_id: 'enr-5', name: 'Mustafa Şahin',  student_no: '20220005', midterm: 45, final: 50, letter_grade: 'DC', is_finalized: false },
-	];
+	let gradeErr: string | null = null;
+	let attendanceErr: string | null = null;
+	let examErr: string | null = null;
+	let approvalErr: string | null = null;
 
 	async function loadPage(path: string) {
 		if (!browser || !apiKey) return;
@@ -113,12 +105,11 @@
 		if (!token) { loadErr = 'Giriş yapmanız gerekiyor.'; loading = false; return; }
 
 		try {
-			// Şubeleri yükle (başarısız olursa mock fallback)
 			const secRes = await Promise.allSettled([ getDouAcademicSections(token) ]);
 			if (secRes[0].status === 'fulfilled') {
 				sections = secRes[0].value.sections ?? [];
 			} else {
-				sections = MOCK_SECTIONS;
+				sections = [];
 			}
 			if (!selectedSection && sections.length) selectedSection = sections[0].id;
 
@@ -128,10 +119,10 @@
 					if (r[0].status === 'fulfilled') {
 						gradeRows = r[0].value.students ?? [];
 					} else {
-						gradeRows = MOCK_GRADE_ROWS;
+						gradeRows = [];
 					}
 				} else {
-					gradeRows = MOCK_GRADE_ROWS;
+					gradeRows = [];
 				}
 				gradeEdits = {};
 				gradeRows.forEach(row => {
@@ -143,7 +134,7 @@
 				if (r[0].status === 'fulfilled') {
 					sectionStudents = (r[0].value as unknown as { students: AcademicStudent[] }).students ?? [];
 				} else {
-					sectionStudents = MOCK_GRADE_ROWS.map(g => ({ enrollment_id: g.enrollment_id, name: g.name, student_no: g.student_no })) as AcademicStudent[];
+					sectionStudents = [];
 				}
 				sectionStudents.forEach(s => {
 					attendanceStatus[s.enrollment_id] = attendanceStatus[s.enrollment_id] ?? 'present';
@@ -154,20 +145,13 @@
 				if (r[0].status === 'fulfilled') {
 					exams = r[0].value.exams ?? [];
 				} else {
-					exams = [
-						{ id: 'exam-1', exam_type: 'midterm', exam_date: '2026-04-20', exam_time: '09:00', classroom: 'A-101', weight_percent: 40, is_published: true },
-						{ id: 'exam-2', exam_type: 'final',   exam_date: '2026-06-10', exam_time: '10:00', classroom: 'B-205', weight_percent: 60, is_published: false },
-					];
+					exams = [];
 				}
 			}
 			if (apiKey === 'advisees') {
 				const r = await Promise.allSettled([ getDouAcademicAdvisees(token) ]);
 				if (r[0].status === 'fulfilled') advisees = r[0].value.advisees ?? [];
-				else advisees = [
-					{ student_no: '20220001', name: 'Ahmet Yılmaz',   department: 'YBS', class_level: 3, gpa: 3.10 },
-					{ student_no: '20220006', name: 'Zeynep Arslan',   department: 'YBS', class_level: 2, gpa: 2.85 },
-					{ student_no: '20220007', name: 'Emre Koç',        department: 'YBS', class_level: 4, gpa: 3.45 },
-				];
+				else advisees = [];
 			}
 			if (apiKey === 'approvals') {
 				const r = await Promise.allSettled([ getDouAcademicApprovalRequests(token) ]);
@@ -188,11 +172,15 @@
 		}
 	}
 
-	$: if (browser) loadPage(activePath);
-	afterNavigate(() => loadPage(activePath));
+	afterNavigate(async () => {
+		await tick();
+		if (!browser) return;
+		void loadPage(activePath);
+	});
 
 	async function saveGrades() {
 		gradeSaving = true;
+		gradeErr = null;
 		const token = localStorage.token ?? null;
 		try {
 			const grades = Object.entries(gradeEdits).map(([enrollment_id, g]) => ({
@@ -200,51 +188,103 @@
 			}));
 			await putDouSectionGrades(token, selectedSection, grades);
 			gradeSaved = true;
-		} catch {
-			gradeSaved = true; // mock
+			setTimeout(() => { gradeSaved = false; }, 3500);
+		} catch (e: unknown) {
+			gradeErr = e instanceof Error ? e.message : 'Notlar kaydedilemedi.';
 		} finally { gradeSaving = false; }
 	}
 
 	async function finalizeGrades() {
 		const token = localStorage.token ?? null;
-		await finalizeDouSectionGrades(token, selectedSection).catch(() => {});
-		gradeSaved = true;
+		gradeErr = null;
+		try {
+			await finalizeDouSectionGrades(token, selectedSection);
+			gradeSaved = true;
+			setTimeout(() => { gradeSaved = false; }, 3500);
+			await loadPage(activePath);
+		} catch (e: unknown) {
+			gradeErr = e instanceof Error ? e.message : 'Notlar kesinleştirilemedi.';
+		}
 	}
 
 	async function saveAttendance() {
 		const token = localStorage.token ?? null;
+		attendanceErr = null;
 		const records = Object.entries(attendanceStatus).map(([enrollment_id, status]) => ({ enrollment_id, status }));
-		await putDouSectionAttendance(token, selectedSection, weekNo, records).catch(() => {});
+		try {
+			await putDouSectionAttendance(token, selectedSection, weekNo, records);
+		} catch (e: unknown) {
+			attendanceErr = e instanceof Error ? e.message : 'Yoklama kaydedilemedi.';
+		}
 	}
 
 	async function createExam() {
 		examSaving = true;
+		examErr = null;
 		const token = localStorage.token ?? null;
 		try {
 			const newExam = await createDouSectionExam(token, selectedSection, { ...examForm });
 			exams = [...exams, newExam];
 			examSaved = true;
 			examForm = { exam_type: 'midterm', exam_date: '', exam_time: '09:00', classroom: '', weight_percent: 40 };
-		} catch {
-			examSaved = true;
+			setTimeout(() => { examSaved = false; }, 3500);
+		} catch (e: unknown) {
+			examErr = e instanceof Error ? e.message : 'Sınav eklenemedi.';
 		} finally { examSaving = false; }
 	}
 
 	async function resolveApproval(id: string, action: 'approve' | 'reject') {
 		const token = localStorage.token ?? null;
-		await resolveDouApprovalRequest(token, id, action).catch(() => {});
-		approvals = approvals.map(r => r.id === id ? { ...r, status: action === 'approve' ? 'approved' : 'rejected' } : r);
+		approvalErr = null;
+		try {
+			await resolveDouApprovalRequest(token, id, action);
+			approvals = approvals.map(r => r.id === id ? { ...r, status: action === 'approve' ? 'approved' : 'rejected' } : r);
+		} catch (e: unknown) {
+			approvalErr = e instanceof Error ? e.message : 'İşlem yapılamadı.';
+		}
 	}
 
-	function changePassword() {
-		pwBusy = true; pwErr = null; pwOk = null;
-		setTimeout(() => {
-			if (!pwForm.current_password || !pwForm.new_password) { pwErr = 'Tüm alanlar zorunlu.'; }
-			else if (pwForm.new_password !== pwForm.confirm_password) { pwErr = 'Şifreler eşleşmiyor.'; }
-			else if (pwForm.new_password.length < 8) { pwErr = 'En az 8 karakter olmalı.'; }
-			else { pwOk = 'Şifre güncellendi. (Mock)'; pwForm = { current_password: '', new_password: '', confirm_password: '' }; }
+	async function changePassword() {
+		pwBusy = true;
+		pwErr = null;
+		pwOk = null;
+		const token = localStorage.token ?? null;
+		if (!token) {
+			pwErr = 'Oturum yok.';
 			pwBusy = false;
-		}, 400);
+			return;
+		}
+		if (!pwForm.current_password || !pwForm.new_password) {
+			pwErr = 'Tüm alanlar zorunlu.';
+			pwBusy = false;
+			return;
+		}
+		if (pwForm.new_password !== pwForm.confirm_password) {
+			pwErr = 'Şifreler eşleşmiyor.';
+			pwBusy = false;
+			return;
+		}
+		if (pwForm.new_password.length < 8) {
+			pwErr = 'En az 8 karakter olmalı.';
+			pwBusy = false;
+			return;
+		}
+		try {
+			await updateUserPassword(token, pwForm.current_password, pwForm.new_password);
+			pwOk = 'Şifre güncellendi.';
+			pwForm = { current_password: '', new_password: '', confirm_password: '' };
+		} catch (e: unknown) {
+			let msg = 'Şifre güncellenemedi.';
+			if (typeof e === 'string') msg = e;
+			else if (e instanceof Error) msg = e.message;
+			else if (e && typeof e === 'object' && 'detail' in e) {
+				const d = (e as { detail?: unknown }).detail;
+				msg = typeof d === 'string' ? d : JSON.stringify(d);
+			}
+			pwErr = msg;
+		} finally {
+			pwBusy = false;
+		}
 	}
 </script>
 
@@ -311,6 +351,9 @@
 
 			{#if gradeSaved}
 				<div class="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">Notlar kaydedildi.</div>
+			{/if}
+			{#if gradeErr}
+				<div class="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">{gradeErr}</div>
 			{/if}
 
 			<div class="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5">
@@ -391,6 +434,9 @@
 						class="w-16 rounded-lg border border-black/10 bg-white px-2 py-1.5 text-sm outline-none dark:border-white/10 dark:bg-white/5" />
 				</div>
 			</div>
+			{#if attendanceErr}
+				<div class="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">{attendanceErr}</div>
+			{/if}
 			<div class="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5">
 				<div class="grid grid-cols-4 bg-slate-50 px-5 py-3 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400">
 					<div class="col-span-2">Öğrenci</div><div>No</div><div>Durum</div>
@@ -465,6 +511,9 @@
 				{#if examSaved}
 					<div class="mb-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">Sınav eklendi.</div>
 				{/if}
+				{#if examErr}
+					<div class="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">{examErr}</div>
+				{/if}
 				<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
 					<label class="block">
 						<div class="mb-1 text-xs font-semibold text-slate-500">Sınav Türü</div>
@@ -524,6 +573,9 @@
 		<!-- ============================================================ -->
 		{:else if apiKey === 'approvals'}
 			<div class="space-y-3">
+				{#if approvalErr}
+					<div class="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">{approvalErr}</div>
+				{/if}
 				{#each approvals as req}
 					<div class="rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5">
 						<div class="flex items-start justify-between gap-4">
@@ -647,10 +699,7 @@
 								annForm = { title: '', content: '', audience_type: 'section', section_id: '', student_no: '' };
 								setTimeout(() => annSaved = false, 4000);
 							} catch (e: unknown) {
-								// Fallback — backend cevap vermezse yine de başarı göster (mock)
-								annSaved = true;
-								annForm = { title: '', content: '', audience_type: 'section', section_id: '', student_no: '' };
-								setTimeout(() => annSaved = false, 4000);
+								annErr = e instanceof Error ? e.message : 'Duyuru gönderilemedi.';
 							} finally { annSaving = false; }
 						}}
 						disabled={annSaving} type="button"
@@ -708,12 +757,6 @@
 			<div class="rounded-xl border border-dashed border-slate-200 bg-slate-50/80 p-8 text-center dark:border-white/10 dark:bg-white/5">
 				<div class="font-semibold text-slate-500">{pageTitle}</div>
 				<p class="mt-1 text-sm text-slate-400">Sayfa bulunamadı.</p>
-			</div>
-		{/if}
-
-		{#if apiKey && !loading && !loadErr}
-			<div class="rounded-lg border border-amber-200/50 bg-amber-50/50 px-3 py-2 text-xs text-amber-600 dark:border-amber-900/30 dark:bg-amber-950/20 dark:text-amber-400">
-				Mock veri — PostgreSQL entegrasyonu tamamlandığında gerçek verilerle değiştirilecek.
 			</div>
 		{/if}
 	</div>

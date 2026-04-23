@@ -1514,6 +1514,33 @@ async def inspect_websocket(request: Request, call_next):
     return await call_next(request)
 
 
+obs_http_log = logging.getLogger("open_webui.obs_http")
+
+
+@app.middleware("http")
+async def log_obs_http_requests(request: Request, call_next):
+    """OBS / akademik uçlar: her istek konsolda kaynak DB ile izlenir (PostgreSQL obs_*)."""
+    path = request.url.path
+    prefixes = (
+        "/api/v1/admin",
+        "/api/v1/student",
+        "/api/v1/academic",
+        "/api/v1/dev/",
+        "/api/v1/terms",
+    )
+    if not any(path.startswith(p) for p in prefixes):
+        return await call_next(request)
+    obs_http_log.info("[OBS-HTTP] --> %s %s", request.method, path)
+    try:
+        response = await call_next(request)
+    except Exception:
+        obs_http_log.exception("[OBS-HTTP] istisna %s %s", request.method, path)
+        raise
+    sc = getattr(response, "status_code", "?")
+    obs_http_log.info("[OBS-HTTP] <-- %s %s status=%s", request.method, path, sc)
+    return response
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ALLOW_ORIGIN,
@@ -1548,7 +1575,7 @@ app.include_router(chats.router, prefix="/api/v1/chats", tags=["chats"])
 app.include_router(notes.router, prefix="/api/v1/notes", tags=["notes"])
 app.include_router(obs.router, prefix="/api/v1/obs", tags=["obs"])
 
-# --- Faz 2 Akademik Çekirdek (Mock — DB yok) ---
+# --- OBS / akademik API (PostgreSQL obs_*; dou_academic_mock yalnızca re-export) ---
 app.include_router(dou_academic_mock.public_router, prefix="/api/v1")
 app.include_router(dou_academic_mock.student_router, prefix="/api/v1/student")
 app.include_router(dou_academic_mock.academic_user_router, prefix="/api/v1/academic")

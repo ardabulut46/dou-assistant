@@ -3,27 +3,13 @@
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import { user } from '$lib/stores';
+	import { obsAreaHome, resolveObsAreaWithDevOverride } from '$lib/obs/obsAccess';
 
-	onMount(() => {
+	onMount(async () => {
 		if (!browser) return;
-
-		// Dev/test: localStorage'da rol override varsa onu kullan
-		const devRole = localStorage.getItem('obsRoleOverride') ?? '';
-		const baseRole = devRole || $user?.role || '';
-
-		if (baseRole === 'Admin' || baseRole === 'admin') {
-			goto('/obs/admin', { replaceState: true });
-		} else if (
-			baseRole === 'Akademisyen' ||
-			baseRole === 'akademisyen' ||
-			baseRole === 'Academician' ||
-			baseRole === 'academician'
-		) {
-			goto('/obs/akademisyen', { replaceState: true });
-		} else {
-			// Öğrenci, user, boş veya bilinmeyen → öğrenci paneline
-			goto('/obs/ogrenci', { replaceState: true });
-		}
+		const token = localStorage.token ?? null;
+		const area = await resolveObsAreaWithDevOverride(token, $user?.role ?? null);
+		goto(obsAreaHome(area), { replaceState: true });
 	});
 </script>
 

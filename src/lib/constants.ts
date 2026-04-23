@@ -1,10 +1,14 @@
-import { browser, dev } from '$app/environment';
+import { browser } from '$app/environment';
 // import { version } from '../../package.json';
 
 export const APP_NAME = 'DouGPT';
 
-export const WEBUI_HOSTNAME = browser ? (dev ? `${location.hostname}:8080` : ``) : '';
-export const WEBUI_BASE_URL = browser ? (dev ? `http://${WEBUI_HOSTNAME}` : ``) : ``;
+/**
+ * Dev: boş string — istekler sayfa köküne (örn. :5173) gider, Vite proxy backend'e yollar (CORS yok).
+ * Prod: genelde API ile aynı host; yine göreli yol.
+ */
+export const WEBUI_HOSTNAME = browser ? location.host : '';
+export const WEBUI_BASE_URL = browser ? '' : '';
 export const WEBUI_API_BASE_URL = `${WEBUI_BASE_URL}/api/v1`;
 
 export const OLLAMA_API_BASE_URL = `${WEBUI_BASE_URL}/ollama`;

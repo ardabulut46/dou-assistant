@@ -327,8 +327,8 @@ else:
 
 DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DATA_DIR}/webui.db")
 
-# Secondary database (OBS data store)
-# If not provided, OBS data will be stored in the primary database.
+# OBS (öğrenci bilgi sistemi) — bos birakilirsa veya DATABASE_URL ile ayni ise obs_* tablolari
+# ana uygulamanin DATABASE_URL baglantisi üzerinden okunur (tek PostgreSQL önerilir).
 OBS_DATABASE_URL = os.environ.get("OBS_DATABASE_URL", "")
 
 DATABASE_TYPE = os.environ.get("DATABASE_TYPE")

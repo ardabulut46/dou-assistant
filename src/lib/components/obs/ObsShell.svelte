@@ -45,10 +45,10 @@
 		{
 			section: 'İLETİŞİM',
 			items: [
-				{ label: 'Gelen Mesajlar',         href: '/obs/ogrenci/mesajlar-gelen',      badge: 2 },
+ 				{ label: 'Gelen Mesajlar',         href: '/obs/ogrenci/mesajlar-gelen' },
 				{ label: 'Gönderilen Mesajlar',    href: '/obs/ogrenci/mesajlar-gonderilen' },
 				{ label: 'Belge Talebi',           href: '/obs/ogrenci/belge-talebi' },
-				{ label: 'Duyurular',              href: '/obs/ogrenci/duyurular',            badge: 1 },
+				{ label: 'Duyurular',              href: '/obs/ogrenci/duyurular' },
 				{ label: 'Şifre Değiştir',         href: '/obs/ogrenci/sifre-degistir' },
 			],
 		},
@@ -71,14 +71,14 @@
 			section: 'DANIŞMANLIK',
 			items: [
 				{ label: 'Öğrencilerim',           href: '/obs/akademisyen/danismanlik-ogrencilerim' },
-				{ label: 'Onay Talepleri',         href: '/obs/akademisyen/onay-talepleri', badge: 3 },
+				{ label: 'Onay Talepleri',         href: '/obs/akademisyen/onay-talepleri' },
 			],
 		},
 		{
 			section: 'İLETİŞİM',
 			items: [
 				{ label: 'Duyuru Oluştur',         href: '/obs/akademisyen/duyuru-olustur' },
-				{ label: 'Gelen Mesajlar',         href: '/obs/akademisyen/mesajlar-gelen', badge: 2 },
+				{ label: 'Gelen Mesajlar',         href: '/obs/akademisyen/mesajlar-gelen' },
 				{ label: 'Gönderilen Mesajlar',    href: '/obs/akademisyen/mesajlar-gonderilen' },
 			],
 		},
@@ -116,7 +116,7 @@
 			items: [
 				{ label: 'Akademik Takvim',        href: '/obs/admin/akademik-takvim' },
 				{ label: 'Kayıt Kuralları',        href: '/obs/admin/kayit-kurallari' },
-				{ label: 'Belge Talebi İşleme',   href: '/obs/admin/belge-talebi-isleme', badge: 2 },
+				{ label: 'Belge Talebi İşleme',   href: '/obs/admin/belge-talebi-isleme' },
 				{ label: 'Duyuru (Global)',        href: '/obs/admin/duyuru-global' },
 				{ label: 'Audit Kayıtları',        href: '/obs/admin/audit-kayitlari' },
 			],
@@ -157,18 +157,12 @@
 	let notifOpen = false;
 	let notifications: Notif[] = [];
 
-	// Sabit başlangıç bildirimleri (role bağımsız)
-	const BASE_NOTIFS: Notif[] = [
-		{ id: 'n3', type: 'attendance', text: 'BLM102 devamsızlık uyarısı: %64', time: '3 sa önce', read: true },
-		{ id: 'n4', type: 'info',       text: 'Ders kayıt dönemi 25 Nisan\'da kapanıyor', time: 'dün', read: true },
-	];
-
 	async function loadNotifications() {
 		if (!browser) return;
 		const token = localStorage.token ?? null;
 		if (!token) return;
 
-		const fresh: Notif[] = [...BASE_NOTIFS];
+		const fresh: Notif[] = [];
 
 		// Gelen kutusu → okunmamış mesajlar bildirim olarak
 		const inboxRes = await getDouInbox(token).catch(() => null);
@@ -187,7 +181,7 @@
 		}
 
 		// Akademisyen ise → bekleyen onay talepleri bildirim olarak
-		if (role === 'akademisyen' || role === 'Akademisyen') {
+		if (role === 'akademisyen') {
 			const aprRes = await getDouAcademicApprovalRequests(token).catch(() => null);
 			if (aprRes?.requests) {
 				const pending = aprRes.requests.filter((r: { status: string }) => r.status === 'pending');
@@ -256,20 +250,6 @@
 		} catch {
 			location.href = '/auth';
 		}
-	}
-
-	// ---------------------------------------------------------------------------
-	// Dev rol değiştirici
-	// ---------------------------------------------------------------------------
-	function switchDevRole(newRole: string) {
-		if (!browser) return;
-		if (newRole) {
-			localStorage.setItem('obsRoleOverride', newRole);
-		} else {
-			localStorage.removeItem('obsRoleOverride');
-		}
-		const dest = roleDashboard[newRole] ?? roleDashboard[role] ?? '/obs/ogrenci';
-		goto(dest);
 	}
 
 	// ---------------------------------------------------------------------------
@@ -344,9 +324,8 @@
 				{/each}
 			</nav>
 
-			<!-- Çıkış + Dev -->
-			<div class="border-t border-white/10 px-4 py-3 space-y-3">
-				<!-- Çıkış yap butonu -->
+			<!-- Çıkış -->
+			<div class="border-t border-white/10 px-4 py-3">
 				<button
 					on:click={doLogout}
 					disabled={loggingOut}
@@ -360,29 +339,6 @@
 					</svg>
 					{loggingOut ? 'Çıkılıyor…' : 'Oturumu Kapat'}
 				</button>
-
-				<!-- DEV rol değiştirici -->
-				<div>
-					<div class="mb-1 text-[10px] font-bold tracking-widest text-slate-600">DEV — ROL</div>
-					<div class="flex gap-1">
-						{#each [['ogrenci','Öğ'],['Akademisyen','Ak'],['Admin','Ad']] as [r, lbl]}
-							<button
-								type="button"
-								on:click={() => switchDevRole(r)}
-								class="flex-1 rounded-md py-1 text-[11px] font-semibold transition-colors
-									{role === r || (r === 'Admin' && role === 'admin') || (r === 'Akademisyen' && role === 'akademisyen')
-										? 'bg-sky-500 text-white'
-										: 'text-slate-500 hover:bg-white/10 hover:text-white'}"
-							>
-								{lbl}
-							</button>
-						{/each}
-					</div>
-					<a href="/obs/dev" class="mt-2 flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium text-slate-500 hover:bg-white/10 hover:text-slate-300 transition-colors">
-						<svg class="size-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
-						Dev Paneli
-					</a>
-				</div>
 			</div>
 		</aside>
 
@@ -428,7 +384,7 @@
 									</div>
 									{#each notifications as n}
 										{@const notifHref = n.type === 'message'
-											? (role === 'akademisyen' || role === 'Akademisyen' ? '/obs/akademisyen/mesajlar-gelen' : '/obs/ogrenci/mesajlar-gelen')
+											? (role === 'akademisyen' ? '/obs/akademisyen/mesajlar-gelen' : '/obs/ogrenci/mesajlar-gelen')
 											: n.type === 'approval'
 											? '/obs/akademisyen/onay-talepleri'
 											: n.type === 'grade'

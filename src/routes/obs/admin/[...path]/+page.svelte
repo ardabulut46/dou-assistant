@@ -2,6 +2,7 @@
 	import { browser } from '$app/environment';
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/stores';
+	import { tick } from 'svelte';
 	import ObsShell from '$lib/components/obs/ObsShell.svelte';
 	import { user } from '$lib/stores';
 	import {
@@ -24,6 +25,10 @@
 	getDouAdminInstructors,
 	getDouAdminSections,
 	createDouAdminSection,
+	getDouAdminCalendarEvents,
+	getDouAdminRegistrationSettings,
+	postDouAdminRegistrationSettings,
+	createDouAdminAnnouncement,
 	type AdminUser,
 	type AdminRole,
 	type AdminInstructor,
@@ -31,6 +36,7 @@
 	type DouTerm,
 	type DouCourse,
 	type DouClassroom,
+	type DouCalendarEvent,
 } from '$lib/apis/douAcademic';
 
 	type PageMeta = { title: string; apiKey: string };
@@ -95,8 +101,41 @@
 
 	let annForm = { title: '', content: '', audience_type: 'all' };
 	let annSaved = false;
+	let annErr: string | null = null;
+	let annPublishing = false;
 	let regRules = { akts_limit_default: 30, akts_limit_high: 36, akts_limit_prep: 25, min_gpa_for_high_akts: 2.50, registration_open: true, add_drop_deadline_days: 14 };
 	let regSaved = false;
+	let regRulesTermId = '';
+	let calendarEvents: DouCalendarEvent[] = [];
+	let calendarTermId = '';
+
+	const CAL_EVENT_STYLES = [
+		'bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200',
+		'bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200',
+		'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200',
+		'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200',
+		'bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-200',
+		'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-200',
+	];
+
+	function fmtCalDate(iso: string) {
+		if (!iso) return '—';
+		const s = iso.length <= 10 ? `${iso}T12:00:00` : iso;
+		const d = new Date(s);
+		return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', year: 'numeric' });
+	}
+
+	function applyRegistrationRow(row: Record<string, unknown>) {
+		if (row.max_akts != null) regRules.akts_limit_default = Number(row.max_akts);
+		if (row.bonus_akts != null) {
+			const base = row.max_akts != null ? Number(row.max_akts) : regRules.akts_limit_default;
+			regRules.akts_limit_high = base + Number(row.bonus_akts);
+		}
+		if (row.gpa_threshold != null) regRules.min_gpa_for_high_akts = Number(row.gpa_threshold);
+		if (row.akts_limit_prep != null) regRules.akts_limit_prep = Number(row.akts_limit_prep);
+		if (row.registration_open != null) regRules.registration_open = Boolean(row.registration_open);
+		if (row.add_drop_deadline_days != null) regRules.add_drop_deadline_days = Number(row.add_drop_deadline_days);
+	}
 
 	// Generic create forms
 	let deptForm   = { code: '', name: '' };
@@ -144,15 +183,30 @@
 				getDouClassrooms(t),
 			]);
 			if (iRes.status === 'fulfilled') instructors = iRes.value as AdminInstructor[];
-			else instructors = [
-				{ id: 'usr-3', email: 'ayse.yilmaz@dou.edu.tr',  full_name: 'Dr. Ayşe Yılmaz',    role: 'Akademisyen' },
-				{ id: 'usr-4', email: 'mehmet.demir@dou.edu.tr', full_name: 'Prof. Mehmet Demir', role: 'Akademisyen' },
-			];
+			else instructors = [];
 			if (sRes.status === 'fulfilled') adminSections = sRes.value as unknown[];
 			if (cRes.status === 'fulfilled') courses = cRes.value;
 			if (tRes.status === 'fulfilled') terms = tRes.value;
 			if (clRes.status === 'fulfilled') classrooms = clRes.value;
 		},
+			calendar:     async (t) => {
+				const tr = await getDouTerms(t);
+				terms = tr;
+				const active = tr.find(x => x.is_active) ?? tr[0];
+				calendarTermId = active?.id ?? '';
+				calendarEvents = calendarTermId ? await getDouAdminCalendarEvents(t, calendarTermId) : [];
+			},
+			'reg-rules':  async (t) => {
+				const tr = await getDouTerms(t);
+				terms = tr;
+				const active = tr.find(x => x.is_active) ?? tr[0];
+				regRulesTermId = active?.id ?? '';
+				const row = await getDouAdminRegistrationSettings(t, regRulesTermId || undefined);
+				if (row && typeof row === 'object' && Object.keys(row as object).length) {
+					applyRegistrationRow(row as Record<string, unknown>);
+				}
+			},
+			announce:     async () => { annErr = null; },
 			'doc-process':(t) => getDouAdminDocumentRequests(t).then(r => { docRequests = (r as unknown as {requests:unknown[]}).requests ?? []; }),
 			audit:        (t) => getDouAdminAuditLogs(t).then(r => { auditLogs = (r as unknown as {logs:unknown[]}).logs ?? []; }),
 		};
@@ -163,18 +217,83 @@
 		} finally { loading = false; }
 	}
 
-	$: if (browser) loadPage(activePath);
-	afterNavigate(() => loadPage(activePath));
+	async function reloadCalendarEvents() {
+		if (!browser) return;
+		const token = localStorage.token ?? null;
+		if (!token || !calendarTermId) return;
+		try {
+			calendarEvents = await getDouAdminCalendarEvents(token, calendarTermId);
+		} catch { /* ignore */ }
+	}
+
+	async function saveRegRules() {
+		regSaved = false;
+		const token = localStorage.token ?? null;
+		if (!token) return;
+		try {
+			const maxAkts = regRules.akts_limit_default;
+			const bonusAkts = Math.max(0, regRules.akts_limit_high - regRules.akts_limit_default);
+			await postDouAdminRegistrationSettings(
+				token,
+				{
+					max_akts: maxAkts,
+					bonus_akts: bonusAkts,
+					gpa_threshold: regRules.min_gpa_for_high_akts,
+					enrollment_deadline: '',
+					add_drop_deadline: String(regRules.add_drop_deadline_days),
+				},
+				regRulesTermId || undefined
+			);
+			regSaved = true;
+			setTimeout(() => { regSaved = false; }, 3500);
+		} catch (e: unknown) {
+			loadErr = e instanceof Error ? e.message : 'Kayıt kuralları kaydedilemedi.';
+		}
+	}
+
+	async function publishAnnounce() {
+		annErr = null;
+		annSaved = false;
+		const token = localStorage.token ?? null;
+		if (!token || !annForm.title.trim() || !annForm.content.trim()) {
+			annErr = 'Başlık ve içerik zorunludur.';
+			return;
+		}
+		annPublishing = true;
+		try {
+			await createDouAdminAnnouncement(token, {
+				title: annForm.title.trim(),
+				content: annForm.content.trim(),
+				audience_type: annForm.audience_type || 'all',
+			});
+			annSaved = true;
+			annForm = { title: '', content: '', audience_type: 'all' };
+			setTimeout(() => { annSaved = false; }, 4000);
+		} catch (e: unknown) {
+			annErr = e instanceof Error ? e.message : 'Duyuru gönderilemedi.';
+		} finally {
+			annPublishing = false;
+		}
+	}
+
+	afterNavigate(async () => {
+		await tick();
+		if (!browser) return;
+		void loadPage(activePath);
+	});
 
 	async function createUser() {
 		userCreating = true;
+		loadErr = null;
 		const token = localStorage.token ?? null;
 		try {
 			const u = await createDouAdminUser(token, { ...newUser });
 			users = [...users, u];
 			showUserModal = false;
 			newUser = { email: '', full_name: '', role: 'Öğrenci', password: '' };
-		} catch { /* mock */ showUserModal = false; } finally { userCreating = false; }
+		} catch (e: unknown) {
+			loadErr = e instanceof Error ? e.message : 'Kullanıcı oluşturulamadı.';
+		} finally { userCreating = false; }
 	}
 
 	async function toggleUserActive(u: AdminUser) {
@@ -191,11 +310,15 @@
 
 	async function saveRolePermissions() {
 		rolesSaving = true;
+		loadErr = null;
 		const token = localStorage.token ?? null;
 		try {
 			await putDouAdminRolePermissions(token, selectedRoleId, rolePermissions);
 			rolesSaved = true;
-		} catch { rolesSaved = true; } finally { rolesSaving = false; }
+		} catch (e: unknown) {
+			rolesSaved = false;
+			loadErr = e instanceof Error ? e.message : 'İzinler kaydedilemedi.';
+		} finally { rolesSaving = false; }
 	}
 
 	async function createSection() {
@@ -236,12 +359,18 @@
 
 	async function completeDoc(id: string) {
 		const token = localStorage.token ?? null;
-		await completeDouDocumentRequest(token, id).catch(() => {});
-		docRequests = (docRequests as {id:string;status:string}[]).map(r => r.id === id ? { ...r, status: 'tamamlandı' } : r);
+		loadErr = null;
+		try {
+			await completeDouDocumentRequest(token, id);
+			docRequests = (docRequests as {id:string;status:string}[]).map(r => r.id === id ? { ...r, status: 'tamamlandı' } : r);
+		} catch (e: unknown) {
+			loadErr = e instanceof Error ? e.message : 'Belge talebi güncellenemedi.';
+		}
 	}
 
 	async function genericCreate(formType: string) {
 		const token = localStorage.token ?? null;
+		loadErr = null;
 		try {
 			if (formType === 'dept')   await createDouDepartment(token, deptForm);
 			if (formType === 'term')   await createDouTerm(token, termForm);
@@ -249,7 +378,10 @@
 			if (formType === 'class')  await createDouClassroom(token, classForm);
 			formSaved[formType] = true;
 			await loadPage(activePath);
-		} catch { formSaved[formType] = true; }
+		} catch (e: unknown) {
+			formSaved[formType] = false;
+			loadErr = e instanceof Error ? e.message : 'Kayıt eklenemedi.';
+		}
 	}
 
 	function selectRole(id: string) {
@@ -760,20 +892,38 @@
 		<!-- ============================================================ -->
 		{:else if apiKey === 'calendar'}
 			<div class="rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5">
-				<div class="mb-4 font-semibold">2025-2026 Bahar Takvimi</div>
-				{#each [
-					['10 Şub 2026', '20 Şub 2026', 'Ders Kayıt', 'sky'],
-					['03 Mar 2026', '07 Mar 2026', 'Ders Ekle/Bırak', 'violet'],
-					['20 Nis 2026', '24 Nis 2026', 'Vize Sınavları', 'amber'],
-					['09 Haz 2026', '20 Haz 2026', 'Final Sınavları', 'emerald'],
-					['25 Haz 2026', '30 Haz 2026', 'Bütünleme Sınavları', 'orange'],
-					['01 Tem 2026', '10 Tem 2026', 'Not Girişi', 'rose'],
-				] as [start, end, label, c]}
-					<div class="flex items-center gap-4 border-t border-black/5 py-3 dark:border-white/10">
-						<div class="w-40 shrink-0 text-xs font-mono text-slate-400">{start} – {end}</div>
-						<span class="rounded-full px-2.5 py-0.5 text-xs font-medium bg-{c}-100 text-{c}-700 dark:bg-{c}-900/40 dark:text-{c}-300">{label}</span>
-					</div>
-				{/each}
+				<div class="mb-4 flex flex-wrap items-center gap-3">
+					<span class="font-semibold">Akademik takvim</span>
+					{#if terms.length}
+						<label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+							<span class="text-xs font-semibold text-slate-500">Dönem</span>
+							<select
+								bind:value={calendarTermId}
+								on:change={reloadCalendarEvents}
+								class="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+							>
+								{#each terms as tm}
+									<option value={tm.id}>{tm.name}{tm.is_active ? ' (Aktif)' : ''}</option>
+								{/each}
+							</select>
+						</label>
+					{/if}
+				</div>
+				{#if !calendarEvents.length}
+					<div class="py-8 text-center text-sm text-slate-400">Bu dönem için takvim kaydı yok. Veriler veritabanındaki obs_calendar_events tablosundan gelir.</div>
+				{:else}
+					{#each calendarEvents as ev, i}
+						<div class="flex flex-wrap items-center gap-4 border-t border-black/5 py-3 dark:border-white/10">
+							<div class="min-w-[10rem] shrink-0 text-xs font-mono text-slate-500 dark:text-slate-400">
+								{fmtCalDate(ev.start_date)} – {fmtCalDate(ev.end_date)}
+							</div>
+							<span class="rounded-full px-2.5 py-0.5 text-xs font-medium {CAL_EVENT_STYLES[i % CAL_EVENT_STYLES.length]}">
+								{ev.title || ev.event_type || 'Etkinlik'}
+							</span>
+							{#if ev.event_type}<span class="text-xs text-slate-400">{ev.event_type}</span>{/if}
+						</div>
+					{/each}
+				{/if}
 			</div>
 
 		<!-- ============================================================ -->
@@ -782,6 +932,29 @@
 		{:else if apiKey === 'reg-rules'}
 			<div class="mx-auto max-w-lg rounded-xl border border-black/10 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-white/5">
 				<div class="mb-5 font-bold">Kayıt Kuralları</div>
+				{#if terms.length}
+					<label class="mb-4 block">
+						<div class="mb-1 text-xs font-semibold text-slate-500">Dönem</div>
+						<select
+							bind:value={regRulesTermId}
+							on:change={async () => {
+								const token = localStorage.token ?? null;
+								if (!token || !regRulesTermId) return;
+								try {
+									const row = await getDouAdminRegistrationSettings(token, regRulesTermId);
+									if (row && typeof row === 'object' && Object.keys(row as object).length) {
+										applyRegistrationRow(row as Record<string, unknown>);
+									}
+								} catch { /* ignore */ }
+							}}
+							class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+						>
+							{#each terms as tm}
+								<option value={tm.id}>{tm.name}{tm.is_active ? ' (Aktif)' : ''}</option>
+							{/each}
+						</select>
+					</label>
+				{/if}
 				{#if regSaved}<div class="mb-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">Kaydedildi.</div>{/if}
 				<div class="space-y-4">
 					{#each [
@@ -801,7 +974,7 @@
 						<input type="checkbox" bind:checked={regRules.registration_open} class="accent-sky-500" />
 						<span class="text-sm font-medium">Ders kaydı açık</span>
 					</label>
-					<button on:click={() => { regSaved = true; setTimeout(() => regSaved = false, 3000); }} type="button"
+					<button on:click={saveRegRules} type="button"
 						class="w-full rounded-lg bg-sky-500 py-2 text-sm font-semibold text-white hover:bg-sky-400 transition-colors">
 						Kaydet
 					</button>
@@ -860,7 +1033,8 @@
 		{:else if apiKey === 'announce'}
 			<div class="mx-auto max-w-lg rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5">
 				<div class="mb-4 font-semibold">Global Duyuru Oluştur</div>
-				{#if annSaved}<div class="mb-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">Duyuru gönderildi.</div>{/if}
+				{#if annSaved}<div class="mb-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">Duyuru veritabanına kaydedildi.</div>{/if}
+				{#if annErr}<div class="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 dark:bg-red-950/40 dark:text-red-400">{annErr}</div>{/if}
 				<div class="space-y-3">
 					<label class="block"><div class="mb-1 text-xs font-semibold text-slate-500">Başlık</div>
 						<input bind:value={annForm.title} class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-400/40 dark:border-white/10 dark:bg-white/5" /></label>
@@ -870,9 +1044,9 @@
 					<div class="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-600 dark:bg-amber-950/20 dark:text-amber-400">
 						Bu duyuru tüm kullanıcılara gönderilecek. Kitle: all
 					</div>
-					<button on:click={() => { annSaved = true; setTimeout(() => { annSaved = false; annForm = { title: '', content: '', audience_type: 'all' }; }, 3000); }} type="button"
-						class="w-full rounded-lg bg-sky-500 py-2 text-sm font-semibold text-white hover:bg-sky-400 transition-colors">
-						Yayınla
+					<button on:click={publishAnnounce} disabled={annPublishing} type="button"
+						class="w-full rounded-lg bg-sky-500 py-2 text-sm font-semibold text-white hover:bg-sky-400 disabled:opacity-50 transition-colors">
+						{annPublishing ? 'Gönderiliyor…' : 'Yayınla'}
 					</button>
 				</div>
 			</div>
@@ -916,12 +1090,6 @@
 			<div class="rounded-xl border border-dashed border-slate-200 bg-slate-50/80 p-8 text-center dark:border-white/10 dark:bg-white/5">
 				<div class="font-semibold text-slate-500">{pageTitle}</div>
 				<p class="mt-1 text-sm text-slate-400">Sayfa bulunamadı.</p>
-			</div>
-		{/if}
-
-		{#if apiKey && !loading && !loadErr}
-			<div class="rounded-lg border border-amber-200/50 bg-amber-50/50 px-3 py-2 text-xs text-amber-600 dark:border-amber-900/30 dark:bg-amber-950/20 dark:text-amber-400">
-				Mock veri — PostgreSQL entegrasyonu tamamlandığında gerçek verilerle değiştirilecek.
 			</div>
 		{/if}
 	</div>

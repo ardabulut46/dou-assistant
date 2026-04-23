@@ -13,6 +13,7 @@
 
 	let stats: Stats | null = null;
 	let loading = true;
+	let statsErr: string | null = null;
 
 	onMount(async () => {
 		if (!browser) return;
@@ -20,7 +21,9 @@
 		if (!token) { loading = false; return; }
 		try {
 			stats = await getDouAdminStats(token) as unknown as Stats;
-		} catch { /* mock hatası sessiz geç */ } finally { loading = false; }
+		} catch (e: unknown) {
+			statsErr = e instanceof Error ? e.message : 'İstatistikler yüklenemedi.';
+		} finally { loading = false; }
 	});
 
 	const modules = [
@@ -43,6 +46,10 @@
 
 <ObsShell activePath="/obs/admin" role="admin" termLabel="2025-2026 Bahar">
 	<span slot="userline">{$user?.name ?? 'Admin'} • Admin Paneli</span>
+
+	{#if statsErr}
+		<div class="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300">{statsErr}</div>
+	{/if}
 
 	<!-- İstatistik kartlar -->
 	<div class="grid grid-cols-2 gap-3 sm:grid-cols-4">

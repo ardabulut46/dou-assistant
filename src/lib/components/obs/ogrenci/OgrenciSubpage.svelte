@@ -1,9 +1,12 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
 	import { afterNavigate } from '$app/navigation';
-	import { page } from '$app/stores';
-	import ObsShell from '$lib/components/obs/ObsShell.svelte';
+	import { tick } from 'svelte';
 	import { user } from '$lib/stores';
+	import type { OgrenciPageMeta, OgrenciPath } from '$lib/obs/ogrenci/paths';
+
+	export let activePath: OgrenciPath;
+	export let meta: OgrenciPageMeta;
 	import {
 		getDouTerms,
 		getDouStudentProfile,
@@ -40,35 +43,8 @@
 		type AvailableCourse,
 	} from '$lib/apis/douAcademic';
 
-	// ---------------------------------------------------------------------------
-	// Sayfa meta haritası
-	// ---------------------------------------------------------------------------
-	type PageMeta = { title: string; apiKey: string };
-	const PAGES: Record<string, PageMeta> = {
-		'/obs/ogrenci/ozluk-bilgileri':      { title: 'Özlük Bilgileri',      apiKey: 'profile'       },
-		'/obs/ogrenci/akademik-takvim':      { title: 'Akademik Takvim',      apiKey: 'terms'         },
-		'/obs/ogrenci/danisman-bilgileri':   { title: 'Danışman Bilgileri',   apiKey: 'advisor'       },
-		'/obs/ogrenci/mufredat':             { title: 'Müfredat Durumu',      apiKey: 'curriculum'    },
-		'/obs/ogrenci/alinan-dersler':       { title: 'Alınan Dersler',       apiKey: 'enrollments'   },
-		'/obs/ogrenci/ders-programi':        { title: 'Ders Programı',        apiKey: 'schedule'      },
-		'/obs/ogrenci/sinav-takvimi':        { title: 'Sınav Takvimi',        apiKey: 'exams'         },
-		'/obs/ogrenci/ders-kayit':           { title: 'Ders Kayıt',           apiKey: 'ders-kayit'    },
-		'/obs/ogrenci/ders-ekle-birak':      { title: 'Ders Ekle / Bırak',   apiKey: 'ders-ekle'     },
-		'/obs/ogrenci/not-listesi':          { title: 'Not Listesi',          apiKey: 'grades'        },
-		'/obs/ogrenci/donem-ortalamalari':   { title: 'Dönem Ortalamaları',   apiKey: 'gpa'           },
-		'/obs/ogrenci/transkript':           { title: 'Transkript',           apiKey: 'transcript'    },
-		'/obs/ogrenci/devamsizlik-durumu':   { title: 'Devamsızlık Durumu',   apiKey: 'attendance'    },
-		'/obs/ogrenci/mesajlar-gelen':       { title: 'Gelen Mesajlar',       apiKey: 'inbox'         },
-		'/obs/ogrenci/mesajlar-gonderilen':  { title: 'Gönderilen Mesajlar',  apiKey: 'sent'          },
-		'/obs/ogrenci/belge-talebi':         { title: 'Belge Talebi',         apiKey: 'doc-request'   },
-		'/obs/ogrenci/duyurular':            { title: 'Duyurular',            apiKey: 'announcements' },
-		'/obs/ogrenci/sifre-degistir':       { title: 'Şifre Değiştir',      apiKey: 'change-pw'     },
-	};
-
-	$: activePath = `/obs/ogrenci/${$page.params.path ?? ''}`;
-	$: meta      = PAGES[activePath] ?? { title: ($page.params.path ?? 'OBS').replace(/-/g,' ').replace(/\b\w/g,(c)=>c.toUpperCase()), apiKey: '' };
-	$: pageTitle = meta.title;
-	$: apiKey    = meta.apiKey;
+	$: pageTitle = meta?.title ?? 'OBS';
+	$: apiKey = meta?.apiKey ?? '';
 
 	// ---------------------------------------------------------------------------
 	// State değişkenleri
@@ -96,6 +72,8 @@
 	let docRequests: DouDocumentRequest[] = [];
 	let availableCourses: AvailableCourse[] = [];
 	let curriculum: { program?: string; overall_progress_pct?: number; categories?: { name: string; courses: { code: string; name: string; akts: number; status: string; grade?: string | null }[] }[] } | null = null;
+	/** Ders kayıt başlığı — API’deki aktif dönem adı */
+	let enrollmentTermLabel = '—';
 
 	// Profil düzenleme
 	let profileEdit   = false;
@@ -146,7 +124,7 @@
 	// ---------------------------------------------------------------------------
 	// Veri yükleme
 	// ---------------------------------------------------------------------------
-	async function loadPage(path: string) {
+	async function loadPage(_path: string) {
 		if (!browser || !apiKey) return;
 		loading = true; loadErr = null;
 		const token = localStorage.token ?? null;
@@ -154,53 +132,51 @@
 
 		try {
 			if (apiKey === 'profile') {
-				profile = await getDouStudentProfile(token);
-				const p = profile as unknown as Record<string, string>;
-				profileForm = {
-					full_name:         profile.full_name ?? profile.email ?? '',
-					phone:             p['phone'] ?? '',
-					address:           p['address'] ?? '',
-					emergency_contact: p['emergency_contact'] ?? '',
-					emergency_phone:   p['emergency_phone'] ?? '',
-				};
+				profile = await getDouStudentProfile(token).catch(() => null);
+				if (profile) {
+					const p = profile as unknown as Record<string, string>;
+					profileForm = {
+						full_name:         profile.full_name ?? profile.email ?? '',
+						phone:             p['phone'] ?? '',
+						address:           p['address'] ?? '',
+						emergency_contact: p['emergency_contact'] ?? '',
+						emergency_phone:   p['emergency_phone'] ?? '',
+					};
+				} else {
+					profileForm = { full_name: '', phone: '', address: '', emergency_contact: '', emergency_phone: '' };
+				}
 			}
-			if (apiKey === 'terms')    terms   = await getDouTerms(token);
-			if (apiKey === 'advisor')  advisor = await getDouStudentAdvisor(token);
+			if (apiKey === 'terms')    terms   = await getDouTerms(token).catch(() => []);
+			if (apiKey === 'advisor')  advisor = await getDouStudentAdvisor(token).catch(() => null);
 			if (apiKey === 'enrollments' || apiKey === 'ders-ekle') {
-				const r = await getDouStudentEnrollments(token);
-				enrollments = r.enrollments;
-				totalAkts   = r.total_akts ?? 0;
+				const r = await getDouStudentEnrollments(token).catch(() => null);
+				enrollments = r?.enrollments ?? [];
+				totalAkts   = r?.total_akts ?? 0;
 			}
 		if (apiKey === 'ders-kayit') {
-			const [enrRes, avRes] = await Promise.allSettled([
+			const [enrRes, avRes, termsRes] = await Promise.allSettled([
 				getDouStudentEnrollments(token),
 				getDouAvailableCourses(token),
+				getDouTerms(token),
 			]);
 			if (enrRes.status === 'fulfilled') {
 				enrollments = enrRes.value.enrollments;
 				totalAkts   = enrRes.value.total_akts ?? 0;
 			} else {
-				// Backend cevap vermezse statik mock
-				enrollments = [
-					{ id: 'enr-1', student_id: '', section_id: 'sec-1', course_code: 'BLM101', course_name: 'Programlamaya Giriş', akts: 6, credits: 4, term_id: 'term-2', day_of_week: 'Pazartesi', start_time: '09:00', instructor_name: 'Dr. Öğr. Üyesi Ayşe Yılmaz', status: 'active' },
-					{ id: 'enr-2', student_id: '', section_id: 'sec-2', course_code: 'BLM102', course_name: 'Veri Yapıları',        akts: 6, credits: 4, term_id: 'term-2', day_of_week: 'Çarşamba',  start_time: '13:00', instructor_name: 'Dr. Öğr. Üyesi Ayşe Yılmaz', status: 'active' },
-					{ id: 'enr-3', student_id: '', section_id: 'sec-3', course_code: 'YBS492', course_name: 'Bitirme Projesi',      akts: 7, credits: 2, term_id: 'term-2', day_of_week: 'Cuma',      start_time: '10:00', instructor_name: 'Doç. Dr. Mehmet Kaya', status: 'active' },
-					{ id: 'enr-4', student_id: '', section_id: 'sec-4', course_code: 'YBS301', course_name: 'Veritabanı YS',        akts: 5, credits: 3, term_id: 'term-2', day_of_week: 'Salı',      start_time: '11:00', instructor_name: 'Doç. Dr. Mehmet Kaya', status: 'active' },
-					{ id: 'enr-5', student_id: '', section_id: 'sec-5', course_code: 'YBS201', course_name: 'Sistem Analizi',       akts: 5, credits: 3, term_id: 'term-2', day_of_week: 'Perşembe',  start_time: '14:00', instructor_name: 'Dr. Öğr. Üyesi Ayşe Yılmaz', status: 'active' },
-				] as typeof enrollments;
-				totalAkts = 29;
+				enrollments = [];
+				totalAkts = 0;
 			}
 			if (avRes.status === 'fulfilled') {
-				availableCourses = avRes.value.sections;
+				availableCourses = avRes.value.sections ?? [];
 			} else {
-				// Açılan dersler fallback
-				availableCourses = [
-					{ id: 'av-1', course_code: 'YBS410', course_name: 'Yazılım Mühendisliği',       akts: 5, instructor_name: 'Prof. Dr. Ali Vural',        day_of_week: 'Salı',    start_time: '13:00', enrolled: 18, capacity: 30, term_id: 'term-2', section_no: 1 },
-					{ id: 'av-2', course_code: 'YBS415', course_name: 'İş Zekâsı ve Veri Ambarı', akts: 5, instructor_name: 'Dr. Öğr. Üyesi Seda Öz',    day_of_week: 'Cuma',    start_time: '09:00', enrolled: 22, capacity: 25, term_id: 'term-2', section_no: 1 },
-					{ id: 'av-3', course_code: 'YBS420', course_name: 'Mobil Uygulama Geliştirme', akts: 5, instructor_name: 'Dr. Öğr. Üyesi Can Aydın',   day_of_week: 'Çarşamba',start_time: '15:00', enrolled:  8, capacity: 20, term_id: 'term-2', section_no: 1 },
-					{ id: 'av-4', course_code: 'MAN301', course_name: 'Stratejik Yönetim',          akts: 4, instructor_name: 'Doç. Dr. Hande Kılıç',       day_of_week: 'Pazartesi',start_time:'15:00', enrolled: 12, capacity: 40, term_id: 'term-2', section_no: 2 },
-					{ id: 'av-5', course_code: 'BLM305', course_name: 'Ağ Teknolojileri',           akts: 4, instructor_name: 'Dr. Öğr. Üyesi Taner Uz',    day_of_week: 'Perşembe',start_time: '11:00', enrolled: 20, capacity: 30, term_id: 'term-2', section_no: 1 },
-				] as typeof availableCourses;
+				availableCourses = [];
+			}
+			if (termsRes.status === 'fulfilled') {
+				const tl = termsRes.value;
+				const at = tl.find((t) => t.is_active) ?? tl[tl.length - 1];
+				enrollmentTermLabel = at?.name ?? '—';
+			} else {
+				enrollmentTermLabel = '—';
 			}
 		}
 		if (apiKey === 'grades') {
@@ -209,17 +185,14 @@
 		}
 		if (apiKey === 'gpa') {
 			const r = await getDouStudentGpaSummary(token).catch(() => null);
-			gpaTerms      = r?.terms ?? [
-				{ term_id:'term-1', term_name:'2025-2026 Güz',   term_gpa: 3.42, akts_completed: 28 },
-				{ term_id:'term-2', term_name:'2025-2026 Bahar', term_gpa: null, akts_completed: 0  },
-			];
-			cumulativeGpa = r?.cumulative_gpa ?? 3.42;
+			gpaTerms      = r?.terms ?? [];
+			cumulativeGpa = r?.cumulative_gpa ?? null;
 		}
 		if (apiKey === 'transcript') {
 			const r = await getDouStudentTranscript(token).catch(() => null);
 			transcript          = r?.transcript ?? [];
-			cumulativeGpa       = r?.cumulative_gpa ?? 3.21;
-			transcriptTotalAkts = (r as { total_akts?: number } | null)?.total_akts ?? 87;
+			cumulativeGpa       = r?.cumulative_gpa ?? null;
+			transcriptTotalAkts = (r as { total_akts?: number } | null)?.total_akts ?? null;
 		}
 		if (apiKey === 'attendance') {
 			const r = await getDouStudentAttendance(token).catch(() => null);
@@ -227,49 +200,31 @@
 		}
 		if (apiKey === 'exams') {
 			const r = await getDouStudentExams(token).catch(() => null);
-			exams = r?.exams ?? [
-				{ id:'ex-1', course_code:'BLM101', course_name:'Programlamaya Giriş',           exam_type:'midterm', exam_date:'2026-04-20', exam_time:'09:00', classroom:'A-101', weight_percent: 40 },
-				{ id:'ex-2', course_code:'BLM102', course_name:'Veri Yapıları',                 exam_type:'midterm', exam_date:'2026-04-21', exam_time:'13:00', classroom:'B-205', weight_percent: 40 },
-				{ id:'ex-3', course_code:'YBS301', course_name:'Veritabanı Yönetim Sistemleri', exam_type:'midterm', exam_date:'2026-04-22', exam_time:'11:00', classroom:'B-205', weight_percent: 40 },
-				{ id:'ex-4', course_code:'YBS201', course_name:'Sistem Analizi ve Tasarım',     exam_type:'midterm', exam_date:'2026-04-23', exam_time:'14:00', classroom:'A-101', weight_percent: 40 },
-				{ id:'ex-5', course_code:'YBS492', course_name:'Bitirme Projesi',               exam_type:'project', exam_date:'2026-04-25', exam_time:'10:00', classroom:'L-01',  weight_percent: 100 },
-				{ id:'ex-6', course_code:'BLM101', course_name:'Programlamaya Giriş',           exam_type:'final',   exam_date:'2026-06-15', exam_time:'09:00', classroom:'A-101', weight_percent: 60 },
-				{ id:'ex-7', course_code:'BLM102', course_name:'Veri Yapıları',                 exam_type:'final',   exam_date:'2026-06-17', exam_time:'13:00', classroom:'B-205', weight_percent: 60 },
-			] as typeof exams;
+			exams = r?.exams ?? [];
 		}
 		if (apiKey === 'schedule') {
 			const r = await getDouStudentSchedule(token).catch(() => null);
-			schedule = r?.schedule ?? [
-				{ day:'Pazartesi', start:'09:00', end:'10:50', course_code:'BLM101', course_name:'Programlamaya Giriş',           classroom:'A-101', instructor:'Dr. Öğr. Üy. Ayşe Yılmaz' },
-				{ day:'Salı',      start:'11:00', end:'12:50', course_code:'YBS301', course_name:'Veritabanı Yönetim Sistemleri', classroom:'B-205', instructor:'Doç. Dr. Mehmet Kaya' },
-				{ day:'Çarşamba',  start:'13:00', end:'14:50', course_code:'BLM102', course_name:'Veri Yapıları',                 classroom:'B-205', instructor:'Dr. Öğr. Üy. Ayşe Yılmaz' },
-				{ day:'Perşembe',  start:'14:00', end:'15:50', course_code:'YBS201', course_name:'Sistem Analizi ve Tasarım',     classroom:'A-101', instructor:'Dr. Öğr. Üy. Ayşe Yılmaz' },
-				{ day:'Cuma',      start:'10:00', end:'11:50', course_code:'YBS492', course_name:'Bitirme Projesi',               classroom:'L-01',  instructor:'Doç. Dr. Mehmet Kaya' },
-			] as typeof schedule;
+			schedule = r?.schedule ?? [];
 		}
 		if (apiKey === 'announcements') {
 			const r = await getDouStudentAnnouncements(token).catch(() => null);
-			announcements = r?.announcements ?? [
-				{ id:'ann-1', title:'Bahar Dönemi Ders Kayıt Tarihleri', content:'Ders kayıt işlemleri 1-15 Şubat tarihleri arasında.', audience_type:'all', published_at:'2026-01-20T09:00:00', is_active: true },
-				{ id:'ann-2', title:'Bitirme Projesi Danışman Atamaları', content:'Danışman atamaları 10 Şubat\'a kadar tamamlanacaktır.', audience_type:'department', published_at:'2026-01-25T10:00:00', is_active: true },
-				{ id:'ann-3', title:'Harç Ödeme Son Tarihi', content:'2025-2026 Bahar dönemi harç ödemelerinin 20 Şubat\'a kadar tamamlanması gerekiyor.', audience_type:'all', published_at:'2026-01-28T08:00:00', is_active: true },
-			] as typeof announcements;
+			announcements = r?.announcements ?? [];
 		}
 			if (apiKey === 'inbox') {
-				const r = await getDouInbox(token);
-				inboxMsgs = r.messages;
+				const r = await getDouInbox(token).catch(() => null);
+				inboxMsgs = r?.messages ?? [];
 			}
 			if (apiKey === 'sent') {
-				const r = await getDouSent(token);
-				sentMsgs = r.messages;
+				const r = await getDouSent(token).catch(() => null);
+				sentMsgs = r?.messages ?? [];
 			}
 		if (apiKey === 'doc-request') {
-			const r = await getDouStudentDocumentRequests(token);
-			docRequests = r.requests;
+			const r = await getDouStudentDocumentRequests(token).catch(() => null);
+			docRequests = r?.requests ?? [];
 		}
 		if (apiKey === 'curriculum') {
-			const r = await getDouCurriculumStatus(token);
-			curriculum = r as typeof curriculum;
+			const r = await getDouCurriculumStatus(token).catch(() => null);
+			curriculum = (r as typeof curriculum) ?? null;
 		}
 	} catch (e: unknown) {
 			loadErr = e instanceof Error ? e.message : 'API hatası.';
@@ -278,8 +233,12 @@
 		}
 	}
 
-	$: if (browser) loadPage(activePath);
-	afterNavigate(() => loadPage(activePath));
+	// Svelte 5: $: loadPage(...) + apiKey bağımlılığı döngü / kilitlenmeye yol açabiliyor; sadece navigasyon sonrası yükle.
+	afterNavigate(async () => {
+		await tick();
+		if (!browser) return;
+		void loadPage(activePath);
+	});
 
 	// ---------------------------------------------------------------------------
 	// Aksiyonlar
@@ -323,23 +282,20 @@
 		enrollSubmitting = true; enrollSuccess = null; enrollError = null;
 		const token = localStorage.token ?? null;
 		try {
-			// 1) Kayıt isteği gönder (hata olursa yine devam et — mock ortam)
-			const reqResult = await createDouEnrollmentRequest(token, cart.map(c => c.id)).catch(() => null);
-
-			// 2) Danışmana bildirim mesajı gönder
+			await createDouEnrollmentRequest(token, cart.map(c => c.id));
 			const dersListesi = cart.map(c => `• ${c.course_code} — ${c.course_name} (${c.akts} AKTS)`).join('\n');
 			await sendDouMessageApi(token, {
 				receiver_name: 'Danışmanım',
 				receiver_type: 'akademisyen',
 				subject: 'Ders Kayıt Kesinleştirme Talebi',
 				body: `Sayın Danışmanım,\n\nAşağıdaki dersler için kayıt kesinleştirme talebinde bulunuyorum:\n\n${dersListesi}\n\nToplamda ${cartAkts} AKTS. Onayınızı bekliyorum.\n\nSaygılarımla`,
-			}).catch(() => null); // mesaj hatası kayıt işlemini engellemesin
-
+			}).catch(() => {
+				/* mesaj isteğe bağlı; kayıt talebi zaten oluştu */
+			});
 			const courseNames = cart.map(c => c.course_code).join(', ');
-			enrollSuccess = reqResult
-				? `${cart.length} ders (${courseNames}) için kayıt isteği danışmanınıza iletildi. Onay bekleniyor.`
-				: `${cart.length} ders (${courseNames}) seçildi. Danışmanınıza bildirim gönderildi.`;
+			enrollSuccess = `${cart.length} ders (${courseNames}) için kayıt isteği oluşturuldu; danışmanınıza bilgi iletildi.`;
 			cart = [];
+			await loadPage(activePath);
 		} catch (e: unknown) {
 			enrollError = e instanceof Error ? e.message : 'İstek gönderilemedi.';
 		} finally { enrollSubmitting = false; }
@@ -431,10 +387,8 @@
 
 <svelte:head><title>OBS — {pageTitle}</title></svelte:head>
 
-<ObsShell {activePath} role="ogrenci">
-	<span slot="userline">{$user?.name ?? 'Öğrenci'} • {pageTitle}</span>
-
-	<div class="space-y-4">
+<div class="relative">
+<div class="space-y-4">
 
 		<!-- ——— Başlık ——— -->
 		<div class="flex items-center justify-between rounded-xl border border-black/10 bg-white px-5 py-3.5 shadow-sm dark:border-white/10 dark:bg-white/5">
@@ -595,6 +549,12 @@
 			</div>
 		{/if}
 
+		{:else if apiKey === 'profile'}
+			<div class="rounded-xl border border-black/10 bg-white px-5 py-10 text-center text-sm text-slate-500 shadow-sm dark:border-white/10 dark:bg-white/5 dark:text-slate-400">
+				<p class="font-medium text-slate-700 dark:text-slate-200">Öğrenci profili bulunamadı</p>
+				<p class="mt-2 text-xs">Kayıt <code class="rounded bg-slate-100 px-1 dark:bg-white/10">obs_student_profiles</code> tablosunda yoksa yönetimden profil oluşturulmalıdır.</p>
+			</div>
+
 		<!-- ================================================================ -->
 		<!-- AKADEMİK TAKVİM                                                  -->
 		<!-- ================================================================ -->
@@ -650,6 +610,11 @@
 				</div>
 			</div>
 
+		{:else if apiKey === 'advisor' && advisor && !advisor.advisor}
+			<div class="rounded-xl border border-dashed border-slate-200 bg-slate-50/80 p-8 text-center text-sm text-slate-500 dark:border-white/10 dark:bg-white/5 dark:text-slate-400">
+				Kayıtlı danışman bilgisi bulunamadı.
+			</div>
+
 		<!-- ================================================================ -->
 		<!-- ALINAN DERSLER                                                    -->
 		<!-- ================================================================ -->
@@ -700,7 +665,7 @@
 			<!-- AKTS sayacı -->
 			<div class="rounded-xl border border-sky-200 bg-sky-50 px-5 py-4 dark:border-sky-900/40 dark:bg-sky-950/20">
 				<div class="flex items-center justify-between text-sm">
-					<span class="font-semibold">2025-2026 Bahar — AKTS Durumu</span>
+					<span class="font-semibold">{enrollmentTermLabel} — AKTS Durumu</span>
 					<span class="font-bold text-sky-700 dark:text-sky-300">{totalAkts + cartAkts} / {AKTS_LIMIT}</span>
 				</div>
 				<div class="mt-2 h-2 w-full overflow-hidden rounded-full bg-sky-100 dark:bg-sky-900/40">
@@ -1097,7 +1062,7 @@
 	<!-- MÜFREDAT DURUMU                                                   -->
 	<!-- ================================================================ -->
 	{:else if apiKey === 'curriculum'}
-		{#if curriculum}
+		{#if curriculum && (curriculum.categories?.length ?? 0) > 0}
 		<div class="max-h-[calc(100vh-12rem)] overflow-y-auto pr-1 space-y-4">
 			<!-- Genel ilerleme -->
 			<div class="mb-4 overflow-hidden rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5">
@@ -1114,6 +1079,10 @@
 				<div class="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-white/10">
 					<div class="h-full rounded-full bg-sky-500 transition-all" style="width:{curriculum.overall_progress_pct ?? 0}%"></div>
 				</div>
+				<p class="mt-3 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+					Bu liste yalnızca <strong class="font-semibold text-slate-600 dark:text-slate-300">obs_course_enrollments</strong> tablosundaki şube kayıtlarınızdan üretilir.
+					Tam diploma müfredatı (alınmamış tüm zorunlu/seçmeli dersler) ayrı bir program tablosu olmadan gösterilmez; gördüğünüz her satır için veritabanında kayıt vardır.
+				</p>
 			</div>
 
 			<!-- Kategoriler -->
@@ -1157,7 +1126,9 @@
 			{/each}
 		</div>
 		{:else}
-			<div class="rounded-xl border border-black/10 bg-white p-8 text-center text-sm text-slate-400 dark:border-white/10 dark:bg-white/5">Müfredat verisi yüklenemedi.</div>
+			<div class="rounded-xl border border-black/10 bg-white p-8 text-center text-sm text-slate-500 dark:border-white/10 dark:bg-white/5 dark:text-slate-400">
+				Müfredat listesi için veritabanında kayıtlı ders bulunamadı. Kayıtlı dersleriniz ve notlarınız eklendikçe burada gruplanır.
+			</div>
 		{/if}
 
 	<!-- ================================================================ -->
@@ -1404,13 +1375,6 @@
 				<p class="mt-1 text-sm text-slate-400">Bu sayfa yüklenemedi veya desteklenmiyor.</p>
 			</div>
 		{/if}
-
-		<!-- Mock badge -->
-		{#if apiKey && !loading && !loadErr}
-			<div class="rounded-lg border border-amber-200/50 bg-amber-50/50 px-3 py-2 text-[11px] text-amber-600 dark:border-amber-900/30 dark:bg-amber-950/20 dark:text-amber-400">
-				Mock veri — PostgreSQL entegrasyonu tamamlandığında gerçek verilerle değiştirilecek.
-			</div>
-		{/if}
 	</div>
 
 	<!-- Floating compose button (mesajlar sayfasında değilken) -->
@@ -1465,4 +1429,4 @@
 			</div>
 		</div>
 	{/if}
-</ObsShell>
+</div>

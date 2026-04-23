@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
 	import { onMount } from 'svelte';
-	import ObsShell from '$lib/components/obs/ObsShell.svelte';
 	import { user } from '$lib/stores';
 	import {
 		getDouStudentProfile,
@@ -52,9 +51,7 @@
 
 <svelte:head><title>OBS — Öğrenci Paneli</title></svelte:head>
 
-<ObsShell activePath="/obs/ogrenci" role="ogrenci" termLabel={activeTerm?.name ?? '2025-2026 Bahar'}>
-	<span slot="userline">{$user?.name ?? 'Öğrenci'} • Öğrenci Paneli</span>
-
+<div class="space-y-4">
 	<!-- Durum bandı -->
 	{#if !loading && profile}
 		<div class="mb-5 flex items-center gap-3 rounded-xl border px-5 py-3 text-sm
@@ -111,9 +108,4 @@
 		</div>
 	</div>
 
-	{#if profile?._mock}
-		<div class="mt-5 rounded-lg border border-amber-200/60 bg-amber-50/60 px-3 py-2 text-xs text-amber-600 dark:border-amber-900/30 dark:bg-amber-950/20 dark:text-amber-400">
-			Mock veri — PostgreSQL migration'ları tamamlandığında gerçek verilerle değiştirilecek.
-		</div>
-	{/if}
-</ObsShell>
+</div>

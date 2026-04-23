@@ -2,11 +2,13 @@
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
-	import { devSeedUsers, devGetObsRole, type DevAccount } from '$lib/apis/douAcademic';
+	import { devSeedUsers, devGetObsRole, devClearMyStudentEnrollments, type DevAccount } from '$lib/apis/douAcademic';
 
 	let accounts: DevAccount[] = [];
 	let loading  = true;
 	let seeding  = false;
+	let clearing = false;
+	let clearMsg: string | null = null;
 	let err: string | null = null;
 	let currentRole = '';
 	let currentEmail = '';
@@ -64,6 +66,22 @@
 			err = e instanceof Error ? e.message : 'Seed hatası.';
 		} finally { seeding = false; }
 	}
+
+	async function clearMyEnrollments() {
+		if (!browser || !confirm('Oturumdaki öğrenci hesabının TÜM ders kayıtları, notları ve yoklamaları silinsin mi?')) return;
+		clearing = true; err = null; clearMsg = null;
+		const token = localStorage.token ?? null;
+		try {
+			const r = await devClearMyStudentEnrollments(token);
+			clearMsg = r.deleted_enrollments
+				? `${r.deleted_enrollments} kayıt silindi. Alınan dersler / sınav takvimi sayfalarını yenileyin.`
+				: (r.detail ?? 'Silinecek kayıt yok.');
+		} catch (e: unknown) {
+			err = e instanceof Error ? e.message : 'Temizleme hatası.';
+		} finally {
+			clearing = false;
+		}
+	}
 </script>
 
 <svelte:head><title>OBS — Dev Giriş Paneli</title></svelte:head>
@@ -91,6 +109,27 @@
 			{err}
 		</div>
 	{/if}
+	{#if clearMsg}
+		<div class="w-full max-w-md rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">
+			{clearMsg}
+		</div>
+	{/if}
+
+	<!-- Demo ders kayıtlarını DB'den sil (BLM101 vb. PostgreSQL'den gelir) -->
+	<div class="w-full max-w-md rounded-2xl border border-amber-200 bg-amber-50/80 p-4 dark:border-amber-900/50 dark:bg-amber-950/20">
+		<div class="text-sm font-bold text-amber-900 dark:text-amber-200">Öğrenci — demo ders kayıtlarını temizle</div>
+		<p class="mt-1 text-xs text-amber-800/90 dark:text-amber-300/90">
+			Alınan dersler, sınav takvimi ve ders ekle/bırak listesi veritabanındaki kayıtlardan gelir. Yerel mock yoktur; temizlemek için:
+		</p>
+		<button
+			type="button"
+			disabled={clearing}
+			on:click={clearMyEnrollments}
+			class="mt-3 w-full rounded-xl bg-amber-600 py-2.5 text-sm font-bold text-white transition hover:bg-amber-500 disabled:opacity-50"
+		>
+			{clearing ? 'Siliniyor…' : 'Bu hesabın tüm ders kayıtlarını sil (DEV)'}
+		</button>
+	</div>
 
 	<!-- Rol geçiş kartları -->
 	<div class="grid w-full max-w-md grid-cols-1 gap-3 sm:grid-cols-3">
