@@ -11,21 +11,31 @@
 		getDouSectionStudents,
 		getDouSectionGrades,
 		putDouSectionGrades,
+		deleteDouSectionGrade,
 		finalizeDouSectionGrades,
 		getDouSectionExams,
 		createDouSectionExam,
+		updateDouSectionExam,
+		deleteDouSectionExam,
 		putDouSectionAttendance,
 		getDouAcademicAdvisees,
 		getDouAcademicApprovalRequests,
 		resolveDouApprovalRequest,
+		getDouAdviseeEnrollments,
+		finalizeDouAdviseeSchedule,
+		rejectDouAdviseeSchedule,
 		getDouTerms,
 		getDouInbox,
 		getDouSent,
 		createDouAcademicAnnouncement,
+		getDouAcademicAnnouncements,
+		updateDouAcademicAnnouncement,
+		deleteDouAcademicAnnouncement,
 		type AcademicAnnouncementBody,
 		type DouSection,
+		type DouAnnouncement,
 		type DouApprovalRequest,
-		type DouTerm,
+		type DouEnrollment,
 		type AcademicGradeRow,
 		type AcademicStudent,
 		type AcademicExam,
@@ -50,7 +60,8 @@
 		'/obs/akademisyen/sifre-degistir': { title: 'Şifre Değiştir', apiKey: 'change-pw' }
 	};
 
-	$: activePath = `/obs/akademisyen/${$page.params.path ?? ''}`;
+	$: activePath =
+		($page.url.pathname || '/obs/akademisyen').replace(/\/+$/, '') || '/obs/akademisyen';
 	$: meta = PAGES[activePath] ?? {
 		title: ($page.params.path ?? '').replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
 		apiKey: ''
@@ -66,13 +77,18 @@
 	let selectedSection = '';
 	let sectionStudents: AcademicStudent[] = [];
 	let gradeRows: AcademicGradeRow[] = [];
-	let gradeEdits: Record<string, { midterm?: number; final?: number }> = {};
+	let gradeEdits: Record<string, { midterm?: number; final?: number; letter_grade?: string }> = {};
+	let gradeDeletingId: string | null = null;
 	let gradeSaving = false;
 	let gradeSaved = false;
 	let exams: AcademicExam[] = [];
 	let advisees: unknown[] = [];
+	let adviseeDetailUserId: string | null = null;
+	let adviseeEnrollments: DouEnrollment[] = [];
+	let adviseeSchedBusy = false;
+	let adviseeSchedErr: string | null = null;
+	let activeTermId = '';
 	let approvals: DouApprovalRequest[] = [];
-	let terms: DouTerm[] = [];
 	let inboxMsgs: DouMessage[] = [];
 	let sentMsgs: DouMessage[] = [];
 	let weekNo = 1;
@@ -88,6 +104,17 @@
 	};
 	let examSaving = false;
 	let examSaved = false;
+	/** Düzenlenen sınav id; boşsa düzenleme yok */
+	let editingExamId = '';
+	let examEditForm = {
+		exam_type: 'midterm',
+		exam_date: '',
+		exam_time: '09:00',
+		classroom: '',
+		weight_percent: 40
+	};
+	let examEditSaving = false;
+	let deletingExamId = '';
 
 	// announce form
 	let annForm = {
@@ -100,6 +127,9 @@
 	let annSaving = false;
 	let annSaved = false;
 	let annErr: string | null = null;
+	let myAnnouncements: DouAnnouncement[] = [];
+	let editingAnnId = '';
+	let annIsActive = true;
 
 	let pwForm = { current_password: '', new_password: '', confirm_password: '' };
 	let pwErr: string | null = null;
@@ -111,7 +141,7 @@
 	let examErr: string | null = null;
 	let approvalErr: string | null = null;
 
-	async function loadPage(path: string) {
+	async function loadPage() {
 		if (!browser || !apiKey) return;
 		loading = true;
 		loadErr = null;
@@ -146,7 +176,8 @@
 				gradeRows.forEach((row) => {
 					gradeEdits[row.enrollment_id] = {
 						midterm: row.midterm ?? undefined,
-						final: row.final ?? undefined
+						final: row.final ?? undefined,
+						letter_grade: row.letter_grade?.trim() ?? ''
 					};
 				});
 			}
@@ -163,6 +194,7 @@
 				});
 			}
 			if (apiKey === 'exam-define' && selectedSection) {
+				editingExamId = '';
 				const r = await Promise.allSettled([getDouSectionExams(token, selectedSection)]);
 				if (r[0].status === 'fulfilled') {
 					exams = r[0].value.exams ?? [];
@@ -171,13 +203,29 @@
 				}
 			}
 			if (apiKey === 'advisees') {
-				const r = await Promise.allSettled([getDouAcademicAdvisees(token)]);
+				const r = await Promise.allSettled([
+					getDouAcademicAdvisees(token),
+					getDouTerms(token)
+				]);
 				if (r[0].status === 'fulfilled') advisees = r[0].value.advisees ?? [];
 				else advisees = [];
+				if (r[1].status === 'fulfilled') {
+					const tl = r[1].value;
+					activeTermId = tl.find((t) => t.is_active)?.id ?? tl[tl.length - 1]?.id ?? '';
+				} else {
+					activeTermId = '';
+				}
+				adviseeDetailUserId = null;
+				adviseeEnrollments = [];
 			}
 			if (apiKey === 'approvals') {
 				const r = await Promise.allSettled([getDouAcademicApprovalRequests(token)]);
 				if (r[0].status === 'fulfilled') approvals = r[0].value.requests ?? [];
+			}
+			if (apiKey === 'announce') {
+				const r = await Promise.allSettled([getDouAcademicAnnouncements(token)]);
+				if (r[0].status === 'fulfilled') myAnnouncements = r[0].value.announcements ?? [];
+				else myAnnouncements = [];
 			}
 			if (apiKey === 'inbox') {
 				const r = await Promise.allSettled([getDouInbox(token)]);
@@ -194,11 +242,79 @@
 		}
 	}
 
+	function adviseeGpaTextClass(gpa: number): string {
+		return gpa >= 2.0
+			? 'text-emerald-600 dark:text-emerald-400'
+			: 'text-red-600 dark:text-red-400';
+	}
+
+	function cancelEditAnn() {
+		editingAnnId = '';
+		annIsActive = true;
+		annForm = {
+			title: '',
+			content: '',
+			audience_type: 'section',
+			section_id: '',
+			student_no: ''
+		};
+	}
+
+	function startEditAnn(a: DouAnnouncement) {
+		annErr = null;
+		editingAnnId = a.id;
+		const at = (a.audience_type || 'section') as typeof annForm.audience_type;
+		annForm = {
+			title: a.title,
+			content: a.content,
+			audience_type: at,
+			section_id: a.course_section_id ?? '',
+			student_no: ''
+		};
+		annIsActive = a.is_active !== false;
+	}
+
+	async function removeAnn(id: string) {
+		if (!browser || !confirm('Bu duyuruyu silmek istediğinize emin misiniz?')) return;
+		const token = localStorage.token ?? null;
+		annErr = null;
+		try {
+			await deleteDouAcademicAnnouncement(token, id);
+			myAnnouncements = myAnnouncements.filter((x) => x.id !== id);
+			if (editingAnnId === id) cancelEditAnn();
+		} catch (e: unknown) {
+			annErr = e instanceof Error ? e.message : 'Silinemedi.';
+		}
+	}
+
 	afterNavigate(async () => {
 		await tick();
 		if (!browser) return;
-		void loadPage(activePath);
+		void loadPage();
 	});
+
+	const LETTER_GRADE_OPTIONS = [
+		'',
+		'AA',
+		'BA',
+		'BB',
+		'CB',
+		'CC',
+		'DC',
+		'DD',
+		'FD',
+		'FF',
+		'DZ',
+		'GR',
+		'İ',
+		'S'
+	];
+
+	/** Svelte {#if} içinde `!==` vb. ifadeler bazı sürümlerde `>` ile ayrıştırma hatası verebiliyor */
+	function needsCustomLetterOption(enrollmentId: string): boolean {
+		const lg = (gradeEdits[enrollmentId]?.letter_grade ?? '').trim();
+		return lg.length > 0 && !LETTER_GRADE_OPTIONS.includes(lg);
+	}
 
 	async function saveGrades() {
 		gradeSaving = true;
@@ -207,7 +323,9 @@
 		try {
 			const grades = Object.entries(gradeEdits).map(([enrollment_id, g]) => ({
 				enrollment_id,
-				...g
+				midterm: g.midterm,
+				final: g.final,
+				letter_grade: (g.letter_grade ?? '').trim()
 			}));
 			await putDouSectionGrades(token, selectedSection, grades);
 			gradeSaved = true;
@@ -221,6 +339,22 @@
 		}
 	}
 
+	async function removeStudentGrade(enrollmentId: string) {
+		if (!browser || !confirm('Bu öğrencinin not kaydını (vize/final/harf) silmek istiyor musunuz?')) return;
+		const token = localStorage.token ?? null;
+		if (!token || !selectedSection) return;
+		gradeErr = null;
+		gradeDeletingId = enrollmentId;
+		try {
+			await deleteDouSectionGrade(token, selectedSection, enrollmentId);
+			await loadPage();
+		} catch (e: unknown) {
+			gradeErr = e instanceof Error ? e.message : 'Not silinemedi.';
+		} finally {
+			gradeDeletingId = null;
+		}
+	}
+
 	async function finalizeGrades() {
 		const token = localStorage.token ?? null;
 		gradeErr = null;
@@ -230,7 +364,7 @@
 			setTimeout(() => {
 				gradeSaved = false;
 			}, 3500);
-			await loadPage(activePath);
+			await loadPage();
 		} catch (e: unknown) {
 			gradeErr = e instanceof Error ? e.message : 'Notlar kesinleştirilemedi.';
 		}
@@ -275,6 +409,71 @@
 		}
 	}
 
+	function examTimeForInput(t: string): string {
+		if (!t) return '09:00';
+		const s = String(t).trim();
+		if (s.length >= 8 && s[2] === ':' && s[5] === ':') return s.slice(0, 5);
+		if (s.length >= 5 && s[2] === ':') return s.slice(0, 5);
+		return '09:00';
+	}
+
+	function openExamEdit(ex: AcademicExam) {
+		examErr = null;
+		editingExamId = ex.id;
+		examEditForm = {
+			exam_type: ex.exam_type,
+			exam_date: (ex.exam_date || '').slice(0, 10),
+			exam_time: examTimeForInput(ex.exam_time || ''),
+			classroom: ex.classroom ?? '',
+			weight_percent: ex.weight_percent
+		};
+	}
+
+	function cancelExamEdit() {
+		editingExamId = '';
+		examErr = null;
+	}
+
+	async function saveExamEdit() {
+		if (!editingExamId || !selectedSection) return;
+		const token = localStorage.token ?? null;
+		examEditSaving = true;
+		examErr = null;
+		try {
+			const updated = await updateDouSectionExam(token, selectedSection, editingExamId, {
+				exam_type: examEditForm.exam_type,
+				exam_date: examEditForm.exam_date,
+				exam_time: examEditForm.exam_time,
+				classroom: examEditForm.classroom || null,
+				weight_percent: examEditForm.weight_percent
+			});
+			exams = exams.map((e) => (e.id === updated.id ? updated : e));
+			editingExamId = '';
+		} catch (e: unknown) {
+			examErr = e instanceof Error ? e.message : 'Sınav güncellenemedi.';
+		} finally {
+			examEditSaving = false;
+		}
+	}
+
+	async function removeExam(ex: AcademicExam) {
+		if (!browser) return;
+		if (!confirm(`Bu sınavı silmek istediğinize emin misiniz? (${ex.exam_date} ${ex.exam_time})`))
+			return;
+		const token = localStorage.token ?? null;
+		deletingExamId = ex.id;
+		examErr = null;
+		try {
+			await deleteDouSectionExam(token, selectedSection, ex.id);
+			exams = exams.filter((e) => e.id !== ex.id);
+			if (editingExamId === ex.id) editingExamId = '';
+		} catch (e: unknown) {
+			examErr = e instanceof Error ? e.message : 'Sınav silinemedi.';
+		} finally {
+			deletingExamId = '';
+		}
+	}
+
 	async function resolveApproval(id: string, action: 'approve' | 'reject') {
 		const token = localStorage.token ?? null;
 		approvalErr = null;
@@ -285,6 +484,57 @@
 			);
 		} catch (e: unknown) {
 			approvalErr = e instanceof Error ? e.message : 'İşlem yapılamadı.';
+		}
+	}
+
+	async function loadAdviseeEnrollments(studentUserId: string) {
+		adviseeDetailUserId = studentUserId;
+		adviseeSchedErr = null;
+		const token = localStorage.token ?? null;
+		if (!token || !activeTermId) {
+			adviseeEnrollments = [];
+			adviseeSchedErr = !activeTermId ? 'Aktif dönem yok.' : 'Oturum yok.';
+			return;
+		}
+		adviseeSchedBusy = true;
+		try {
+			const r = await getDouAdviseeEnrollments(token, studentUserId, activeTermId);
+			adviseeEnrollments = r.enrollments ?? [];
+		} catch (e: unknown) {
+			adviseeSchedErr = e instanceof Error ? e.message : 'Yüklenemedi.';
+			adviseeEnrollments = [];
+		} finally {
+			adviseeSchedBusy = false;
+		}
+	}
+
+	async function runFinalizeSched(studentUserId: string) {
+		const token = localStorage.token ?? null;
+		adviseeSchedErr = null;
+		if (!token || !activeTermId) return;
+		adviseeSchedBusy = true;
+		try {
+			await finalizeDouAdviseeSchedule(token, studentUserId, activeTermId);
+			await loadAdviseeEnrollments(studentUserId);
+		} catch (e: unknown) {
+			adviseeSchedErr = e instanceof Error ? e.message : 'Kesinleştirilemedi.';
+		} finally {
+			adviseeSchedBusy = false;
+		}
+	}
+
+	async function runRejectSched(studentUserId: string) {
+		const token = localStorage.token ?? null;
+		adviseeSchedErr = null;
+		if (!token || !activeTermId) return;
+		adviseeSchedBusy = true;
+		try {
+			await rejectDouAdviseeSchedule(token, studentUserId, activeTermId);
+			await loadAdviseeEnrollments(studentUserId);
+		} catch (e: unknown) {
+			adviseeSchedErr = e instanceof Error ? e.message : 'İşlem yapılamadı.';
+		} finally {
+			adviseeSchedBusy = false;
 		}
 	}
 
@@ -401,10 +651,10 @@
 			<!-- ============================================================ -->
 		{:else if apiKey === 'grades-entry'}
 			<div class="flex items-center gap-3">
-				<label class="text-xs font-semibold text-slate-500">Şube:</label>
+				<span class="text-xs font-semibold text-slate-500">Şube:</span>
 				<select
 					bind:value={selectedSection}
-					on:change={() => loadPage(activePath)}
+					on:change={() => loadPage()}
 					class="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm outline-none dark:border-white/10 dark:bg-white/5"
 				>
 					{#each sections as s}
@@ -441,8 +691,9 @@
 								<th class="px-4 py-3 text-left">No</th>
 								<th class="px-4 py-3 text-center w-28">Vize</th>
 								<th class="px-4 py-3 text-center w-28">Final</th>
-								<th class="px-4 py-3 text-center">Harf</th>
+								<th class="px-4 py-3 text-center min-w-[7rem]">Harf</th>
 								<th class="px-4 py-3 text-center">Durum</th>
+								<th class="px-4 py-3 text-center w-24">İşlem</th>
 							</tr>
 						</thead>
 						<tbody>
@@ -471,26 +722,56 @@
 										/>
 									</td>
 									<td class="px-4 py-2.5 text-center">
-										{#if g.letter_grade}
+										{#if g.is_finalized}
 											<span
 												class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
-												>{g.letter_grade}</span
 											>
+												{g.letter_grade ?? '—'}
+											</span>
+										{:else}
+											<select
+												bind:value={gradeEdits[g.enrollment_id].letter_grade}
+												class="w-full max-w-[7.5rem] rounded-lg border border-black/10 bg-white px-2 py-1 text-center text-xs outline-none focus:ring-2 focus:ring-sky-400/40 dark:border-white/10 dark:bg-white/5"
+											>
+												{#each LETTER_GRADE_OPTIONS as lg}
+													<option value={lg}>{lg === '' ? '—' : lg}</option>
+												{/each}
+												{#if needsCustomLetterOption(g.enrollment_id)}
+													<option value={gradeEdits[g.enrollment_id].letter_grade}>
+														{gradeEdits[g.enrollment_id].letter_grade}
+													</option>
+												{/if}
+											</select>
+										{/if}
+									</td>
+									<td class="px-4 py-2.5 text-center text-xs">
+										{#if g.is_finalized}
+											<span class="text-emerald-600">Kesinleşti</span>
+										{:else}
+											<span class="text-amber-500">Taslak</span>
+										{/if}
+									</td>
+									<td class="px-4 py-2.5 text-center">
+										{#if !g.is_finalized}
+											<button
+												type="button"
+												disabled={gradeDeletingId === g.enrollment_id}
+												on:click={() => removeStudentGrade(g.enrollment_id)}
+												class="text-xs font-semibold text-red-600 hover:underline disabled:opacity-50 dark:text-red-400"
+											>
+												{gradeDeletingId === g.enrollment_id ? '…' : 'Notu sil'}
+											</button>
 										{:else}
 											<span class="text-slate-300">—</span>
 										{/if}
 									</td>
-									<td class="px-4 py-2.5 text-center text-xs">
-										{#if g.is_finalized}<span class="text-emerald-600">Kesinleşti</span>
-										{:else}<span class="text-amber-500">Taslak</span>{/if}
-									</td>
 								</tr>
 							{:else}
-								<tr
-									><td colspan="6" class="px-4 py-8 text-center text-sm text-slate-400"
-										>Öğrenci bulunamadı.</td
-									></tr
-								>
+								<tr>
+									<td colspan="7" class="px-4 py-8 text-center text-sm text-slate-400">
+										Öğrenci bulunamadı.
+									</td>
+								</tr>
 							{/each}
 						</tbody>
 					</table>
@@ -520,10 +801,10 @@
 		{:else if apiKey === 'attendance-entry'}
 			<div class="flex items-center gap-4">
 				<div class="flex items-center gap-2">
-					<label class="text-xs font-semibold text-slate-500">Şube:</label>
+					<span class="text-xs font-semibold text-slate-500">Şube:</span>
 					<select
 						bind:value={selectedSection}
-						on:change={() => loadPage(activePath)}
+						on:change={() => loadPage()}
 						class="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm outline-none dark:border-white/10 dark:bg-white/5"
 					>
 						{#each sections as s}
@@ -532,7 +813,7 @@
 					</select>
 				</div>
 				<div class="flex items-center gap-2">
-					<label class="text-xs font-semibold text-slate-500">Hafta:</label>
+					<span class="text-xs font-semibold text-slate-500">Hafta:</span>
 					<input
 						type="number"
 						bind:value={weekNo}
@@ -602,10 +883,10 @@
 			<!-- ============================================================ -->
 		{:else if apiKey === 'exam-define'}
 			<div class="flex items-center gap-3">
-				<label class="text-xs font-semibold text-slate-500">Şube:</label>
+				<span class="text-xs font-semibold text-slate-500">Şube:</span>
 				<select
 					bind:value={selectedSection}
-					on:change={() => loadPage(activePath)}
+					on:change={() => loadPage()}
 					class="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm outline-none dark:border-white/10 dark:bg-white/5"
 				>
 					{#each sections as s}
@@ -613,6 +894,13 @@
 					{/each}
 				</select>
 			</div>
+			{#if examErr}
+				<div
+					class="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300"
+				>
+					{examErr}
+				</div>
+			{/if}
 
 			<!-- Mevcut sınavlar -->
 			{#if exams.length}
@@ -622,25 +910,119 @@
 					<div class="px-5 py-3 text-xs font-bold text-slate-400">MEVCUT SINAVLAR</div>
 					{#each exams as ex}
 						<div
-							class="flex items-center justify-between border-t border-black/5 px-5 py-3 text-sm dark:border-white/10"
+							class="border-t border-black/5 px-5 py-3 text-sm dark:border-white/10 {editingExamId === ex.id
+								? 'bg-sky-50 dark:bg-sky-900/20'
+								: ''}"
 						>
-							<div class="flex items-center gap-3">
-								<span
-									class="rounded-full px-2 py-0.5 text-xs font-medium
-									{ex.exam_type === 'midterm'
-										? 'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300'
-										: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'}"
-								>
-									{ex.exam_type === 'midterm'
-										? 'Vize'
-										: ex.exam_type === 'final'
-											? 'Final'
-											: ex.exam_type}
-								</span>
-								<span>{ex.exam_date} {ex.exam_time}</span>
-								<span class="text-xs text-slate-400">{ex.classroom}</span>
-							</div>
-							<span class="text-xs font-semibold text-slate-500">%{ex.weight_percent}</span>
+							{#if editingExamId === ex.id}
+								<div class="mb-3 text-xs font-bold text-sky-600 dark:text-sky-400">
+									Sınavı düzenle
+								</div>
+								<div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Sınav Türü</div>
+										<select
+											bind:value={examEditForm.exam_type}
+											class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+										>
+											<option value="midterm">Vize</option>
+											<option value="final">Final</option>
+											<option value="makeup">Bütünleme</option>
+											<option value="project">Proje</option>
+										</select>
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Tarih</div>
+										<input
+											type="date"
+											bind:value={examEditForm.exam_date}
+											class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+										/>
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Saat</div>
+										<input
+											type="time"
+											bind:value={examEditForm.exam_time}
+											class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+										/>
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Derslik</div>
+										<input
+											bind:value={examEditForm.classroom}
+											placeholder="Boş = atanmamış"
+											class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+										/>
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Ağırlık %</div>
+										<input
+											type="number"
+											bind:value={examEditForm.weight_percent}
+											min="0"
+											max="100"
+											class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+										/>
+									</label>
+								</div>
+								<div class="mt-3 flex flex-wrap gap-2">
+									<button
+										type="button"
+										on:click={saveExamEdit}
+										disabled={examEditSaving}
+										class="rounded-lg bg-sky-500 px-4 py-2 text-xs font-semibold text-white hover:bg-sky-400 disabled:opacity-50"
+									>
+										{examEditSaving ? 'Kaydediliyor…' : 'Kaydet'}
+									</button>
+									<button
+										type="button"
+										on:click={cancelExamEdit}
+										disabled={examEditSaving}
+										class="rounded-lg border border-black/10 bg-white px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:bg-white/5 dark:text-slate-300"
+									>
+										İptal
+									</button>
+								</div>
+							{:else}
+								<div class="flex flex-wrap items-center justify-between gap-3">
+									<div class="flex flex-wrap items-center gap-3">
+										<span
+											class="rounded-full px-2 py-0.5 text-xs font-medium
+											{ex.exam_type === 'midterm'
+												? 'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300'
+												: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'}"
+										>
+											{ex.exam_type === 'midterm'
+												? 'Vize'
+												: ex.exam_type === 'final'
+													? 'Final'
+													: ex.exam_type}
+										</span>
+										<span>{ex.exam_date} {ex.exam_time}</span>
+										<span class="text-xs text-slate-400">{ex.classroom || '—'}</span>
+										<span class="text-xs font-semibold text-slate-500">%{ex.weight_percent}</span>
+									</div>
+									<div class="flex items-center gap-2">
+										<button
+											type="button"
+											on:click={() => openExamEdit(ex)}
+											disabled={!!deletingExamId || examEditSaving}
+											class="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 dark:border-white/10 dark:bg-white/5 dark:text-slate-200"
+										>
+											Düzenle
+										</button>
+										<button
+											type="button"
+											on:click={() => removeExam(ex)}
+											disabled={deletingExamId === ex.id || !!editingExamId}
+											class="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-40 dark:border-red-900/50 dark:bg-white/5 dark:text-red-400 dark:hover:bg-red-950/30"
+										>
+											{deletingExamId === ex.id ? 'Siliniyor…' : 'Sil'}
+										</button>
+									</div>
+								</div>
+							{/if}
 						</div>
 					{/each}
 				</div>
@@ -656,13 +1038,6 @@
 						class="mb-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
 					>
 						Sınav eklendi.
-					</div>
-				{/if}
-				{#if examErr}
-					<div
-						class="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300"
-					>
-						{examErr}
 					</div>
 				{/if}
 				<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -731,15 +1106,17 @@
 				class="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
 			>
 				<div
-					class="grid grid-cols-5 bg-slate-50 px-5 py-3 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
+					class="grid grid-cols-6 bg-slate-50 px-5 py-3 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
 				>
 					<div class="col-span-2">Ad Soyad</div>
 					<div>No</div>
 					<div>GNO</div>
 					<div>Sınıf</div>
+					<div class="text-right">Kayıt</div>
 				</div>
 				{#each advisees as a}
 					{@const adv = a as {
+						student_user_id?: string;
 						name: string;
 						student_no: string;
 						gpa: number;
@@ -747,23 +1124,117 @@
 						status: string;
 					}}
 					<div
-						class="grid grid-cols-5 border-t border-black/5 px-5 py-3 text-sm dark:border-white/10 hover:bg-slate-50/50 transition-colors"
+						class="grid grid-cols-6 border-t border-black/5 px-5 py-3 text-sm dark:border-white/10 hover:bg-slate-50/50 transition-colors"
 					>
 						<div class="col-span-2 font-medium">{adv.name}</div>
 						<div class="font-mono text-xs text-slate-400">{adv.student_no}</div>
-						<div
-							class="font-bold {adv.gpa >= 2.0
-								? 'text-emerald-600 dark:text-emerald-400'
-								: 'text-red-600 dark:text-red-400'}"
-						>
+						<div class="font-bold {adviseeGpaTextClass(adv.gpa)}">
 							{adv.gpa.toFixed(2)}
 						</div>
 						<div class="text-slate-500">{adv.class_level}. Sınıf</div>
+						<div class="text-right">
+							<button
+								type="button"
+								on:click={() => loadAdviseeEnrollments(adv.student_user_id ?? '')}
+								class="rounded-lg bg-sky-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-sky-400"
+							>
+								Liste
+							</button>
+						</div>
 					</div>
 				{:else}
 					<div class="px-5 py-8 text-center text-sm text-slate-400">Danışman öğrencisi yok.</div>
 				{/each}
 			</div>
+
+			{#if adviseeDetailUserId}
+				<div
+					class="mt-4 space-y-3 rounded-xl border border-indigo-200 bg-indigo-50/50 p-5 dark:border-indigo-900/40 dark:bg-indigo-950/20"
+				>
+					<div class="flex flex-wrap items-center justify-between gap-2">
+						<span class="text-sm font-bold text-indigo-900 dark:text-indigo-100">
+							Ders listesi — öğrenci user:
+							<span class="font-mono text-xs">{adviseeDetailUserId}</span>
+						</span>
+						<button
+							type="button"
+							on:click={() => {
+								adviseeDetailUserId = null;
+								adviseeEnrollments = [];
+							}}
+							class="text-xs text-indigo-600 hover:underline"
+						>
+							Kapat
+						</button>
+					</div>
+					{#if adviseeSchedErr}
+						<div class="rounded-lg bg-red-100 px-3 py-2 text-sm text-red-800">{adviseeSchedErr}</div>
+					{/if}
+					{#if adviseeSchedBusy}
+						<div class="text-sm text-slate-500">Yükleniyor…</div>
+					{:else if adviseeEnrollments.length}
+						<div class="overflow-x-auto rounded-lg border border-indigo-100 bg-white dark:border-indigo-900/30 dark:bg-white/5">
+							<table class="w-full text-sm">
+								<thead class="bg-slate-50 text-xs font-bold text-slate-500 dark:bg-white/5">
+									<tr>
+										<th class="px-3 py-2 text-left">Kod</th>
+										<th class="px-3 py-2 text-left">Ders</th>
+										<th class="px-3 py-2 text-center">AKTS</th>
+										<th class="px-3 py-2 text-left">DB durumu</th>
+									</tr>
+								</thead>
+								<tbody>
+									{#each adviseeEnrollments as e}
+										<tr class="border-t border-black/5 dark:border-white/10">
+											<td class="px-3 py-2 font-mono text-xs">{e.course_code}</td>
+											<td class="px-3 py-2">{e.course_name}</td>
+											<td class="px-3 py-2 text-center">{e.akts}</td>
+											<td class="px-3 py-2">
+												{#if e.status === 'draft'}
+													<span class="text-slate-500">taslak</span>
+												{:else if e.status === 'pending'}
+													<span class="font-semibold text-amber-700 dark:text-amber-300">
+														danışmanda
+													</span>
+												{:else if e.status === 'active'}
+													<span class="font-semibold text-emerald-700 dark:text-emerald-300">
+														kesinleştirildi (obs_course_enrollments.active)
+													</span>
+												{:else}
+													{e.status}
+												{/if}
+											</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+						<div class="flex flex-wrap gap-2">
+							<button
+								type="button"
+								disabled={adviseeSchedBusy}
+								on:click={() => adviseeDetailUserId && runFinalizeSched(adviseeDetailUserId)}
+								class="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
+							>
+								Kesinleştir (pending → active, schedule_batch onay)
+							</button>
+							<button
+								type="button"
+								disabled={adviseeSchedBusy}
+								on:click={() => adviseeDetailUserId && runRejectSched(adviseeDetailUserId)}
+								class="rounded-lg border border-red-300 bg-white px-4 py-2 text-xs font-bold text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:bg-transparent"
+							>
+								Listeyi iade et (pending → taslak)
+							</button>
+						</div>
+						<p class="text-xs text-indigo-800/80 dark:text-indigo-200/80">
+							Aynı işlem <strong>Onay Talepleri</strong> sayfasındaki «Liste» talebi için «Onayla /
+							Reddet» ile de yapılabilir; DB: obs_approval_requests (schedule_batch) +
+							obs_course_enrollments.
+						</p>
+					{/if}
+				</div>
+			{/if}
 
 			<!-- ============================================================ -->
 			<!-- ONAY TALEPLERİ                                               -->
@@ -785,11 +1256,15 @@
 							<div>
 								<div class="font-semibold">{req.student_name ?? 'Öğrenci'}</div>
 								<div class="mt-0.5 text-xs text-slate-400">
-									{req.request_type} · {req.created_at?.slice(0, 10)}
+									{req.request_type === 'schedule_batch'
+										? 'Ders kayıt listesi (tüm dönem)'
+										: req.request_type} · {req.created_at?.slice(0, 10)}
 								</div>
-								{#if req.note}<div class="mt-1 text-sm text-slate-600 dark:text-slate-300">
+								{#if req.note}
+									<div class="mt-1 text-sm text-slate-600 dark:text-slate-300">
 										{req.note}
-									</div>{/if}
+									</div>
+								{/if}
 							</div>
 							{#if req.status === 'pending'}
 								<div class="flex shrink-0 gap-2">
@@ -833,144 +1308,221 @@
 			<!-- DUYURU OLUŞTUR                                               -->
 			<!-- ============================================================ -->
 		{:else if apiKey === 'announce'}
-			<div
-				class="mx-auto max-w-lg rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5"
-			>
-				<div class="mb-4 flex items-center gap-2 font-semibold text-slate-800 dark:text-slate-100">
-					<svg
-						class="h-4 w-4 text-sky-500"
-						fill="none"
-						viewBox="0 0 24 24"
-						stroke="currentColor"
-						stroke-width="2"
-						><path
-							d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z"
-						/></svg
-					>
-					Duyuru Oluştur
-				</div>
-				{#if annSaved}
-					<div
-						class="mb-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
-					>
-						✓ Duyuru yayınlandı ve hedef öğrencilere bildirim gönderildi.
+			<div class="mx-auto max-w-3xl space-y-6">
+				<div
+					class="rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5"
+				>
+					<div class="mb-4 flex items-center gap-2 font-semibold text-slate-800 dark:text-slate-100">
+						<svg
+							class="h-4 w-4 text-sky-500"
+							fill="none"
+							viewBox="0 0 24 24"
+							stroke="currentColor"
+							stroke-width="2"
+						>
+							<path
+								d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z"
+							/>
+						</svg>
+						{editingAnnId ? 'Duyuru Düzenle' : 'Duyuru Oluştur'}
 					</div>
-				{/if}
-				{#if annErr}
-					<div
-						class="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 dark:bg-red-950/40 dark:text-red-400"
-					>
-						{annErr}
-					</div>
-				{/if}
-				<div class="space-y-3">
-					<label class="block">
-						<div class="mb-1 text-xs font-semibold text-slate-500">Başlık</div>
-						<input
-							bind:value={annForm.title}
-							placeholder="Duyuru başlığı…"
-							class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-400/40 dark:border-white/10 dark:bg-white/5"
-						/>
-					</label>
-					<label class="block">
-						<div class="mb-1 text-xs font-semibold text-slate-500">İçerik</div>
-						<textarea
-							bind:value={annForm.content}
-							rows="5"
-							placeholder="Duyuru içeriği…"
-							class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-400/40 dark:border-white/10 dark:bg-white/5"
-						></textarea>
-					</label>
-
-					<!-- Hedef kitle seçici -->
-					<div>
-						<div class="mb-1.5 text-xs font-semibold text-slate-500">Hedef Kitle</div>
-						<div class="grid grid-cols-2 gap-2">
-							{#each [{ v: 'section', lbl: 'Şubedeki Öğrenciler', icon: '📚' }, { v: 'advisees', lbl: 'Danışmanlık Öğrencilerim', icon: '🎓' }, { v: 'student', lbl: 'Belirli Bir Öğrenci', icon: '👤' }, { v: 'all', lbl: 'Tüm Öğrenciler', icon: '📢' }] as opt}
-								<button
-									type="button"
-									on:click={() => {
-										annForm.audience_type = opt.v as typeof annForm.audience_type;
-									}}
-									class="flex items-center gap-2 rounded-lg border px-3 py-2.5 text-xs font-medium transition-colors
-										{annForm.audience_type === opt.v
-										? 'border-sky-400 bg-sky-50 text-sky-700 dark:border-sky-500 dark:bg-sky-900/30 dark:text-sky-300'
-										: 'border-black/10 bg-white text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10'}"
-								>
-									<span>{opt.icon}</span>{opt.lbl}
-								</button>
-							{/each}
+					{#if annSaved}
+						<div
+							class="mb-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+						>
+							✓ Duyuru kaydedildi.
 						</div>
-					</div>
-
-					<!-- Şube seçimi (audience_type === 'section') -->
-					{#if annForm.audience_type === 'section'}
-						<label class="block">
-							<div class="mb-1 text-xs font-semibold text-slate-500">Şube Seç</div>
-							<select
-								bind:value={annForm.section_id}
-								class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
-							>
-								<option value="">— Şube seçin —</option>
-								{#each sections as s}
-									<option value={s.id}>{s.course_code} — {s.course_name} ({s.day_of_week})</option>
-								{/each}
-							</select>
-						</label>
 					{/if}
-
-					<!-- Öğrenci no (audience_type === 'student') -->
-					{#if annForm.audience_type === 'student'}
+					{#if annErr}
+						<div
+							class="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 dark:bg-red-950/40 dark:text-red-400"
+						>
+							{annErr}
+						</div>
+					{/if}
+					<div class="space-y-3">
 						<label class="block">
-							<div class="mb-1 text-xs font-semibold text-slate-500">Öğrenci No</div>
+							<div class="mb-1 text-xs font-semibold text-slate-500">Başlık</div>
 							<input
-								bind:value={annForm.student_no}
-								placeholder="Örn: 20240001"
+								bind:value={annForm.title}
+								placeholder="Duyuru başlığı…"
 								class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-400/40 dark:border-white/10 dark:bg-white/5"
 							/>
 						</label>
-					{/if}
+						<label class="block">
+							<div class="mb-1 text-xs font-semibold text-slate-500">İçerik</div>
+							<textarea
+								bind:value={annForm.content}
+								rows="5"
+								placeholder="Duyuru içeriği…"
+								class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-400/40 dark:border-white/10 dark:bg-white/5"
+							></textarea>
+						</label>
 
-					<button
-						on:click={async () => {
-							if (!annForm.title.trim() || !annForm.content.trim()) {
-								annErr = 'Başlık ve içerik zorunlu.';
-								return;
-							}
-							annSaving = true;
-							annErr = null;
-							const token = localStorage.token ?? null;
-							const body: AcademicAnnouncementBody = {
-								title: annForm.title,
-								content: annForm.content,
-								audience_type: annForm.audience_type,
-								course_section_id:
-									annForm.audience_type === 'section' ? annForm.section_id : undefined,
-								student_no: annForm.audience_type === 'student' ? annForm.student_no : undefined
-							};
-							try {
-								await createDouAcademicAnnouncement(token, body);
-								annSaved = true;
-								annForm = {
-									title: '',
-									content: '',
-									audience_type: 'section',
-									section_id: '',
-									student_no: ''
-								};
-								setTimeout(() => (annSaved = false), 4000);
-							} catch (e: unknown) {
-								annErr = e instanceof Error ? e.message : 'Duyuru gönderilemedi.';
-							} finally {
-								annSaving = false;
-							}
-						}}
-						disabled={annSaving}
-						type="button"
-						class="w-full rounded-lg bg-sky-500 py-2.5 text-sm font-bold text-white hover:bg-sky-400 disabled:opacity-50 transition-colors"
-					>
-						{annSaving ? 'Gönderiliyor…' : '📢 Duyuruyu Yayınla'}
-					</button>
+						<div>
+							<div class="mb-1.5 text-xs font-semibold text-slate-500">Hedef Kitle</div>
+							<div class="grid grid-cols-2 gap-2">
+								{#each [{ v: 'section', lbl: 'Şubedeki Öğrenciler', icon: '📚' }, { v: 'advisees', lbl: 'Danışmanlık Öğrencilerim', icon: '🎓' }, { v: 'student', lbl: 'Belirli Bir Öğrenci', icon: '👤' }, { v: 'all', lbl: 'Tüm Öğrenciler', icon: '📢' }] as opt}
+									<button
+										type="button"
+										on:click={() => {
+											annForm.audience_type = opt.v as typeof annForm.audience_type;
+										}}
+										class="flex items-center gap-2 rounded-lg border px-3 py-2.5 text-xs font-medium transition-colors
+										{annForm.audience_type === opt.v
+											? 'border-sky-400 bg-sky-50 text-sky-700 dark:border-sky-500 dark:bg-sky-900/30 dark:text-sky-300'
+											: 'border-black/10 bg-white text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10'}"
+									>
+										<span>{opt.icon}</span>{opt.lbl}
+									</button>
+								{/each}
+							</div>
+						</div>
+
+						{#if annForm.audience_type === 'section'}
+							<label class="block">
+								<div class="mb-1 text-xs font-semibold text-slate-500">Şube Seç</div>
+								<select
+									bind:value={annForm.section_id}
+									class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+								>
+									<option value="">— Şube seçin —</option>
+									{#each sections as s}
+										<option value={s.id}>{s.course_code} — {s.course_name} ({s.day_of_week})</option>
+									{/each}
+								</select>
+							</label>
+						{/if}
+
+						{#if annForm.audience_type === 'student'}
+							<label class="block">
+								<div class="mb-1 text-xs font-semibold text-slate-500">Öğrenci No</div>
+								<input
+									bind:value={annForm.student_no}
+									placeholder="Örn: 20240001"
+									class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-400/40 dark:border-white/10 dark:bg-white/5"
+								/>
+							</label>
+						{/if}
+
+						{#if editingAnnId}
+							<label
+								class="flex cursor-pointer items-center gap-2 text-sm text-slate-600 dark:text-slate-300"
+							>
+								<input type="checkbox" bind:checked={annIsActive} class="rounded border-black/20" />
+								Aktif (yayında görünsün)
+							</label>
+						{/if}
+
+						<div class="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+							{#if editingAnnId}
+								<button
+									type="button"
+									on:click={cancelEditAnn}
+									class="w-full rounded-lg border border-black/10 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/10 sm:w-auto sm:px-6"
+								>
+									İptal
+								</button>
+							{/if}
+							<button
+								on:click={async () => {
+									if (!annForm.title.trim() || !annForm.content.trim()) {
+										annErr = 'Başlık ve içerik zorunlu.';
+										return;
+									}
+									annSaving = true;
+									annErr = null;
+									const token = localStorage.token ?? null;
+									try {
+										if (editingAnnId) {
+											await updateDouAcademicAnnouncement(token, editingAnnId, {
+												title: annForm.title.trim(),
+												content: annForm.content.trim(),
+												audience_type: annForm.audience_type,
+												course_section_id:
+													annForm.audience_type === 'section' ? annForm.section_id || null : null,
+												is_active: annIsActive
+											});
+										} else {
+											const body: AcademicAnnouncementBody = {
+												title: annForm.title,
+												content: annForm.content,
+												audience_type: annForm.audience_type,
+												course_section_id:
+													annForm.audience_type === 'section' ? annForm.section_id : undefined,
+												student_no:
+													annForm.audience_type === 'student' ? annForm.student_no : undefined
+											};
+											await createDouAcademicAnnouncement(token, body);
+										}
+										annSaved = true;
+										cancelEditAnn();
+										const refreshed = await getDouAcademicAnnouncements(token);
+										myAnnouncements = refreshed.announcements ?? [];
+										setTimeout(() => (annSaved = false), 4000);
+									} catch (e: unknown) {
+										annErr = e instanceof Error ? e.message : 'İşlem başarısız.';
+									} finally {
+										annSaving = false;
+									}
+								}}
+								disabled={annSaving}
+								type="button"
+								class="w-full rounded-lg bg-sky-500 py-2.5 text-sm font-bold text-white hover:bg-sky-400 disabled:opacity-50 transition-colors sm:flex-1"
+							>
+								{annSaving
+									? 'Gönderiliyor…'
+									: editingAnnId
+										? '💾 Kaydet'
+										: '📢 Duyuruyu Yayınla'}
+							</button>
+						</div>
+					</div>
+				</div>
+
+				<div
+					class="rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5"
+				>
+					<div class="mb-3 font-semibold text-slate-800 dark:text-slate-100">Duyurularım</div>
+					{#each myAnnouncements as a}
+						<div
+							class="mb-3 rounded-lg border border-black/5 bg-slate-50/80 p-4 last:mb-0 dark:border-white/10 dark:bg-white/5"
+						>
+							<div class="flex flex-wrap items-start justify-between gap-2">
+								<div class="min-w-0 font-medium text-sm text-slate-800 dark:text-slate-100">
+									{a.title}
+								</div>
+								<div class="flex shrink-0 gap-1">
+									<button
+										type="button"
+										on:click={() => startEditAnn(a)}
+										class="rounded-lg border border-black/10 px-2.5 py-1 text-xs font-semibold text-sky-600 hover:bg-sky-50 dark:border-white/10 dark:text-sky-400 dark:hover:bg-sky-950/30"
+									>
+										Düzenle
+									</button>
+									<button
+										type="button"
+										on:click={() => removeAnn(a.id)}
+										class="rounded-lg border border-red-200 px-2.5 py-1 text-xs font-semibold text-red-600 hover:bg-red-50 dark:border-red-900/40 dark:text-red-400 dark:hover:bg-red-950/20"
+									>
+										Sil
+									</button>
+								</div>
+							</div>
+							<div class="mt-1 text-xs text-slate-400">
+								{a.audience_type}
+								{#if !a.is_active}
+									<span class="text-amber-600 dark:text-amber-400"> · pasif</span>
+								{/if}
+								{#if a.created_at}
+									{' · '}{a.created_at.slice(0, 16).replace('T', ' ')}
+								{/if}
+							</div>
+							<p class="mt-2 line-clamp-2 text-sm text-slate-600 dark:text-slate-300">{a.content}</p>
+						</div>
+					{:else}
+						<div class="py-8 text-center text-sm text-slate-400">Henüz duyuru yok.</div>
+					{/each}
 				</div>
 			</div>
 
@@ -1012,16 +1564,20 @@
 				class="mx-auto max-w-md rounded-xl border border-black/10 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-white/5"
 			>
 				<div class="mb-5 font-bold">Şifre Değiştir</div>
-				{#if pwOk}<div
+				{#if pwOk}
+					<div
 						class="mb-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
 					>
 						{pwOk}
-					</div>{/if}
-				{#if pwErr}<div
+					</div>
+				{/if}
+				{#if pwErr}
+					<div
 						class="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300"
 					>
 						{pwErr}
-					</div>{/if}
+					</div>
+				{/if}
 				<div class="space-y-4">
 					{#each [['Mevcut Şifre', 'current_password'], ['Yeni Şifre', 'new_password'], ['Yeni Şifre (Tekrar)', 'confirm_password']] as [lbl, field]}
 						<label class="block">

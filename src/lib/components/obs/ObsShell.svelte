@@ -143,9 +143,23 @@
 	$: dashHref = roleDashboard[role] ?? '/obs/ogrenci';
 	$: panelLabel = roleLabel[role] ?? 'OBS';
 
-	const isActive = (href: string) => activePath === href || activePath.startsWith(href + '/');
+	/** Sondaki / tutarsızlığını kaldır; menüde yalnızca en spesifik (en uzun) eşleşen öğe aktif olsun */
+	$: normalizedActive = (activePath ?? '').replace(/\/+$/, '') || dashHref;
+	$: navFlat = navGroups.flatMap((g) => g.items);
+	$: activeNavHref = (() => {
+		const p = normalizedActive;
+		let best = '';
+		for (const it of navFlat) {
+			const h = it.href;
+			if (p === h || p.startsWith(h + '/')) {
+				if (h.length > best.length) best = h;
+			}
+		}
+		return best;
+	})();
+	const isActive = (href: string) => href === activeNavHref;
 
-	$: aiAskHref = `/?back=${encodeURIComponent(activePath)}`;
+	$: aiAskHref = `/?back=${encodeURIComponent(normalizedActive)}`;
 
 	// ---------------------------------------------------------------------------
 	// Bildirimler — inbox + approval'dan dinamik
@@ -257,7 +271,7 @@
 		localStorage.removeItem('obsRoleOverride');
 		try {
 			const res = await userSignOut();
-			// @ts-ignore
+			// @ts-expect-error Dinamik import ile store sıfırlama (tip paketi dışı)
 			import('$lib/stores').then(({ user: u }) => u.set(null));
 			localStorage.removeItem('token');
 			location.href = res?.redirect_url ?? '/auth';
@@ -299,13 +313,18 @@
 	</div>
 {/if}
 
+<svelte:head>
+	<title>{title}</title>
+</svelte:head>
+
 <div
 	class="min-h-[100dvh] bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100"
 	class:pt-10={idleWarning}
+	aria-label={title}
 >
-	<div class="flex min-h-[100dvh]">
+	<div class="flex h-[100dvh] min-h-0">
 		<!-- Sidebar -->
-		<aside class="flex w-[260px] shrink-0 flex-col bg-slate-950 text-slate-100">
+		<aside class="flex w-[260px] shrink-0 flex-col overflow-y-auto bg-slate-950 text-slate-100">
 			<!-- Header -->
 			<div class="px-5 py-4 shadow-[0_1px_0_rgba(255,255,255,0.06)]">
 				<a href={dashHref} class="flex items-center gap-3 transition-opacity hover:opacity-80">
@@ -324,7 +343,7 @@
 			</div>
 
 			<!-- Nav -->
-			<nav class="flex-1 overflow-y-auto px-3 pb-4 pt-2">
+			<nav class="flex-1 overflow-y-auto overflow-x-hidden px-3 pb-4 pt-2">
 				{#each navGroups as group}
 					<div class="mb-1 mt-4 px-3 text-[10px] font-bold tracking-widest text-slate-500">
 						{group.section}
@@ -376,8 +395,8 @@
 			</div>
 		</aside>
 
-		<!-- Main -->
-		<div class="flex min-w-0 flex-1 flex-col">
+		<!-- Main: flex içinde kaydırma için min-h-0 + overflow -->
+		<div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
 			<!-- Topbar -->
 			<header
 				class="sticky top-0 z-10 border-b border-black/10 bg-white/95 px-6 py-3 backdrop-blur dark:border-white/10 dark:bg-slate-950/90"
@@ -507,7 +526,7 @@
 			</header>
 
 			<!-- Content -->
-			<main class="flex-1 px-6 py-5">
+			<main class="min-h-0 flex-1 overflow-y-auto px-6 py-5">
 				<slot />
 			</main>
 		</div>

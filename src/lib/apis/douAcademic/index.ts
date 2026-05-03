@@ -65,6 +65,12 @@ export type DouTerm = {
 	starts_at: string;
 	ends_at: string;
 	is_active?: boolean;
+	registration_open?: boolean | null;
+	registration_start?: string;
+	registration_end?: string;
+	add_drop_open?: boolean | null;
+	add_drop_start?: string;
+	add_drop_end?: string;
 };
 
 export type DouDepartment = { id: string; code: string; name: string };
@@ -79,6 +85,8 @@ export type DouStudentProfile = {
 	faculty_name?: string;
 	program: string;
 	class_level: number;
+	/** Program yarıyılı (1 tabanlı); kayıt üst sınırı için. */
+	program_semester_number?: number;
 	gpa?: number;
 	status?: string;
 	enrollment_date?: string;
@@ -108,6 +116,7 @@ export type DouAdvisorResponse = {
 export type DouEnrollment = {
 	id: string;
 	student_id: string;
+	course_id?: string;
 	section_id: string;
 	course_code: string;
 	course_name: string;
@@ -125,6 +134,8 @@ export type DouEnrollment = {
 	class_year?: number;
 	type?: string;
 	status: string;
+	registration_priority_tier?: number;
+	registration_priority_label?: string;
 };
 
 export type DouEnrollmentsResponse = {
@@ -288,6 +299,7 @@ export type DouMessagesResponse = {
 
 export type DouApprovalRequest = {
 	id: string;
+	student_user_id?: string;
 	student_name: string;
 	student_no: string;
 	request_type: string;
@@ -314,9 +326,13 @@ export type DouAnnouncement = {
 	content: string;
 	audience_type: string;
 	department_id?: string | null;
+	course_section_id?: string | null;
 	is_active: boolean;
-	published_at?: string;
+	published_at?: string | null;
+	created_at?: string | null;
 	created_by?: string;
+	/** JOIN user.name — gösterim için */
+	created_by_name?: string | null;
 };
 
 export type DouAdminStats = {
@@ -398,8 +414,42 @@ export const getDouStudentProfile = (token: string | null) =>
 export const getDouStudentAdvisor = (token: string | null) =>
 	authFetch<DouAdvisorResponse>('/student/me/advisor', token);
 
-export const getDouStudentEnrollments = (token: string | null, termId?: string) => {
+export type DouStudentRegistrationLimits = {
+	student_user_id: string;
+	term_id: string;
+	akts_max: number;
+	rule: string;
+	/** Limit kuralında kullanılan GNO: önce AKTS ağırlıklı hesap, yoksa profil. */
+	gpa: number | null;
+	/** Σ(not×AKTS)/ΣAKTS; transkriptle aynı satır kümesi. */
+	gpa_computed: number | null;
+	gpa_profile: number | null;
+	akts_counted_in_gpa: number;
+	is_prep: boolean;
+	current_term_akts: number;
+	akts_limit_default: number;
+	akts_limit_high: number;
+	akts_limit_top: number;
+	akts_limit_prep: number;
+	min_gpa_for_high_akts: number;
+	min_gpa_for_top_akts: number;
+	program_semester_number: number;
+};
+
+export const getDouStudentRegistrationLimits = (token: string | null, termId?: string) => {
 	const q = termId ? `?term_id=${encodeURIComponent(termId)}` : '';
+	return authFetch<DouStudentRegistrationLimits>(`/student/me/registration-limits${q}`, token);
+};
+
+export const getDouStudentEnrollments = (
+	token: string | null,
+	termId?: string,
+	statuses?: string
+) => {
+	const params = new URLSearchParams();
+	if (termId) params.set('term_id', termId);
+	if (statuses) params.set('statuses', statuses);
+	const q = params.toString() ? `?${params.toString()}` : '';
 	return authFetch<DouEnrollmentsResponse>(`/student/me/enrollments${q}`, token);
 };
 
@@ -505,6 +555,50 @@ export const resolveDouApprovalRequest = (
 		body: JSON.stringify({ action, note })
 	});
 
+export const getDouAdviseeEnrollments = (
+	token: string | null,
+	studentUserId: string,
+	termId?: string
+) => {
+	const q = termId ? `?term_id=${encodeURIComponent(termId)}` : '';
+	return authFetch<{
+		student_user_id: string;
+		term_id: string | null;
+		enrollments: DouEnrollment[];
+	}>(
+		`/academic/me/advisees/${encodeURIComponent(studentUserId)}/enrollments${q}`,
+		token
+	);
+};
+
+export const finalizeDouAdviseeSchedule = (
+	token: string | null,
+	studentUserId: string,
+	termId: string
+) =>
+	authFetch<{ ok: boolean; student_user_id: string; term_id: string }>(
+		'/academic/me/advisees/finalize-schedule',
+		token,
+		{
+			method: 'POST',
+			body: JSON.stringify({ student_user_id: studentUserId, term_id: termId })
+		}
+	);
+
+export const rejectDouAdviseeSchedule = (
+	token: string | null,
+	studentUserId: string,
+	termId: string
+) =>
+	authFetch<{ ok: boolean; student_user_id: string; term_id: string }>(
+		'/academic/me/advisees/reject-schedule',
+		token,
+		{
+			method: 'POST',
+			body: JSON.stringify({ student_user_id: studentUserId, term_id: termId })
+		}
+	);
+
 // ---------------------------------------------------------------------------
 // Admin
 // ---------------------------------------------------------------------------
@@ -524,11 +618,65 @@ export const createDouAdminDepartment = (
 		body: JSON.stringify(body)
 	});
 
+export const updateDouAdminDepartment = (
+	token: string | null,
+	id: string,
+	body: { code?: string; name?: string; faculty_name?: string | null }
+) =>
+	authFetch<DouDepartment>(`/admin/departments/${encodeURIComponent(id)}`, token, {
+		method: 'PUT',
+		body: JSON.stringify(body)
+	});
+
+export const deleteDouAdminDepartment = (token: string | null, id: string) =>
+	authFetch<{ deleted: boolean }>(`/admin/departments/${encodeURIComponent(id)}`, token, {
+		method: 'DELETE'
+	});
+
 export const getDouAdminTerms = (token: string | null) =>
 	authFetch<DouTerm[]>('/admin/terms', token);
 
 export const createDouAdminTerm = (token: string | null, body: Partial<DouTerm>) =>
 	authFetch<DouTerm>('/admin/terms', token, { method: 'POST', body: JSON.stringify(body) });
+
+export const updateDouAdminTerm = (
+	token: string | null,
+	id: string,
+	body: Partial<{
+		name: string;
+		starts_at: string;
+		ends_at: string;
+		start_date: string;
+		end_date: string;
+		is_active: boolean;
+	}>
+) =>
+	authFetch<DouTerm>(`/admin/terms/${encodeURIComponent(id)}`, token, {
+		method: 'PUT',
+		body: JSON.stringify(body)
+	});
+
+export const deleteDouAdminTerm = (token: string | null, id: string) =>
+	authFetch<{ deleted: boolean }>(`/admin/terms/${encodeURIComponent(id)}`, token, {
+		method: 'DELETE'
+	});
+
+export const patchDouAdminTermRegistrationWindows = (
+	token: string | null,
+	termId: string,
+	body: {
+		registration_open?: boolean;
+		registration_start?: string;
+		registration_end?: string;
+		add_drop_open?: boolean;
+		add_drop_start?: string;
+		add_drop_end?: string;
+	}
+) =>
+	authFetch<DouTerm>(`/admin/terms/${encodeURIComponent(termId)}/registration-windows`, token, {
+		method: 'PATCH',
+		body: JSON.stringify(body)
+	});
 
 export const getDouAdminCourses = (token: string | null) =>
 	authFetch<unknown[]>('/admin/courses', token);
@@ -541,10 +689,66 @@ export const getDouAdminSections = (token: string | null, termId?: string) => {
 	return authFetch<unknown[]>(`/admin/course-sections${q}`, token);
 };
 
+export const updateDouAdminCourse = (
+	token: string | null,
+	courseId: string,
+	body: Record<string, unknown>
+) =>
+	authFetch<unknown>(`/admin/courses/${encodeURIComponent(courseId)}`, token, {
+		method: 'PUT',
+		body: JSON.stringify(body)
+	});
+
+export const deleteDouAdminCourse = (token: string | null, courseId: string) =>
+	authFetch<{ deleted: boolean }>(`/admin/courses/${encodeURIComponent(courseId)}`, token, {
+		method: 'DELETE'
+	});
+
+export const updateDouAdminClassroom = (
+	token: string | null,
+	classroomId: string,
+	body: Record<string, unknown>
+) =>
+	authFetch<unknown>(`/admin/classrooms/${encodeURIComponent(classroomId)}`, token, {
+		method: 'PUT',
+		body: JSON.stringify(body)
+	});
+
+export const deleteDouAdminClassroom = (token: string | null, classroomId: string) =>
+	authFetch<{ deleted: boolean }>(
+		`/admin/classrooms/${encodeURIComponent(classroomId)}`,
+		token,
+		{ method: 'DELETE' }
+	);
+
 export const getDouAdminCalendarEvents = (token: string | null, termId?: string) => {
 	const q = termId ? `?term_id=${encodeURIComponent(termId)}` : '';
 	return authFetch<DouCalendarEvent[]>(`/admin/calendar-events${q}`, token);
 };
+
+export const updateDouAdminCalendarEvent = (
+	token: string | null,
+	eventId: string,
+	body: Partial<{
+		term_id: string;
+		event_type: string;
+		title: string;
+		start_date: string;
+		end_date: string;
+	}>
+) =>
+	authFetch<Record<string, unknown>>(
+		`/admin/calendar/${encodeURIComponent(eventId)}`,
+		token,
+		{ method: 'PUT', body: JSON.stringify(body) }
+	);
+
+export const deleteDouAdminCalendarEvent = (token: string | null, eventId: string) =>
+	authFetch<{ deleted: boolean }>(
+		`/admin/calendar/${encodeURIComponent(eventId)}`,
+		token,
+		{ method: 'DELETE' }
+	);
 
 export const getDouAdminRegistrationSettings = (token: string | null, termId?: string) => {
 	const q = termId ? `?term_id=${encodeURIComponent(termId)}` : '';
@@ -554,11 +758,19 @@ export const getDouAdminRegistrationSettings = (token: string | null, termId?: s
 export const postDouAdminRegistrationSettings = (
 	token: string | null,
 	body: {
-		max_akts: number;
-		bonus_akts: number;
-		gpa_threshold: number;
+		akts_limit_default?: number;
+		akts_limit_high?: number;
+		akts_limit_top?: number;
+		akts_limit_prep?: number;
+		min_gpa_for_high_akts?: number;
+		min_gpa_for_top_akts?: number;
+		registration_open?: boolean;
+		add_drop_deadline_days?: number;
 		enrollment_deadline?: string;
 		add_drop_deadline?: string;
+		max_akts?: number;
+		bonus_akts?: number;
+		gpa_threshold?: number;
 	},
 	termId?: string
 ) => {
@@ -577,6 +789,35 @@ export const createDouAdminAnnouncement = (
 		method: 'POST',
 		body: JSON.stringify(body)
 	});
+
+export const getDouAdminAnnouncements = (token: string | null) =>
+	authFetch<{ announcements: DouAnnouncement[] }>('/admin/announcements', token);
+
+export type AnnouncementUpdatePayload = Partial<{
+	title: string;
+	content: string;
+	audience_type: string;
+	department_id: string | null;
+	course_section_id: string | null;
+	is_active: boolean;
+}>;
+
+export const updateDouAdminAnnouncement = (
+	token: string | null,
+	id: string,
+	body: AnnouncementUpdatePayload
+) =>
+	authFetch<DouAnnouncement>(`/admin/announcements/${encodeURIComponent(id)}`, token, {
+		method: 'PUT',
+		body: JSON.stringify(body)
+	});
+
+export const deleteDouAdminAnnouncement = (token: string | null, id: string) =>
+	authFetch<{ id: string; deleted: boolean }>(
+		`/admin/announcements/${encodeURIComponent(id)}`,
+		token,
+		{ method: 'DELETE' }
+	);
 
 export const getDouAdminAuditLogs = (token: string | null, limit = 20) =>
 	authFetch<{ logs: unknown[]; total: number }>(`/admin/audit-logs?limit=${limit}`, token);
@@ -887,12 +1128,34 @@ export const getDouCourses = (t: string | null) => getDouAdminCourses(t);
 export const getDouClassrooms = (t: string | null) => getDouAdminClassrooms(t);
 export const createDouDepartment = (t: string | null, body: { code: string; name: string }) =>
 	createDouAdminDepartment(t, body);
+export const updateDouDepartment = (
+	t: string | null,
+	id: string,
+	body: { code?: string; name?: string; faculty_name?: string | null }
+) => updateDouAdminDepartment(t, id, body);
+export const deleteDouDepartment = (t: string | null, id: string) => deleteDouAdminDepartment(t, id);
 export const createDouTerm = (t: string | null, body: Partial<DouTerm>) =>
 	createDouAdminTerm(t, body);
+export const updateDouTerm = (
+	t: string | null,
+	id: string,
+	body: Partial<{
+		name: string;
+		starts_at: string;
+		ends_at: string;
+		start_date: string;
+		end_date: string;
+		is_active: boolean;
+	}>
+) => updateDouAdminTerm(t, id, body);
+export const deleteDouTerm = (t: string | null, id: string) => deleteDouAdminTerm(t, id);
 export const createDouCourse = (
 	token: string | null,
 	body: { code: string; name: string; credits?: number; akts?: number; department_id?: string }
 ) => authFetch<DouCourse>('/admin/courses', token, { method: 'POST', body: JSON.stringify(body) });
+export const updateDouCourse = (token: string | null, id: string, body: Record<string, unknown>) =>
+	updateDouAdminCourse(token, id, body);
+export const deleteDouCourse = (token: string | null, id: string) => deleteDouAdminCourse(token, id);
 export const createDouClassroom = (
 	token: string | null,
 	body: { code: string; name: string; capacity?: number; building?: string; floor?: number }
@@ -901,6 +1164,9 @@ export const createDouClassroom = (
 		method: 'POST',
 		body: JSON.stringify(body)
 	});
+export const updateDouClassroom = (token: string | null, id: string, body: Record<string, unknown>) =>
+	updateDouAdminClassroom(token, id, body);
+export const deleteDouClassroom = (token: string | null, id: string) => deleteDouAdminClassroom(token, id);
 export const completeDouDocumentRequest = (token: string | null, requestId: string) =>
 	authFetch<{ id: string; status: string }>(`/admin/document-requests/${requestId}`, token, {
 		method: 'PATCH',
@@ -927,6 +1193,7 @@ export const updateDouStudentProfile = (
 
 export type AvailableCourse = {
 	id: string;
+	course_id?: string;
 	course_code: string;
 	course_name: string;
 	credits: number;
@@ -938,6 +1205,8 @@ export type AvailableCourse = {
 	classroom: string;
 	capacity: number;
 	enrolled: number;
+	registration_priority_tier?: number;
+	registration_priority_label?: string;
 };
 
 export const getDouAvailableCourses = (token: string | null, termId?: string) => {
@@ -957,6 +1226,41 @@ export const createDouEnrollmentRequest = (
 		'/student/me/enrollment-requests',
 		token,
 		{ method: 'POST', body: JSON.stringify({ section_ids: sectionIds, note }) }
+	);
+
+export const postDouDraftEnrollments = (
+	token: string | null,
+	sectionIds: string[],
+	mode: 'registration' | 'add_drop' = 'registration'
+) =>
+	authFetch<{ created: unknown[]; count: number }>('/student/me/draft-enrollments', token, {
+		method: 'POST',
+		body: JSON.stringify({ section_ids: sectionIds, mode })
+	});
+
+export const deleteDouDraftEnrollment = (token: string | null, enrollmentId: string) =>
+	authFetch<{ id: string; deleted: boolean }>(
+		`/student/me/draft-enrollments/${encodeURIComponent(enrollmentId)}`,
+		token,
+		{ method: 'DELETE' }
+	);
+
+export const submitDouStudentSchedule = (
+	token: string | null,
+	note?: string | null,
+	opts?: { flow?: 'registration' | 'add_drop'; enrollment_ids_to_drop?: string[] }
+) =>
+	authFetch<{ batch_request_id: string; term_id: string; status: string; flow?: string }>(
+		'/student/me/submit-schedule',
+		token,
+		{
+			method: 'POST',
+			body: JSON.stringify({
+				note: note ?? null,
+				flow: opts?.flow ?? 'registration',
+				enrollment_ids_to_drop: opts?.enrollment_ids_to_drop ?? []
+			})
+		}
 	);
 
 export const createDouDropRequest = (token: string | null, enrollmentId: string, reason?: string) =>
@@ -1008,24 +1312,41 @@ export type AcademicExam = {
 
 export const getDouSectionGrades = (token: string | null, sectionId: string) =>
 	authFetch<{ section_id: string; students: AcademicGradeRow[]; _mock?: boolean }>(
-		`/academic/sections/${sectionId}/grades`,
+		`/academic/sections/${encodeURIComponent(sectionId)}/grades`,
 		token
 	);
 
 export const putDouSectionGrades = (
 	token: string | null,
 	sectionId: string,
-	grades: { enrollment_id: string; midterm?: number; final?: number }[]
+	grades: {
+		enrollment_id: string;
+		midterm?: number;
+		final?: number;
+		/** Boş string veya null: harf notunu sil (PUT gövdesinde alan varsa) */
+		letter_grade?: string | null;
+	}[]
 ) =>
 	authFetch<{ section_id: string; updated: number }>(
-		`/academic/sections/${sectionId}/grades`,
+		`/academic/sections/${encodeURIComponent(sectionId)}/grades`,
 		token,
 		{ method: 'PUT', body: JSON.stringify({ grades }) }
 	);
 
+export const deleteDouSectionGrade = (
+	token: string | null,
+	sectionId: string,
+	enrollmentId: string
+) =>
+	authFetch<{ section_id: string; enrollment_id: string; deleted: boolean }>(
+		`/academic/sections/${encodeURIComponent(sectionId)}/grades/${encodeURIComponent(enrollmentId)}`,
+		token,
+		{ method: 'DELETE' }
+	);
+
 export const finalizeDouSectionGrades = (token: string | null, sectionId: string) =>
 	authFetch<{ section_id: string; finalized: boolean }>(
-		`/academic/sections/${sectionId}/grades/finalize`,
+		`/academic/sections/${encodeURIComponent(sectionId)}/grades/finalize`,
 		token,
 		{ method: 'POST', body: '{}' }
 	);
@@ -1052,6 +1373,31 @@ export const createDouSectionExam = (
 		body: JSON.stringify(body)
 	});
 
+export const updateDouSectionExam = (
+	token: string | null,
+	sectionId: string,
+	examId: string,
+	body: {
+		exam_type?: string;
+		exam_date?: string;
+		exam_time?: string;
+		classroom?: string | null;
+		weight_percent?: number;
+	}
+) =>
+	authFetch<AcademicExam>(
+		`/academic/sections/${encodeURIComponent(sectionId)}/exams/${encodeURIComponent(examId)}`,
+		token,
+		{ method: 'PUT', body: JSON.stringify(body) }
+	);
+
+export const deleteDouSectionExam = (token: string | null, sectionId: string, examId: string) =>
+	authFetch<{ section_id: string; exam_id: string; deleted: boolean }>(
+		`/academic/sections/${encodeURIComponent(sectionId)}/exams/${encodeURIComponent(examId)}`,
+		token,
+		{ method: 'DELETE' }
+	);
+
 export const putDouSectionAttendance = (
 	token: string | null,
 	sectionId: string,
@@ -1059,9 +1405,9 @@ export const putDouSectionAttendance = (
 	records: { enrollment_id: string; status: 'present' | 'absent' | 'excused' }[]
 ) =>
 	authFetch<{ section_id: string; week_no: number; recorded: number }>(
-		`/academic/sections/${sectionId}/attendance`,
+		`/academic/sections/${encodeURIComponent(sectionId)}/attendance/${encodeURIComponent(String(week_no))}`,
 		token,
-		{ method: 'PUT', body: JSON.stringify({ week_no, records }) }
+		{ method: 'PUT', body: JSON.stringify({ records }) }
 	);
 
 export type AcademicAnnouncementBody = {
@@ -1082,9 +1428,25 @@ export const createDouAcademicAnnouncement = (
 		body: JSON.stringify(body)
 	});
 
-// ---------------------------------------------------------------------------
-// Admin — kullanıcı ve rol yönetimi
-// ---------------------------------------------------------------------------
+export const getDouAcademicAnnouncements = (token: string | null) =>
+	authFetch<{ announcements: DouAnnouncement[] }>('/academic/announcements', token);
+
+export const updateDouAcademicAnnouncement = (
+	token: string | null,
+	id: string,
+	body: AnnouncementUpdatePayload
+) =>
+	authFetch<DouAnnouncement>(`/academic/announcements/${encodeURIComponent(id)}`, token, {
+		method: 'PUT',
+		body: JSON.stringify(body)
+	});
+
+export const deleteDouAcademicAnnouncement = (token: string | null, id: string) =>
+	authFetch<{ id: string; deleted: boolean }>(
+		`/academic/announcements/${encodeURIComponent(id)}`,
+		token,
+		{ method: 'DELETE' }
+	);
 
 export type AdminUser = {
 	id: string;
@@ -1105,16 +1467,28 @@ export const getDouAdminUsers = (
 	token: string | null,
 	params?: { role?: string; search?: string }
 ) => {
-	const q = new URLSearchParams((params as Record<string, string>) ?? {}).toString();
+	const sp = new URLSearchParams();
+	if (params?.role) sp.set('role', params.role);
+	if (params?.search) sp.set('search', params.search);
+	const q = sp.toString();
 	return authFetch<{ users: AdminUser[]; total: number; _mock?: boolean }>(
 		`/admin/users${q ? `?${q}` : ''}`,
 		token
 	);
 };
 
+/** Open WebUI `user` tablosu — OBS panelleri: user | academician | admin (+ isteğe pending) */
+export const DOU_ADMIN_USER_ROLES = ['user', 'academician', 'admin', 'pending'] as const;
+export type DouAdminAssignableRole = (typeof DOU_ADMIN_USER_ROLES)[number];
+
 export const createDouAdminUser = (
 	token: string | null,
-	body: { email: string; full_name: string; role?: string; password?: string }
+	body: {
+		email: string;
+		full_name: string;
+		role?: DouAdminAssignableRole | string;
+		password?: string;
+	}
 ) => authFetch<AdminUser>('/admin/users', token, { method: 'POST', body: JSON.stringify(body) });
 
 export const patchDouAdminUser = (
@@ -1177,6 +1551,78 @@ export const createDouAdminSection = (token: string | null, body: SectionCreateB
 		method: 'POST',
 		body: JSON.stringify(body)
 	});
+
+export type SectionUpdateBody = Partial<{
+	course_id: string;
+	term_id: string;
+	section_no: number;
+	classroom_id: string;
+	instructor_user_id: string;
+	day_of_week: string;
+	start_time: string;
+	end_time: string;
+	capacity: number;
+}>;
+
+export const updateDouAdminSection = (
+	token: string | null,
+	sectionId: string,
+	body: SectionUpdateBody
+) =>
+	authFetch<Record<string, unknown>>(
+		`/admin/sections/${encodeURIComponent(sectionId)}`,
+		token,
+		{ method: 'PUT', body: JSON.stringify(body) }
+	);
+
+export const deleteDouAdminSection = (token: string | null, sectionId: string) =>
+	authFetch<{ deleted: boolean }>(
+		`/admin/sections/${encodeURIComponent(sectionId)}`,
+		token,
+		{ method: 'DELETE' }
+	);
+
+export const updateDouAdminAcademicProfile = (
+	token: string | null,
+	userId: string,
+	body: Partial<{
+		staff_number: string;
+		title: string;
+		department_id: string | null;
+		office: string;
+		phone: string;
+	}>
+) =>
+	authFetch<Record<string, unknown>>(
+		`/admin/academics/${encodeURIComponent(userId)}`,
+		token,
+		{ method: 'PUT', body: JSON.stringify(body) }
+	);
+
+export const deleteDouAdminAcademicProfile = (token: string | null, userId: string) =>
+	authFetch<{ deleted: boolean }>(
+		`/admin/academics/${encodeURIComponent(userId)}`,
+		token,
+		{ method: 'DELETE' }
+	);
+
+export const updateDouAdminStudentProfile = (
+	token: string | null,
+	userId: string,
+	body: Record<string, unknown>
+) =>
+	authFetch<Record<string, unknown>>(
+		`/admin/students/${encodeURIComponent(userId)}`,
+		token,
+		{ method: 'PUT', body: JSON.stringify(body) }
+	);
+
+export const deleteDouAdminStudentProfile = (token: string | null, userId: string) =>
+	authFetch<{ deleted: boolean }>(
+		`/admin/students/${encodeURIComponent(userId)}`,
+		token,
+		{ method: 'DELETE' }
+	);
 
 // ---------------------------------------------------------------------------
 // DEV helpers

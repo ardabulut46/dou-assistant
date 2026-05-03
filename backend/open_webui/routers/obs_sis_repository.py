@@ -57,11 +57,471 @@ LETTER_POINTS: dict[str, float] = {
     "FF": 0.0,
 }
 
+# Danışman tüm liste kesinleştirmesi — obs_approval_requests.note ile döneme bağlanır
+BATCH_TERM_NOTE_PREFIX = "BATCH_TERM:"
+BATCH_ADDDROP_TERM_NOTE_PREFIX = "BATCH_ADDDROP_TERM:"
+
+# Öğrenci arayüzü gün filtreleri Türkçe (Pazartesi, …). DB İngilizce veya sayı olabilir.
+_EN_WEEKDAY_TO_TR: dict[str, str] = {
+    "monday": "Pazartesi",
+    "mon": "Pazartesi",
+    "tuesday": "Salı",
+    "tue": "Salı",
+    "wednesday": "Çarşamba",
+    "wed": "Çarşamba",
+    "thursday": "Perşembe",
+    "thu": "Perşembe",
+    "friday": "Cuma",
+    "fri": "Cuma",
+    "saturday": "Cumartesi",
+    "sat": "Cumartesi",
+    "sunday": "Pazar",
+    "sun": "Pazar",
+}
+_TR_WEEKDAY_BY_ASCII: dict[str, str] = {
+    "pazartesi": "Pazartesi",
+    "sali": "Salı",
+    "carsamba": "Çarşamba",
+    "persembe": "Perşembe",
+    "cuma": "Cuma",
+    "cumartesi": "Cumartesi",
+    "pazar": "Pazar",
+}
+
+
+def normalize_weekday_tr(raw: Optional[str]) -> str:
+    if raw is None:
+        return ""
+    if isinstance(raw, int):
+        iso = {
+            1: "Pazartesi",
+            2: "Salı",
+            3: "Çarşamba",
+            4: "Perşembe",
+            5: "Cuma",
+            6: "Cumartesi",
+            7: "Pazar",
+        }
+        return iso.get(raw, "")
+    s = str(raw).strip()
+    if not s:
+        return ""
+    low = s.lower()
+    if low in _EN_WEEKDAY_TO_TR:
+        return _EN_WEEKDAY_TO_TR[low]
+    folded = (
+        low.replace("ı", "i")
+        .replace("ğ", "g")
+        .replace("ü", "u")
+        .replace("ş", "s")
+        .replace("ö", "o")
+        .replace("ç", "c")
+    )
+    if folded in _TR_WEEKDAY_BY_ASCII:
+        return _TR_WEEKDAY_BY_ASCII[folded]
+    if s.isdigit():
+        n = int(s)
+        iso2 = {
+            1: "Pazartesi",
+            2: "Salı",
+            3: "Çarşamba",
+            4: "Perşembe",
+            5: "Cuma",
+            6: "Cumartesi",
+            7: "Pazar",
+        }
+        if n in iso2:
+            return iso2[n]
+    return s
+
 
 def letter_to_point(lg: Optional[str]) -> Optional[float]:
     if not lg:
         return None
     return LETTER_POINTS.get(lg.upper().strip())
+
+
+# --- Yönetmelik: yarıyıl, bırakma, çakışma, kayıt önceliği (Madde 23–25, 24/2) ---
+
+_FAIL_REPEAT_GRADES = frozenset(
+    {"FF", "FD", "FA", "FZ", "K", "DZ", "F", "NA", "YZ"}
+)
+
+
+def student_program_semester_number(db: Session, student_profile_id: str) -> int:
+    row = db.execute(
+        text(
+            "SELECT program_semester_number FROM obs_student_profiles WHERE id = :id"
+        ),
+        {"id": student_profile_id},
+    ).scalar()
+    try:
+        n = int(row) if row is not None else 1
+    except (TypeError, ValueError):
+        n = 1
+    return max(1, n)
+
+
+def _course_semester_index(class_year: Any, curriculum_semester: Any) -> Optional[int]:
+    if curriculum_semester is not None:
+        try:
+            return int(curriculum_semester)
+        except (TypeError, ValueError):
+            pass
+    try:
+        cy = int(class_year or 0)
+    except (TypeError, ValueError):
+        cy = 0
+    if cy > 0:
+        return (cy - 1) * 2 + 1
+    return None
+
+
+def _is_first_two_curriculum_semesters(class_year: Any, curriculum_semester: Any) -> bool:
+    if curriculum_semester is not None:
+        try:
+            return int(curriculum_semester) <= 2
+        except (TypeError, ValueError):
+            pass
+    try:
+        cy = int(class_year or 0)
+    except (TypeError, ValueError):
+        cy = 0
+    return cy <= 1
+
+
+def _normalized_letter(lg: Optional[Any]) -> str:
+    if lg is None:
+        return ""
+    return str(lg).strip().upper()
+
+
+def has_passing_grade_for_course(
+    db: Session, student_profile_id: str, course_id: str
+) -> bool:
+    rows = (
+        db.execute(
+            text("""
+            SELECT g.letter_grade
+            FROM obs_course_enrollments ce
+            JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+            LEFT JOIN obs_grade_entries g ON g.enrollment_id = ce.id
+            WHERE ce.student_id = :spid AND cs.course_id = :cid
+              AND ce.status IN ('active', 'dropped', 'pending_drop', 'pending')
+            """),
+            {"spid": student_profile_id, "cid": course_id},
+        )
+        .fetchall()
+    )
+    for (lg,) in rows:
+        pt = letter_to_point(str(lg) if lg is not None else None)
+        if pt is not None and pt >= 2.0:
+            return True
+    return False
+
+
+def has_fail_repeat_grade_for_course(
+    db: Session, student_profile_id: str, course_id: str
+) -> bool:
+    rows = (
+        db.execute(
+            text("""
+            SELECT g.letter_grade
+            FROM obs_course_enrollments ce
+            JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+            LEFT JOIN obs_grade_entries g ON g.enrollment_id = ce.id
+            WHERE ce.student_id = :spid AND cs.course_id = :cid
+              AND ce.status IN ('active', 'dropped', 'pending_drop', 'pending')
+            """),
+            {"spid": student_profile_id, "cid": course_id},
+        )
+        .fetchall()
+    )
+    for (lg,) in rows:
+        if _normalized_letter(lg) in _FAIL_REPEAT_GRADES:
+            return True
+    return False
+
+
+def _prior_enrollment_count_same_course(
+    db: Session,
+    student_profile_id: str,
+    course_id: str,
+    exclude_enrollment_id: str,
+) -> int:
+    row = db.execute(
+        text("""
+        SELECT COUNT(*) FROM obs_course_enrollments ce
+        JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+        WHERE ce.student_id = :spid AND cs.course_id = :cid AND ce.id != :ex
+          AND ce.status IN ('active', 'dropped', 'pending_drop', 'pending')
+        """),
+        {"spid": student_profile_id, "cid": course_id, "ex": exclude_enrollment_id},
+    ).scalar()
+    return int(row or 0)
+
+
+def has_prior_dz_for_course(
+    db: Session,
+    student_profile_id: str,
+    course_id: str,
+    exclude_enrollment_id: str,
+) -> bool:
+    row = db.execute(
+        text("""
+        SELECT 1 FROM obs_course_enrollments ce
+        JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+        JOIN obs_grade_entries g ON g.enrollment_id = ce.id
+        WHERE ce.student_id = :spid AND cs.course_id = :cid AND ce.id != :ex
+          AND ce.status IN ('active', 'dropped', 'pending_drop', 'pending')
+          AND UPPER(TRIM(BOTH FROM g.letter_grade)) = 'DZ'
+        LIMIT 1
+        """),
+        {"spid": student_profile_id, "cid": course_id, "ex": exclude_enrollment_id},
+    ).first()
+    return row is not None
+
+
+def enrollment_drop_allowed(
+    db: Session, student_profile_id: str, enrollment_id: str
+) -> tuple[bool, str]:
+    row = (
+        db.execute(
+            text("""
+            SELECT c.id AS course_id, c.class_year, c.curriculum_semester
+            FROM obs_course_enrollments ce
+            JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+            JOIN obs_courses c ON cs.course_id = c.id
+            WHERE ce.id = :eid AND ce.student_id = :spid
+            """),
+            {"eid": enrollment_id, "spid": student_profile_id},
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        return False, "Kayıt bulunamadı."
+    cid = _str_id(row["course_id"])
+    if not cid:
+        return False, "Ders bilgisi eksik."
+    cy, csem_raw = row.get("class_year"), row.get("curriculum_semester")
+    if _is_first_two_curriculum_semesters(cy, csem_raw):
+        return False, "İlk iki yarıyıl dersleri bırakılamaz."
+    stud_sem = student_program_semester_number(db, student_profile_id)
+    csem = _course_semester_index(cy, csem_raw)
+    prior_n = _prior_enrollment_count_same_course(
+        db, student_profile_id, cid, enrollment_id
+    )
+    if csem is not None and csem < stud_sem and prior_n == 0:
+        return (
+            False,
+            "Daha önce hiç alınmamış alt yarıyıl dersi bırakılamaz.",
+        )
+    if has_prior_dz_for_course(db, student_profile_id, cid, enrollment_id):
+        return False, "Devamsızlık (DZ) notu bulunan ders için bırakma yapılamaz."
+    return True, ""
+
+
+def registration_priority_tier(
+    db: Session, student_profile_id: str, course_id: str
+) -> tuple[int, str]:
+    stud_sem = student_program_semester_number(db, student_profile_id)
+    crow = (
+        db.execute(
+            text(
+                "SELECT class_year, curriculum_semester FROM obs_courses WHERE id = :id"
+            ),
+            {"id": course_id},
+        )
+        .mappings()
+        .first()
+    )
+    cy = crow.get("class_year") if crow else None
+    ccur = crow.get("curriculum_semester") if crow else None
+    csem = _course_semester_index(cy, ccur)
+
+    if has_fail_repeat_grade_for_course(db, student_profile_id, course_id):
+        return 1, "Tekrar / başarısız (F, DZ, …)"
+
+    passed = has_passing_grade_for_course(db, student_profile_id, course_id)
+    if csem is not None:
+        if csem < stud_sem and not passed:
+            return 2, "Hiç geçirilmemiş alt yarıyıl dersi"
+        if csem == stud_sem:
+            return 3, "Kendi yarıyılı dersi"
+        return 4, "Üst yarıyıl dersi"
+    try:
+        cy_i = int(cy or 0)
+        st_year = max(1, (stud_sem + 1) // 2)
+    except (TypeError, ValueError):
+        cy_i, st_year = 0, 1
+    if cy_i > 0 and cy_i < st_year and not passed:
+        return 2, "Hiç geçirilmemiş alt sınıf dersi"
+    if cy_i == st_year:
+        return 3, "Kendi sınıf yılı dersi"
+    if cy_i > st_year:
+        return 4, "Üst sınıf dersi"
+    return 3, "Kendi yarıyılı dersi"
+
+
+def _parse_schedule_time(v: Any) -> Optional[time]:
+    if v is None:
+        return None
+    if isinstance(v, time):
+        return v
+    if isinstance(v, datetime):
+        return v.time()
+    s = str(v).strip()
+    if len(s) >= 5 and s[2] == ":":
+        try:
+            h, m = int(s[0:2]), int(s[3:5])
+            return time(h, m)
+        except ValueError:
+            return None
+    return None
+
+
+def section_schedule_slot(
+    db: Session, section_id: str
+) -> Optional[dict[str, Any]]:
+    row = (
+        db.execute(
+            text("""
+            SELECT cs.id, cs.day_of_week, cs.start_time, cs.end_time
+            FROM obs_course_sections cs WHERE cs.id = :sid
+            """),
+            {"sid": section_id},
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        return None
+    return {
+        "id": _str_id(row["id"]),
+        "day": normalize_weekday_tr(row.get("day_of_week")),
+        "start": _parse_schedule_time(row.get("start_time")),
+        "end": _parse_schedule_time(row.get("end_time")),
+    }
+
+
+def _slots_overlap(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    if not a.get("day") or not b.get("day"):
+        return False
+    if a["day"] != b["day"]:
+        return False
+    sa, ea, sb, eb = a.get("start"), a.get("end"), b.get("start"), b.get("end")
+    if sa is None or ea is None or sb is None or eb is None:
+        return False
+    return sa < eb and ea > sb
+
+
+def schedule_conflict_message_for_section(
+    db: Session,
+    student_profile_id: str,
+    term_id: str,
+    new_section_id: str,
+    extra_section_ids: Optional[list[str]] = None,
+) -> Optional[str]:
+    """Öğrencinin aynı dönemdeki programı + eklenen şubeler ile yeni şube çakışıyorsa mesaj."""
+    new_sid = _str_id(new_section_id)
+    if not new_sid:
+        return None
+    new_slot = section_schedule_slot(db, new_sid)
+    if not new_slot or not new_slot.get("start") or not new_slot.get("end"):
+        return None
+    occupant_rows = (
+        db.execute(
+            text("""
+            SELECT cs.id FROM obs_course_enrollments ce
+            JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+            WHERE ce.student_id = :spid AND cs.term_id = :tid
+              AND ce.status IN ('active', 'pending', 'draft', 'pending_drop')
+            """),
+            {"spid": student_profile_id, "tid": term_id},
+        )
+        .fetchall()
+    )
+    check_ids: set[str] = {
+        _str_id(r[0]) for r in occupant_rows if r and r[0] is not None
+    }
+    for x in extra_section_ids or []:
+        sx = _str_id(x)
+        if sx:
+            check_ids.add(sx)
+    check_ids.discard(new_sid)
+    for oid in check_ids:
+        if not oid:
+            continue
+        other = section_schedule_slot(db, oid)
+        if other and _slots_overlap(new_slot, other):
+            return "Bu şube mevcut program ile saat çakışması oluşturuyor."
+    return None
+
+
+# AGNO/GNO: transkript, özet ve kayıt limiti aynı satır kümesini kullanır.
+_OBS_AGNO_ELIGIBLE_FROM = """
+    FROM obs_course_enrollments ce
+    JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+    JOIN obs_courses c ON cs.course_id = c.id
+    LEFT JOIN obs_grade_entries g ON g.enrollment_id = ce.id
+    WHERE ce.student_id = :spid
+      AND ce.status IN ('active', 'pending_drop', 'dropped')
+      AND (
+            g.is_finalized = true
+            OR (g.letter_grade IS NOT NULL AND LENGTH(TRIM(BOTH FROM g.letter_grade)) > 0)
+      )
+"""
+
+
+def _fetch_obs_agno_rows(
+    db: Session, student_profile_id: str, term_id: Optional[str] = None
+) -> list[Any]:
+    q = f"""
+        SELECT cs.term_id, ce.id AS enrollment_id, c.code AS course_code, c.name AS course_name,
+               COALESCE(c.akts, 0) AS akts, COALESCE(c.credits, 0) AS credits,
+               g.letter_grade, g.is_finalized
+        {_OBS_AGNO_ELIGIBLE_FROM}
+    """
+    params: dict[str, Any] = {"spid": student_profile_id}
+    if term_id:
+        q += " AND cs.term_id = :tid"
+        params["tid"] = term_id
+    return list(db.execute(text(q), params).mappings().all())
+
+
+def _accumulate_weighted_agno(
+    rows: list[Any],
+) -> tuple[float, int]:
+    weighted = 0.0
+    akts_sum = 0
+    for r in rows:
+        akts_i = int(r["akts"] or 0)
+        if akts_i <= 0:
+            continue
+        lg_raw = r.get("letter_grade")
+        lg = (str(lg_raw).strip() if lg_raw is not None else "") or ""
+        pt: Optional[float] = letter_to_point(lg) if lg else None
+        if pt is None:
+            if lg:
+                pt = 0.0
+            else:
+                continue
+        weighted += float(pt) * akts_i
+        akts_sum += akts_i
+    return weighted, akts_sum
+
+
+def compute_weighted_agno_totals(
+    db: Session, student_profile_id: str
+) -> tuple[Optional[float], int]:
+    """AGNO / GNO: Σ (harf→4\'lük puan × AKTS) / Σ AKTS.
+    Dönem notu kesinleşmiş veya harf notu girilmiş kayıtlar (transkript ile uyumlu)."""
+    rows = _fetch_obs_agno_rows(db, student_profile_id, None)
+    weighted, akts_sum = _accumulate_weighted_agno(rows)
+    if akts_sum <= 0:
+        return None, 0
+    return round(weighted / akts_sum, 2), akts_sum
 
 
 def resolve_student_profile_id(db: Session, webui_user_id: str) -> Optional[str]:
@@ -91,6 +551,7 @@ def get_student_profile_api(
                sp.program, sp.class_year, sp.gpa, sp.completed_akts, sp.total_akts_required,
                sp.status, sp.enrollment_date, sp.is_financially_eligible,
                sp.phone, sp.address, sp.emergency_contact, sp.emergency_phone,
+               sp.program_semester_number,
                u.name AS full_name, u.email AS email
         FROM obs_student_profiles sp
         LEFT JOIN obs_departments d ON sp.department_id = d.id
@@ -116,6 +577,7 @@ def get_student_profile_api(
         "faculty_name": r.get("faculty_name") or "",
         "program": r.get("program") or "",
         "class_level": int(r.get("class_year") or 0),
+        "program_semester_number": int(r.get("program_semester_number") or 1),
         "gpa": _num(r.get("gpa")),
         "status": r.get("status") or "",
         "enrollment_date": _fmt_date(r.get("enrollment_date")),
@@ -201,7 +663,10 @@ def get_advisor_api(db: Session, webui_user_id: str) -> dict[str, Any]:
 
 def list_terms(db: Session) -> list[dict[str, Any]]:
     rows = db.execute(text("""
-        SELECT id, name, start_date, end_date, is_active FROM obs_terms
+        SELECT id, name, start_date, end_date, is_active,
+               registration_open, registration_start, registration_end,
+               add_drop_open, add_drop_start, add_drop_end
+        FROM obs_terms
         ORDER BY start_date NULLS LAST, name
         """)).mappings().all()
     out = []
@@ -223,6 +688,20 @@ def list_terms(db: Session) -> list[dict[str, Any]]:
                 "starts_at": _fmt_date(r.get("start_date")) or "",
                 "ends_at": _fmt_date(r.get("end_date")) or "",
                 "is_active": bool(r.get("is_active")),
+                "registration_open": (
+                    None
+                    if r.get("registration_open") is None
+                    else bool(r.get("registration_open"))
+                ),
+                "registration_start": _fmt_date(r.get("registration_start")) or "",
+                "registration_end": _fmt_date(r.get("registration_end")) or "",
+                "add_drop_open": (
+                    None
+                    if r.get("add_drop_open") is None
+                    else bool(r.get("add_drop_open"))
+                ),
+                "add_drop_start": _fmt_date(r.get("add_drop_start")) or "",
+                "add_drop_end": _fmt_date(r.get("add_drop_end")) or "",
             }
         )
     return out
@@ -273,23 +752,27 @@ def list_student_feed_announcements(
     db: Session, department_id: Optional[str]
 ) -> list[dict[str, Any]]:
     if department_id:
-        q = """
-            SELECT id, title, content, audience_type, department_id, is_active, published_at, created_by_user_id
-            FROM obs_announcements
-            WHERE is_active = true
+        q = f"""
+            SELECT a.id, a.title, a.content, a.audience_type, a.department_id, a.is_active, a.published_at,
+                   a.created_by_user_id, u.name AS creator_name
+            FROM obs_announcements a
+            LEFT JOIN {USER_TBL} u ON u.id = a.created_by_user_id
+            WHERE a.is_active = true
               AND (
-                audience_type = 'all'
-                OR (audience_type = 'department' AND department_id::text = :did)
+                a.audience_type = 'all'
+                OR (a.audience_type = 'department' AND a.department_id::text = :did)
               )
-            ORDER BY published_at DESC NULLS LAST
+            ORDER BY a.published_at DESC NULLS LAST
             """
         rows = db.execute(text(q), {"did": department_id}).mappings().all()
     else:
-        q = """
-            SELECT id, title, content, audience_type, department_id, is_active, published_at, created_by_user_id
-            FROM obs_announcements
-            WHERE is_active = true AND audience_type = 'all'
-            ORDER BY published_at DESC NULLS LAST
+        q = f"""
+            SELECT a.id, a.title, a.content, a.audience_type, a.department_id, a.is_active, a.published_at,
+                   a.created_by_user_id, u.name AS creator_name
+            FROM obs_announcements a
+            LEFT JOIN {USER_TBL} u ON u.id = a.created_by_user_id
+            WHERE a.is_active = true AND a.audience_type = 'all'
+            ORDER BY a.published_at DESC NULLS LAST
             """
         rows = db.execute(text(q)).mappings().all()
     return [
@@ -304,6 +787,7 @@ def list_student_feed_announcements(
                 r.get("published_at").isoformat() if r.get("published_at") else None
             ),
             "created_by": r.get("created_by_user_id"),
+            "created_by_name": r.get("creator_name") or "",
         }
         for r in rows
     ]
@@ -312,18 +796,21 @@ def list_student_feed_announcements(
 def list_announcements_filtered(
     db: Session, audience_type: Optional[str], department_id: Optional[str]
 ) -> list[dict[str, Any]]:
-    q = """
-        SELECT id, title, content, audience_type, department_id, is_active, published_at, created_by_user_id
-        FROM obs_announcements WHERE is_active = true
+    q = f"""
+        SELECT a.id, a.title, a.content, a.audience_type, a.department_id, a.is_active, a.published_at,
+               a.created_by_user_id, u.name AS creator_name
+        FROM obs_announcements a
+        LEFT JOIN {USER_TBL} u ON u.id = a.created_by_user_id
+        WHERE a.is_active = true
         """
     params: dict[str, Any] = {}
     if audience_type:
-        q += " AND (audience_type = :at OR audience_type = 'all')"
+        q += " AND (a.audience_type = :at OR a.audience_type = 'all')"
         params["at"] = audience_type
     if department_id:
-        q += " AND (department_id::text = :did OR department_id IS NULL)"
+        q += " AND (a.department_id::text = :did OR a.department_id IS NULL)"
         params["did"] = department_id
-    q += " ORDER BY published_at DESC NULLS LAST"
+    q += " ORDER BY a.published_at DESC NULLS LAST"
     rows = db.execute(text(q), params).mappings().all()
     return [
         {
@@ -337,6 +824,7 @@ def list_announcements_filtered(
                 r.get("published_at").isoformat() if r.get("published_at") else None
             ),
             "created_by": r.get("created_by_user_id"),
+            "created_by_name": r.get("creator_name") or "",
         }
         for r in rows
     ]
@@ -461,14 +949,22 @@ def soft_delete_message(db: Session, message_id: str, user_id: str) -> bool:
 
 
 def list_enrollments(
-    db: Session, webui_user_id: str, term_id: Optional[str]
+    db: Session,
+    webui_user_id: str,
+    term_id: Optional[str],
+    statuses: Optional[tuple[str, ...]] = ("active",),
 ) -> tuple[Optional[str], list[dict[str, Any]]]:
     spid = resolve_student_profile_id(db, webui_user_id)
     if not spid:
         return None, []
-    q = """
+    allowed = {"draft", "pending", "pending_drop", "active", "dropped", "rejected"}
+    st = tuple(s for s in (statuses or ("active",)) if s in allowed)
+    if not st:
+        st = ("active",)
+    in_clause = ", ".join(f"'{x}'" for x in st)
+    q = f"""
         SELECT ce.id AS enrollment_id, ce.status,
-               c.code AS course_code, c.name AS course_name, c.credits, c.akts,
+               c.id AS course_id, c.code AS course_code, c.name AS course_name, c.credits, c.akts,
                c.theory_hours, c.language, c.class_year, c.type,
                cs.id AS section_id, cs.term_id, cs.section_no, cs.day_of_week,
                cs.start_time, cs.end_time, cs.capacity,
@@ -480,7 +976,7 @@ def list_enrollments(
         LEFT JOIN obs_classrooms cr ON cs.classroom_id = cr.id
         LEFT JOIN obs_academic_profiles ap ON cs.instructor_id = ap.id
         LEFT JOIN "user" ins_u ON ins_u.id = ap.user_id
-        WHERE ce.student_id = :spid AND ce.status = 'active'
+        WHERE ce.student_id = :spid AND ce.status IN ({in_clause})
         """
     params: dict[str, Any] = {"spid": spid}
     if term_id:
@@ -490,10 +986,15 @@ def list_enrollments(
     out = []
     for r in rows:
         room = r.get("classroom_code") or r.get("classroom_name") or ""
+        cid_en = _str_id(r.get("course_id"))
+        ptier, plab = (
+            registration_priority_tier(db, spid, cid_en) if cid_en else (3, "")
+        )
         out.append(
             {
                 "id": _str_id(r["enrollment_id"]),
                 "student_id": webui_user_id,
+                "course_id": cid_en or "",
                 "section_id": _str_id(r["section_id"]),
                 "course_code": r.get("course_code") or "",
                 "course_name": r.get("course_name") or "",
@@ -502,7 +1003,7 @@ def list_enrollments(
                 "akts": int(r.get("akts") or 0),
                 "term_id": _str_id(r["term_id"]),
                 "classroom": room,
-                "day_of_week": r.get("day_of_week") or "",
+                "day_of_week": normalize_weekday_tr(r.get("day_of_week")),
                 "start_time": _fmt_time(r.get("start_time")),
                 "end_time": _fmt_time(r.get("end_time")),
                 "section_no": int(r.get("section_no") or 0),
@@ -511,6 +1012,8 @@ def list_enrollments(
                 "class_year": int(r.get("class_year") or 0),
                 "type": r.get("type") or "",
                 "status": r.get("status") or "",
+                "registration_priority_tier": ptier,
+                "registration_priority_label": plab,
             }
         )
     total_akts = sum(x["akts"] for x in out if x["status"] == "active")
@@ -528,7 +1031,7 @@ def schedule_from_enrollments(
             continue
         sched.append(
             {
-                "day": r.get("day_of_week") or "",
+                "day": normalize_weekday_tr(r.get("day_of_week")),
                 "start": r.get("start_time") or "",
                 "end": r.get("end_time") or "",
                 "course_code": r.get("course_code") or "",
@@ -555,7 +1058,7 @@ def list_student_exams(
         JOIN obs_course_enrollments ce ON ce.course_section_id = cs.id AND ce.student_id = :spid
         JOIN obs_courses c ON cs.course_id = c.id
         LEFT JOIN obs_classrooms cr ON ex.classroom_id = cr.id
-        WHERE ce.status = 'active'
+        WHERE ce.status IN ('active', 'pending_drop')
         """
     params: dict[str, Any] = {"spid": spid}
     if term_id:
@@ -590,7 +1093,7 @@ def list_student_grades(
         JOIN obs_course_sections cs ON ce.course_section_id = cs.id
         JOIN obs_courses c ON cs.course_id = c.id
         LEFT JOIN obs_grade_entries g ON g.enrollment_id = ce.id
-        WHERE ce.student_id = :spid
+        WHERE ce.student_id = :spid AND ce.status IN ('active', 'pending_drop')
         """
     params: dict[str, Any] = {"spid": spid}
     if term_id:
@@ -617,27 +1120,28 @@ def gpa_summary(
     db: Session, webui_user_id: str, term_id: Optional[str]
 ) -> dict[str, Any]:
     prof = get_student_profile_api(db, webui_user_id) or {}
-    grades = list_student_grades(db, webui_user_id, term_id)
+    spid = resolve_student_profile_id(db, webui_user_id)
+    cum_gpa = (
+        compute_weighted_agno_totals(db, spid)[0] if spid else None
+    )
+    rows = _fetch_obs_agno_rows(db, spid, term_id) if spid else []
     terms_gpa: dict[str, dict[str, Any]] = {}
-    for g in grades:
-        if not g.get("letter_grade"):
+    for r in rows:
+        ak = int(r["akts"] or 0)
+        if ak <= 0:
             continue
-        pt = letter_to_point(g["letter_grade"])
+        lg_raw = r.get("letter_grade")
+        lg = (str(lg_raw).strip() if lg_raw is not None else "") or ""
+        pt: Optional[float] = letter_to_point(lg) if lg else None
         if pt is None:
-            continue
-        tid = g["term_id"]
+            if lg:
+                pt = 0.0
+            else:
+                continue
+        tid = _str_id(r["term_id"]) or ""
         if tid not in terms_gpa:
             terms_gpa[tid] = {"pts": 0.0, "akts": 0, "name": tid}
-        ak = 0
-        row = db.execute(
-            text(
-                "SELECT c.akts FROM obs_course_enrollments ce JOIN obs_course_sections cs ON ce.course_section_id = cs.id JOIN obs_courses c ON cs.course_id = c.id WHERE ce.id = :eid"
-            ),
-            {"eid": g["enrollment_id"]},
-        ).first()
-        if row:
-            ak = int(row[0] or 0)
-        terms_gpa[tid]["pts"] += pt * ak
+        terms_gpa[tid]["pts"] += float(pt) * ak
         terms_gpa[tid]["akts"] += ak
     term_list = []
     for tid, v in terms_gpa.items():
@@ -654,10 +1158,9 @@ def gpa_summary(
                 "akts_passed": v["akts"],
             }
         )
-    cum = prof.get("gpa")
     return {
         "student_user_id": webui_user_id,
-        "cumulative_gpa": cum,
+        "cumulative_gpa": cum_gpa,
         "total_akts_completed": int(prof.get("completed_akts") or 0),
         "class_level": int(prof.get("class_level") or 0),
         "terms": term_list,
@@ -665,18 +1168,22 @@ def gpa_summary(
 
 
 def transcript(db: Session, webui_user_id: str) -> dict[str, Any]:
-    grades = list_student_grades(db, webui_user_id, None)
-    by_term: dict[str, list[dict[str, Any]]] = {}
-    for g in grades:
-        if not g.get("is_finalized") and not g.get("letter_grade"):
-            continue
-        tid = g["term_id"]
-        by_term.setdefault(tid, []).append(g)
+    spid = resolve_student_profile_id(db, webui_user_id)
+    if not spid:
+        return {
+            "student_user_id": webui_user_id,
+            "cumulative_gpa": 0.0,
+            "total_akts": 0,
+            "transcript": [],
+        }
+    rows = _fetch_obs_agno_rows(db, spid, None)
+    by_term: dict[str, list[Any]] = {}
+    for r in rows:
+        tid = _str_id(r["term_id"]) or ""
+        by_term.setdefault(tid, []).append(r)
     transcript_terms = []
     total_akts = 0
-    weighted = 0.0
-    akts_sum = 0
-    for tid, tgrades in by_term.items():
+    for tid, trows in by_term.items():
         tname = (
             db.execute(
                 text("SELECT name FROM obs_terms WHERE id = :id"), {"id": tid}
@@ -686,38 +1193,32 @@ def transcript(db: Session, webui_user_id: str) -> dict[str, Any]:
         courses = []
         term_akts = 0
         term_pts = 0.0
-        for g in tgrades:
-            ak_row = (
-                db.execute(
-                    text("""
-                SELECT c.akts, c.credits FROM obs_course_enrollments ce
-                JOIN obs_course_sections cs ON ce.course_section_id = cs.id
-                JOIN obs_courses c ON cs.course_id = c.id WHERE ce.id = :eid
-                """),
-                    {"eid": g["enrollment_id"]},
-                )
-                .mappings()
-                .first()
-            )
-            akts = int(ak_row["akts"] or 0) if ak_row else 0
-            credits = int(ak_row["credits"] or 0) if ak_row else 0
-            lg = g.get("letter_grade") or ""
-            gp = letter_to_point(lg) or 0.0
+        for r in trows:
+            akts = int(r["akts"] or 0)
+            credits = int(r["credits"] or 0)
+            lg_raw = r.get("letter_grade")
+            lg = (str(lg_raw).strip() if lg_raw is not None else "") or ""
+            pt: Optional[float] = letter_to_point(lg) if lg else None
+            if pt is None:
+                if lg:
+                    pt = 0.0
+                else:
+                    pt = None
+            gp_for_display = float(pt) if pt is not None else 0.0
             courses.append(
                 {
-                    "code": g["course_code"],
-                    "name": g["course_name"],
+                    "code": r["course_code"],
+                    "name": r["course_name"],
                     "credits": credits,
                     "akts": akts,
                     "letter": lg,
-                    "grade_point": gp,
+                    "grade_point": gp_for_display,
                 }
             )
-            term_akts += akts
-            term_pts += gp * akts
             total_akts += akts
-            weighted += gp * akts
-            akts_sum += akts
+            if pt is not None and akts > 0:
+                term_akts += akts
+                term_pts += float(pt) * akts
         term_gpa = round(term_pts / term_akts, 2) if term_akts else 0.0
         transcript_terms.append(
             {
@@ -727,7 +1228,8 @@ def transcript(db: Session, webui_user_id: str) -> dict[str, Any]:
                 "term_akts": term_akts,
             }
         )
-    cgpa = round(weighted / akts_sum, 2) if akts_sum else 0.0
+    cgpa_val, _ = compute_weighted_agno_totals(db, spid)
+    cgpa = float(cgpa_val) if cgpa_val is not None else 0.0
     return {
         "student_user_id": webui_user_id,
         "cumulative_gpa": cgpa,
@@ -769,7 +1271,7 @@ def student_curriculum_status(db: Session, webui_user_id: str) -> dict[str, Any]
         JOIN obs_courses c ON cs.course_id = c.id
         JOIN obs_terms t ON cs.term_id = t.id
         LEFT JOIN obs_grade_entries g ON g.enrollment_id = ce.id
-        WHERE ce.student_id = :spid
+        WHERE ce.student_id = :spid AND ce.status = 'active'
         ORDER BY t.start_date DESC NULLS LAST, ce.id DESC
         """
     rows = db.execute(text(q), {"spid": spid}).mappings().all()
@@ -1037,10 +1539,11 @@ def available_sections(
         ).first()
         tid = _str_id(row[0]) if row else None
     q = """
-        SELECT cs.id, c.code AS course_code, c.name AS course_name, c.credits, c.akts,
+        SELECT cs.id, c.id AS course_id, c.code AS course_code, c.name AS course_name,
+               c.credits, c.akts, c.class_year, c.curriculum_semester,
                cs.day_of_week, cs.start_time, cs.end_time, cs.capacity,
                cr.code AS classroom_code, ins_u.name AS instructor_name,
-               (SELECT COUNT(*) FROM obs_course_enrollments ce2 WHERE ce2.course_section_id = cs.id AND ce2.status = 'active') AS enrolled
+               (SELECT COUNT(*) FROM obs_course_enrollments ce2 WHERE ce2.course_section_id = cs.id AND ce2.status IN ('active', 'pending', 'draft', 'pending_drop')) AS enrolled
         FROM obs_course_sections cs
         JOIN obs_courses c ON cs.course_id = c.id
         LEFT JOIN obs_classrooms cr ON cs.classroom_id = cr.id
@@ -1048,7 +1551,8 @@ def available_sections(
         LEFT JOIN "user" ins_u ON ins_u.id = ap.user_id
         WHERE NOT EXISTS (
             SELECT 1 FROM obs_course_enrollments ce
-            WHERE ce.course_section_id = cs.id AND ce.student_id = :spid AND ce.status = 'active'
+            WHERE ce.course_section_id = cs.id AND ce.student_id = :spid
+              AND ce.status IN ('active', 'pending', 'draft', 'pending_drop')
         )
         """
     params: dict[str, Any] = {"spid": spid}
@@ -1060,22 +1564,30 @@ def available_sections(
     for r in rows:
         cap = int(r.get("capacity") or 0)
         enr = int(r.get("enrolled") or 0)
+        cid = _str_id(r.get("course_id"))
+        ptier, plab = (
+            registration_priority_tier(db, spid, cid) if cid else (3, "")
+        )
         out.append(
             {
                 "id": _str_id(r["id"]),
+                "course_id": cid or "",
                 "course_code": r.get("course_code") or "",
                 "course_name": r.get("course_name") or "",
                 "credits": int(r.get("credits") or 0),
                 "akts": int(r.get("akts") or 0),
                 "instructor_name": r.get("instructor_name") or "",
-                "day_of_week": r.get("day_of_week") or "",
+                "day_of_week": normalize_weekday_tr(r.get("day_of_week")),
                 "start_time": _fmt_time(r.get("start_time")),
                 "end_time": _fmt_time(r.get("end_time")),
                 "classroom": r.get("classroom_code") or "",
                 "capacity": cap,
                 "enrolled": enr,
+                "registration_priority_tier": ptier,
+                "registration_priority_label": plab,
             }
         )
+    out.sort(key=lambda x: (x.get("registration_priority_tier", 9), x.get("course_code", "")))
     return tid, out
 
 
@@ -1115,7 +1627,7 @@ def academic_sections(
             "instructor_id": _str_id(r.get("instructor_id")),
             "instructor_name": r.get("instructor_name") or "",
             "classroom": r.get("classroom_code") or "",
-            "day_of_week": r.get("day_of_week") or "",
+            "day_of_week": normalize_weekday_tr(r.get("day_of_week")),
             "start_time": _fmt_time(r.get("start_time")),
             "end_time": _fmt_time(r.get("end_time")),
             "enrollment_count": int(r.get("enrollment_count") or 0),
@@ -1174,7 +1686,7 @@ def section_students(db: Session, section_id: str) -> tuple[Optional[dict], list
         "instructor_id": _str_id(sec.get("instructor_id")),
         "instructor_name": sec.get("instructor_name") or "",
         "classroom": sec.get("classroom_code") or "",
-        "day_of_week": sec.get("day_of_week") or "",
+        "day_of_week": normalize_weekday_tr(sec.get("day_of_week")),
         "start_time": _fmt_time(sec.get("start_time")),
         "end_time": _fmt_time(sec.get("end_time")),
         "enrollment_count": int(sec.get("enrollment_count") or 0),
@@ -1280,6 +1792,107 @@ def insert_exam(
     }
 
 
+def get_section_exam_row(
+    db: Session, section_id: str, exam_id: str
+) -> Optional[dict[str, Any]]:
+    r = (
+        db.execute(
+            text("""
+        SELECT ex.id, ex.course_section_id, ex.exam_type, ex.exam_date, ex.exam_time,
+               ex.weight_percent, cr.code AS classroom_code
+        FROM obs_exams ex
+        LEFT JOIN obs_classrooms cr ON ex.classroom_id = cr.id
+        WHERE ex.id = :eid AND ex.course_section_id = :sid
+        """),
+            {"eid": exam_id, "sid": section_id},
+        )
+        .mappings()
+        .first()
+    )
+    if not r:
+        return None
+    return {
+        "id": _str_id(r["id"]),
+        "course_section_id": _str_id(r["course_section_id"]),
+        "exam_type": r.get("exam_type") or "",
+        "exam_date": _fmt_date(r.get("exam_date")) or "",
+        "exam_time": _fmt_time(r.get("exam_time")),
+        "classroom": r.get("classroom_code") or "",
+        "weight_percent": float(r.get("weight_percent") or 0),
+    }
+
+
+def update_section_exam(
+    db: Session, section_id: str, exam_id: str, patch: dict[str, Any]
+) -> Optional[dict[str, Any]]:
+    exists = db.execute(
+        text(
+            "SELECT 1 FROM obs_exams WHERE id = :eid AND course_section_id = :sid"
+        ),
+        {"eid": exam_id, "sid": section_id},
+    ).first()
+    if not exists:
+        return None
+
+    set_parts: list[str] = []
+    bind: dict[str, Any] = {"eid": exam_id, "sid": section_id}
+    pi = 0
+
+    if "exam_type" in patch:
+        set_parts.append(f"exam_type = :p{pi}")
+        bind[f"p{pi}"] = str(patch.get("exam_type") or "")
+        pi += 1
+    if "exam_date" in patch:
+        ed = str(patch.get("exam_date") or "").strip()
+        if ed:
+            set_parts.append(f"exam_date = CAST(:p{pi} AS date)")
+            bind[f"p{pi}"] = ed
+        else:
+            set_parts.append("exam_date = NULL")
+        pi += 1
+    if "exam_time" in patch:
+        et_raw = patch.get("exam_time")
+        s = str(et_raw).strip() if et_raw is not None else ""
+        tm = s + ":00" if len(s) == 5 and s[2] == ":" else (s if s else "09:00:00")
+        set_parts.append(f"exam_time = CAST(:p{pi} AS time)")
+        bind[f"p{pi}"] = tm
+        pi += 1
+    if "weight_percent" in patch:
+        set_parts.append(f"weight_percent = :p{pi}")
+        bind[f"p{pi}"] = float(patch.get("weight_percent") or 0)
+        pi += 1
+    if "classroom" in patch:
+        classroom_raw = patch.get("classroom")
+        cr_id = None
+        if classroom_raw:
+            row = db.execute(
+                text("SELECT id FROM obs_classrooms WHERE code = :c LIMIT 1"),
+                {"c": str(classroom_raw).strip()},
+            ).first()
+            if row:
+                cr_id = str(row[0])
+        set_parts.append(f"classroom_id = :p{pi}")
+        bind[f"p{pi}"] = cr_id
+        pi += 1
+
+    if set_parts:
+        q = f"UPDATE obs_exams SET {', '.join(set_parts)} WHERE id = :eid AND course_section_id = :sid"
+        db.execute(text(q), bind)
+        db.commit()
+    return get_section_exam_row(db, section_id, exam_id)
+
+
+def delete_section_exam(db: Session, section_id: str, exam_id: str) -> bool:
+    res = db.execute(
+        text(
+            "DELETE FROM obs_exams WHERE id = :eid AND course_section_id = :sid"
+        ),
+        {"eid": exam_id, "sid": section_id},
+    )
+    db.commit()
+    return res.rowcount > 0
+
+
 def section_grade_rows(db: Session, section_id: str) -> list[dict[str, Any]]:
     rows = (
         db.execute(
@@ -1332,25 +1945,77 @@ def upsert_grades(db: Session, section_id: str, grades: list[dict[str, Any]]) ->
             {"eid": eid},
         ).first()
         if exists:
+            set_parts = [
+                "midterm = COALESCE(:m, midterm)",
+                "final = COALESCE(:f, final)",
+                "updated_at = NOW()",
+            ]
+            params: dict[str, Any] = {"eid": eid, "m": mid, "f": fin}
+            if "letter_grade" in item:
+                lv = item.get("letter_grade")
+                if lv is None or (isinstance(lv, str) and not str(lv).strip()):
+                    set_parts.insert(2, "letter_grade = NULL")
+                else:
+                    set_parts.insert(2, "letter_grade = :lg")
+                    params["lg"] = str(lv).strip().upper()[:8]
             db.execute(
-                text("""
-                UPDATE obs_grade_entries SET midterm = COALESCE(:m, midterm), final = COALESCE(:f, final), updated_at = NOW()
-                WHERE enrollment_id = :eid
-                """),
-                {"eid": eid, "m": mid, "f": fin},
+                text(
+                    f"UPDATE obs_grade_entries SET {', '.join(set_parts)} WHERE enrollment_id = :eid"
+                ),
+                params,
             )
         else:
             gid = str(uuid.uuid4())
-            db.execute(
-                text("""
-                INSERT INTO obs_grade_entries (id, enrollment_id, midterm, final, is_finalized, is_published, created_at, updated_at)
-                VALUES (:gid, :eid, :m, :f, false, false, NOW(), NOW())
-                """),
-                {"gid": gid, "eid": eid, "m": mid, "f": fin},
-            )
+            lg_insert: Optional[str] = None
+            if "letter_grade" in item:
+                lv2 = item.get("letter_grade")
+                if lv2 is not None and str(lv2).strip():
+                    lg_insert = str(lv2).strip().upper()[:8]
+            if lg_insert is not None:
+                db.execute(
+                    text("""
+                    INSERT INTO obs_grade_entries (id, enrollment_id, midterm, final, letter_grade, is_finalized, is_published, created_at, updated_at)
+                    VALUES (:gid, :eid, :m, :f, :lg, false, false, NOW(), NOW())
+                    """),
+                    {"gid": gid, "eid": eid, "m": mid, "f": fin, "lg": lg_insert},
+                )
+            else:
+                db.execute(
+                    text("""
+                    INSERT INTO obs_grade_entries (id, enrollment_id, midterm, final, is_finalized, is_published, created_at, updated_at)
+                    VALUES (:gid, :eid, :m, :f, false, false, NOW(), NOW())
+                    """),
+                    {"gid": gid, "eid": eid, "m": mid, "f": fin},
+                )
         n += 1
     db.commit()
     return n
+
+
+def delete_grade_entry(
+    db: Session, section_id: str, enrollment_id: str
+) -> tuple[bool, str]:
+    row = db.execute(
+        text(
+            """
+            SELECT g.is_finalized
+            FROM obs_grade_entries g
+            JOIN obs_course_enrollments ce ON ce.id = g.enrollment_id
+            WHERE g.enrollment_id = :eid AND ce.course_section_id = :sid
+            """
+        ),
+        {"eid": enrollment_id, "sid": section_id},
+    ).first()
+    if not row:
+        return False, "not_found"
+    if bool(row[0]):
+        return False, "finalized"
+    db.execute(
+        text("DELETE FROM obs_grade_entries WHERE enrollment_id = :eid"),
+        {"eid": enrollment_id},
+    )
+    db.commit()
+    return True, ""
 
 
 def finalize_section_grades(db: Session, section_id: str) -> None:
@@ -1416,7 +2081,8 @@ def academic_advisees(db: Session, webui_user_id: str) -> list[dict[str, Any]]:
     rows = (
         db.execute(
             text(f"""
-        SELECT sp.student_number, u.name, d.code AS dept_code, sp.class_year, sp.gpa, sp.status
+        SELECT sp.student_number, u.name, d.code AS dept_code, sp.class_year, sp.gpa, sp.status,
+               sp.user_id AS student_user_id
         FROM obs_student_advisors sa
         JOIN obs_student_profiles sp ON sa.student_id = sp.id
         LEFT JOIN {USER_TBL} u ON u.id = sp.user_id
@@ -1432,6 +2098,7 @@ def academic_advisees(db: Session, webui_user_id: str) -> list[dict[str, Any]]:
     return [
         {
             "student_no": r.get("student_number") or "",
+            "student_user_id": r.get("student_user_id") or "",
             "name": r.get("name") or "",
             "department": r.get("dept_code") or "",
             "class_level": int(r.get("class_year") or 0),
@@ -1447,7 +2114,7 @@ def list_approval_requests_for_academic(
 ) -> list[dict[str, Any]]:
     q = """
         SELECT ar.id, ar.student_id, ar.request_type, ar.related_enrollment_id, ar.status, ar.note, ar.created_at,
-               sp.student_number, u.name AS student_name,
+               sp.student_number, sp.user_id AS student_user_id, u.name AS student_name,
                c.code AS course_code, c.name AS course_name
         FROM obs_approval_requests ar
         JOIN obs_student_profiles sp ON ar.student_id = sp.id
@@ -1466,6 +2133,7 @@ def list_approval_requests_for_academic(
     return [
         {
             "id": _str_id(r["id"]),
+            "student_user_id": r.get("student_user_id") or "",
             "student_name": r.get("student_name") or "",
             "student_no": r.get("student_number") or "",
             "request_type": r.get("request_type") or "",
@@ -1480,6 +2148,989 @@ def list_approval_requests_for_academic(
     ]
 
 
+def _batch_flow_and_term_from_note(note: Optional[str]) -> tuple[Optional[str], str]:
+    """İlk satırdan dönem id ve akış: registration | add_drop."""
+    if not note:
+        return None, ""
+    s = str(note).strip()
+    if s.startswith(BATCH_ADDDROP_TERM_NOTE_PREFIX):
+        rest = s[len(BATCH_ADDDROP_TERM_NOTE_PREFIX) :].split("\n", 1)[0].strip()
+        return (rest or None), "add_drop"
+    if s.startswith(BATCH_TERM_NOTE_PREFIX):
+        rest = s[len(BATCH_TERM_NOTE_PREFIX) :].split("\n", 1)[0].strip()
+        return (rest or None), "registration"
+    return None, ""
+
+
+def _ensure_advisor_for_student(
+    db: Session, advisor_user_id: str, student_profile_id: str
+) -> bool:
+    apid = resolve_academic_profile_id(db, advisor_user_id)
+    if not apid:
+        return False
+    row = db.execute(
+        text("""
+        SELECT 1 FROM obs_student_advisors sa
+        WHERE sa.student_id = :spid AND sa.advisor_id = :apid
+          AND (sa.valid_to IS NULL OR sa.valid_to >= CURRENT_DATE)
+        """),
+        {"spid": student_profile_id, "apid": apid},
+    ).first()
+    return row is not None
+
+
+def _finalize_pending_enrollments_for_term(
+    db: Session, student_profile_id: str, term_id: str
+) -> None:
+    db.execute(
+        text("""
+        UPDATE obs_course_enrollments ce SET status = 'active', advisor_approved = true,
+            advisor_approved_at = NOW()
+        FROM obs_course_sections cs
+        WHERE ce.course_section_id = cs.id AND ce.student_id = :spid AND cs.term_id = :tid
+          AND ce.status = 'pending'
+        """),
+        {"spid": student_profile_id, "tid": term_id},
+    )
+
+
+def _revert_pending_enrollments_to_draft(
+    db: Session, student_profile_id: str, term_id: str
+) -> None:
+    db.execute(
+        text("""
+        UPDATE obs_course_enrollments ce SET status = 'draft', advisor_approved = false,
+            advisor_approved_at = NULL
+        FROM obs_course_sections cs
+        WHERE ce.course_section_id = cs.id AND ce.student_id = :spid AND cs.term_id = :tid
+          AND ce.status = 'pending'
+        """),
+        {"spid": student_profile_id, "tid": term_id},
+    )
+
+
+def _term_window_allowed(db: Session, term_id: str, mode: str) -> tuple[bool, str]:
+    """mode: registration | add_drop"""
+    row = (
+        db.execute(
+            text("""
+            SELECT registration_open, registration_start, registration_end,
+                   add_drop_open, add_drop_start, add_drop_end
+            FROM obs_terms WHERE id = :tid
+            """),
+            {"tid": term_id},
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        return False, "Dönem bulunamadı."
+    today = date.today()
+    if mode == "registration":
+        if row.get("registration_open") is False:
+            return False, "Ders kayıt dönemi kapalı."
+        rs, re = row.get("registration_start"), row.get("registration_end")
+        if rs is not None:
+            rs_d = rs.date() if isinstance(rs, datetime) else rs
+            if today < rs_d:
+                return False, "Ders kayıt tarihleri henüz başlamadı."
+        if re is not None:
+            re_d = re.date() if isinstance(re, datetime) else re
+            if today > re_d:
+                return False, "Ders kayıt süresi sona erdi."
+        return True, ""
+    if row.get("add_drop_open") is False:
+        return False, "Ders ekle/bırak dönemi kapalı."
+    ads, ade = row.get("add_drop_start"), row.get("add_drop_end")
+    if ads is not None:
+        ads_d = ads.date() if isinstance(ads, datetime) else ads
+        if today < ads_d:
+            return False, "Ekle/bırak tarihleri henüz başlamadı."
+    if ade is not None:
+        ade_d = ade.date() if isinstance(ade, datetime) else ade
+        if today > ade_d:
+            return False, "Ekle/bırak süresi sona erdi."
+    ok_dl, msg_dl = _add_drop_calendar_deadline_ok(db, term_id)
+    if not ok_dl:
+        return False, msg_dl
+    return True, ""
+
+
+def _add_drop_calendar_deadline_ok(db: Session, term_id: str) -> tuple[bool, str]:
+    row = (
+        db.execute(
+            text(
+                "SELECT add_drop_deadline FROM obs_registration_settings WHERE term_id = :tid LIMIT 1"
+            ),
+            {"tid": term_id},
+        )
+        .mappings()
+        .first()
+    )
+    if not row or row.get("add_drop_deadline") is None:
+        return True, ""
+    dl = row["add_drop_deadline"]
+    dl_d = dl.date() if isinstance(dl, datetime) else dl
+    if dl_d and date.today() > dl_d:
+        return False, "Ekle/bırak için belirlenen son tarih geçti."
+    return True, ""
+
+
+def _finalize_adddrop_batch(
+    db: Session, student_profile_id: str, term_id: str
+) -> None:
+    db.execute(
+        text("""
+        UPDATE obs_course_enrollments ce SET status = 'active', advisor_approved = true,
+            advisor_approved_at = NOW()
+        FROM obs_course_sections cs
+        WHERE ce.course_section_id = cs.id AND ce.student_id = :spid AND cs.term_id = :tid
+          AND ce.status = 'pending'
+        """),
+        {"spid": student_profile_id, "tid": term_id},
+    )
+    db.execute(
+        text("""
+        UPDATE obs_course_enrollments ce SET status = 'dropped', dropped_at = NOW()
+        FROM obs_course_sections cs
+        WHERE ce.course_section_id = cs.id AND ce.student_id = :spid AND cs.term_id = :tid
+          AND ce.status = 'pending_drop'
+        """),
+        {"spid": student_profile_id, "tid": term_id},
+    )
+
+
+def _purge_enrollment_row(db: Session, student_profile_id: str, enrollment_id: str) -> None:
+    row = db.execute(
+        text("""
+        SELECT ce.course_section_id FROM obs_course_enrollments ce
+        WHERE ce.id = :eid AND ce.student_id = :spid
+        """),
+        {"eid": enrollment_id, "spid": student_profile_id},
+    ).first()
+    if not row:
+        return
+    csid = _str_id(row[0])
+    db.execute(
+        text("DELETE FROM obs_grade_entries WHERE enrollment_id = :eid"),
+        {"eid": enrollment_id},
+    )
+    if csid:
+        db.execute(
+            text(
+                "DELETE FROM obs_attendance_records WHERE student_id = :spid AND course_section_id = :csid"
+            ),
+            {"spid": student_profile_id, "csid": csid},
+        )
+    db.execute(
+        text("DELETE FROM obs_approval_requests WHERE related_enrollment_id = :eid"),
+        {"eid": enrollment_id},
+    )
+    db.execute(
+        text("DELETE FROM obs_course_enrollments WHERE id = :eid"),
+        {"eid": enrollment_id},
+    )
+
+
+def _revert_adddrop_batch(
+    db: Session, student_profile_id: str, term_id: str
+) -> None:
+    db.execute(
+        text("""
+        UPDATE obs_course_enrollments ce SET status = 'active'
+        FROM obs_course_sections cs
+        WHERE ce.course_section_id = cs.id AND ce.student_id = :spid AND cs.term_id = :tid
+          AND ce.status = 'pending_drop'
+        """),
+        {"spid": student_profile_id, "tid": term_id},
+    )
+    db.execute(
+        text("""
+        UPDATE obs_course_enrollments ce SET status = 'draft', advisor_approved = false,
+            advisor_approved_at = NULL
+        FROM obs_course_sections cs
+        WHERE ce.course_section_id = cs.id AND ce.student_id = :spid AND cs.term_id = :tid
+          AND ce.status = 'pending' AND ce.enrollment_reason = 'add_drop'
+        """),
+        {"spid": student_profile_id, "tid": term_id},
+    )
+    adv_rows = (
+        db.execute(
+            text("""
+            SELECT ce.id FROM obs_course_enrollments ce
+            JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+            WHERE ce.student_id = :spid AND cs.term_id = :tid
+              AND ce.status = 'pending' AND ce.enrollment_reason = 'advisor_added'
+            """),
+            {"spid": student_profile_id, "tid": term_id},
+        )
+        .fetchall()
+    )
+    for ar in adv_rows:
+        _purge_enrollment_row(db, student_profile_id, _str_id(ar[0]))
+
+
+def student_term_scheduled_akts(db: Session, student_profile_id: str, term_id: str) -> int:
+    """Dönemdeki yük: active + pending + draft + pending_drop (henüz düşmemiş)."""
+    row = db.execute(
+        text("""
+        SELECT COALESCE(SUM(c.akts), 0) FROM obs_course_enrollments ce
+        JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+        JOIN obs_courses c ON cs.course_id = c.id
+        WHERE ce.student_id = :spid AND cs.term_id = :tid
+          AND ce.status IN ('active', 'pending', 'draft', 'pending_drop')
+        """),
+        {"spid": student_profile_id, "tid": term_id},
+    ).scalar()
+    return int(row or 0)
+
+
+def effective_akts_limit_for_student(
+    db: Session, student_profile_id: str, term_id: str
+) -> tuple[int, str, dict[str, Any]]:
+    settings = registration_settings_row(db, term_id) or {}
+    min_mid = float(settings.get("min_gpa_for_high_akts") or 2.50)
+    min_top = float(settings.get("min_gpa_for_top_akts") or 3.50)
+    meta = {
+        "akts_limit_default": int(settings.get("akts_limit_default") or 30),
+        "akts_limit_high": int(settings.get("akts_limit_high") or 36),
+        "akts_limit_top": int(settings.get("akts_limit_top") or 45),
+        "akts_limit_prep": int(settings.get("akts_limit_prep") or 25),
+        "min_gpa_for_high_akts": min_mid,
+        "min_gpa_for_top_akts": min_top,
+    }
+    stud_sem = student_program_semester_number(db, student_profile_id)
+    if student_is_prep(db, student_profile_id):
+        return (
+            meta["akts_limit_prep"],
+            "prep",
+            {
+                **meta,
+                "gpa": None,
+                "gpa_computed": None,
+                "gpa_profile": None,
+                "akts_counted_in_gpa": 0,
+                "program_semester_number": stud_sem,
+            },
+        )
+    agno, akts_in_gpa = compute_weighted_agno_totals(db, student_profile_id)
+    grow = db.execute(
+        text("SELECT gpa FROM obs_student_profiles WHERE id = :id"),
+        {"id": student_profile_id},
+    ).first()
+    profile_gpa = float(grow[0]) if grow and grow[0] is not None else None
+    gpa_eff = agno if agno is not None else profile_gpa
+    meta_out = {
+        **meta,
+        "gpa": gpa_eff,
+        "gpa_computed": agno,
+        "gpa_profile": profile_gpa,
+        "akts_counted_in_gpa": akts_in_gpa,
+        "program_semester_number": stud_sem,
+    }
+    if stud_sem <= 2:
+        return meta["akts_limit_default"], "early_semesters", meta_out
+    if gpa_eff is None or gpa_eff < min_mid:
+        return meta["akts_limit_default"], "low_gpa", meta_out
+    if gpa_eff < min_top:
+        return meta["akts_limit_high"], "mid_gpa", meta_out
+    return meta["akts_limit_top"], "top_gpa", meta_out
+
+
+def student_registration_limits_payload(
+    db: Session, webui_user_id: str, term_id: Optional[str]
+) -> Optional[dict[str, Any]]:
+    spid = resolve_student_profile_id(db, webui_user_id)
+    if not spid:
+        return None
+    tid = term_id or resolve_active_term_id(db)
+    if not tid:
+        agno_e, akts_e = compute_weighted_agno_totals(db, spid)
+        grow = db.execute(
+            text("SELECT gpa FROM obs_student_profiles WHERE id = :id"),
+            {"id": spid},
+        ).first()
+        pg = float(grow[0]) if grow and grow[0] is not None else None
+        gpa_eff = agno_e if agno_e is not None else pg
+        psem = student_program_semester_number(db, spid)
+        return {
+            "student_user_id": webui_user_id,
+            "term_id": "",
+            "akts_max": 30,
+            "rule": "default",
+            "gpa": gpa_eff,
+            "gpa_computed": agno_e,
+            "gpa_profile": pg,
+            "akts_counted_in_gpa": akts_e,
+            "is_prep": student_is_prep(db, spid),
+            "current_term_akts": 0,
+            "akts_limit_default": 30,
+            "akts_limit_high": 36,
+            "akts_limit_top": 45,
+            "akts_limit_prep": 25,
+            "min_gpa_for_high_akts": 2.50,
+            "min_gpa_for_top_akts": 3.50,
+            "program_semester_number": psem,
+        }
+    akts_max, rule, det = effective_akts_limit_for_student(db, spid, tid)
+    load = student_term_scheduled_akts(db, spid, tid)
+    return {
+        "student_user_id": webui_user_id,
+        "term_id": tid,
+        "akts_max": akts_max,
+        "rule": rule,
+        "gpa": det.get("gpa"),
+        "gpa_computed": det.get("gpa_computed"),
+        "gpa_profile": det.get("gpa_profile"),
+        "akts_counted_in_gpa": int(det.get("akts_counted_in_gpa") or 0),
+        "is_prep": student_is_prep(db, spid),
+        "current_term_akts": load,
+        "akts_limit_default": det["akts_limit_default"],
+        "akts_limit_high": det["akts_limit_high"],
+        "akts_limit_top": det["akts_limit_top"],
+        "akts_limit_prep": det["akts_limit_prep"],
+        "min_gpa_for_high_akts": det["min_gpa_for_high_akts"],
+        "min_gpa_for_top_akts": det["min_gpa_for_top_akts"],
+        "program_semester_number": int(det.get("program_semester_number") or 1),
+    }
+
+
+def upsert_draft_enrollments(
+    db: Session,
+    webui_user_id: str,
+    section_ids: list[str],
+    mode: str,
+) -> tuple[list[dict[str, Any]], Optional[str]]:
+    """Taslak satırlar — obs_course_enrollments.status = draft. mode: registration | add_drop"""
+    spid = resolve_student_profile_id(db, webui_user_id)
+    if not spid:
+        return [], "Öğrenci profili yok."
+    if mode not in ("registration", "add_drop"):
+        return [], "Geçersiz kayıt modu."
+    out: list[dict[str, Any]] = []
+    for sid in section_ids:
+        meta = (
+            db.execute(
+                text("""
+                SELECT cs.id, cs.term_id, cs.course_id, cs.capacity, COALESCE(c.akts, 0) AS course_akts,
+                  (SELECT COUNT(*) FROM obs_course_enrollments ce
+                   WHERE ce.course_section_id = cs.id
+                     AND ce.status IN ('active', 'pending', 'draft', 'pending_drop')) AS taken
+                FROM obs_course_sections cs
+                JOIN obs_courses c ON cs.course_id = c.id
+                WHERE cs.id = :csid
+                """),
+                {"csid": sid},
+            )
+            .mappings()
+            .first()
+        )
+        if not meta:
+            continue
+        tid = _str_id(meta["term_id"])
+        ok, reason = _term_window_allowed(db, tid, mode)
+        if not ok:
+            return [], reason
+        dup = db.execute(
+            text("""
+            SELECT 1 FROM obs_course_enrollments ce
+            JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+            WHERE ce.student_id = :spid AND cs.term_id = :tid AND cs.course_id = :cid
+              AND ce.status IN ('active', 'pending', 'draft', 'pending_drop')
+            """),
+            {
+                "spid": spid,
+                "tid": tid,
+                "cid": str(meta["course_id"]),
+            },
+        ).first()
+        if dup:
+            continue
+        batch_sids = [str(x["section_id"]) for x in out if x.get("section_id")]
+        sc_msg = schedule_conflict_message_for_section(
+            db, spid, tid, sid, batch_sids
+        )
+        if sc_msg:
+            return [], sc_msg
+        taken = int(meta.get("taken") or 0)
+        cap = int(meta.get("capacity") or 0)
+        if cap and taken >= cap:
+            return [], "Kontenjan dolu."
+        new_akts = int(meta.get("course_akts") or 0)
+        load = student_term_scheduled_akts(db, spid, tid)
+        queued = sum(int(x.get("akts") or 0) for x in out)
+        akts_max, _, _ = effective_akts_limit_for_student(db, spid, tid)
+        if load + queued + new_akts > akts_max:
+            return (
+                [],
+                f"AKTS üst sınırı ({akts_max}) aşılır (mevcut yük: {load + queued}, eklenecek: {new_akts}).",
+            )
+        eid = str(uuid.uuid4())
+        db.execute(
+            text("""
+            INSERT INTO obs_course_enrollments
+            (id, student_id, course_section_id, status, enrollment_reason, advisor_approved)
+            VALUES (:id, :spid, :csid, 'draft', :reason, false)
+            """),
+            {
+                "id": eid,
+                "spid": spid,
+                "csid": sid,
+                "reason": mode,
+            },
+        )
+        row = (
+            db.execute(
+                text("""
+            SELECT c.code, c.name, c.akts FROM obs_course_sections cs
+            JOIN obs_courses c ON cs.course_id = c.id WHERE cs.id = :csid
+            """),
+                {"csid": sid},
+            )
+            .mappings()
+            .first()
+        )
+        out.append(
+            {
+                "enrollment_id": eid,
+                "section_id": sid,
+                "course_code": row.get("course_code") if row else "",
+                "course_name": row.get("course_name") if row else "",
+                "akts": int(row.get("akts") or 0) if row else 0,
+                "status": "draft",
+            }
+        )
+    db.commit()
+    return out, None
+
+
+def delete_draft_enrollment(
+    db: Session, webui_user_id: str, enrollment_id: str
+) -> bool:
+    spid = resolve_student_profile_id(db, webui_user_id)
+    if not spid:
+        return False
+    res = db.execute(
+        text("""
+        DELETE FROM obs_course_enrollments
+        WHERE id = :eid AND student_id = :spid AND status = 'draft'
+        """),
+        {"eid": enrollment_id, "spid": spid},
+    )
+    db.commit()
+    return res.rowcount > 0
+
+
+def submit_schedule_to_advisor(
+    db: Session,
+    webui_user_id: str,
+    note: Optional[str],
+    approver_user_id: Optional[str],
+    flow: str = "registration",
+    enrollment_ids_to_drop: Optional[list[str]] = None,
+) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    """Taslakları pending / aktifleri pending_drop yapar; tek schedule_batch talebi oluşturur."""
+    spid = resolve_student_profile_id(db, webui_user_id)
+    if not spid:
+        return None, "Öğrenci profili yok."
+    if not approver_user_id:
+        return None, "Danışman atanmamış."
+    flow = flow if flow in ("registration", "add_drop") else "registration"
+    eids_drop = list(dict.fromkeys(enrollment_ids_to_drop or []))
+
+    pending_chk = db.execute(
+        text("""
+        SELECT 1 FROM obs_course_enrollments ce
+        WHERE ce.student_id = :spid AND ce.status IN ('pending', 'pending_drop') LIMIT 1
+        """),
+        {"spid": spid},
+    ).first()
+    if pending_chk:
+        return None, "Onay bekleyen bir listeniz var."
+
+    if flow == "registration":
+        term_row = db.execute(
+            text("""
+            SELECT DISTINCT cs.term_id FROM obs_course_enrollments ce
+            JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+            WHERE ce.student_id = :spid AND ce.status = 'draft'
+              AND (ce.enrollment_reason = 'registration' OR ce.enrollment_reason IS NULL) LIMIT 1
+            """),
+            {"spid": spid},
+        ).first()
+        if not term_row:
+            return None, "Sepette ders yok."
+        term_id = _str_id(term_row[0])
+        ok, reason = _term_window_allowed(db, term_id, "registration")
+        if not ok:
+            return None, reason
+        akts_max, _, _ = effective_akts_limit_for_student(db, spid, term_id)
+        load = student_term_scheduled_akts(db, spid, term_id)
+        if load > akts_max:
+            return None, f"AKTS toplamı ({load}) üst sınırı ({akts_max}) a çıkamaz; sepeti güncelleyin."
+        db.execute(
+            text("""
+                UPDATE obs_course_enrollments ce SET status = 'pending'
+                FROM obs_course_sections cs
+                WHERE ce.course_section_id = cs.id AND ce.student_id = :spid
+                  AND cs.term_id = :tid AND ce.status = 'draft'
+                  AND (ce.enrollment_reason = 'registration' OR ce.enrollment_reason IS NULL)
+            """),
+            {"spid": spid, "tid": term_id},
+        )
+        batch_note = BATCH_TERM_NOTE_PREFIX + (term_id or "")
+    else:
+        drop_terms: set[str] = set()
+        for eid in eids_drop:
+            drow = (
+                db.execute(
+                    text("""
+                    SELECT cs.term_id FROM obs_course_enrollments ce
+                    JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+                    WHERE ce.id = :eid AND ce.student_id = :spid AND ce.status = 'active'
+                    """),
+                    {"eid": eid, "spid": spid},
+                )
+                .mappings()
+                .first()
+            )
+            if not drow:
+                return None, "Bırakılacak kayıtlardan biri geçersiz veya aktif değil."
+            ok_drop, deny_reason = enrollment_drop_allowed(db, spid, eid)
+            if not ok_drop:
+                return None, deny_reason
+            drop_terms.add(_str_id(drow["term_id"]))
+        if len(drop_terms) > 1:
+            return None, "Tüm bırakılacak dersler aynı dönemde olmalı."
+
+        draft_term_rows = db.execute(
+            text("""
+            SELECT DISTINCT cs.term_id FROM obs_course_enrollments ce
+            JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+            WHERE ce.student_id = :spid AND ce.status = 'draft'
+              AND ce.enrollment_reason = 'add_drop'
+            """),
+            {"spid": spid},
+        ).fetchall()
+        draft_terms = {_str_id(t[0]) for t in draft_term_rows}
+        if len(draft_terms) > 1:
+            return None, "Taslak dersler tek döneme ait olmalı."
+
+        term_id: Optional[str] = None
+        if draft_terms:
+            term_id = next(iter(draft_terms))
+        if drop_terms:
+            dt = next(iter(drop_terms))
+            if term_id and term_id != dt:
+                return None, "Eklenecek ve bırakılacak dersler aynı döneme ait olmalı."
+            term_id = dt
+        if not term_id:
+            return None, "Sepette ders veya bırakılacak kayıt yok."
+        ok, reason = _term_window_allowed(db, term_id, "add_drop")
+        if not ok:
+            return None, reason
+        akts_max, _, _ = effective_akts_limit_for_student(db, spid, term_id)
+        load = student_term_scheduled_akts(db, spid, term_id)
+        if load > akts_max:
+            return None, f"AKTS toplamı ({load}) üst sınırı ({akts_max}) a çıkamaz; sepeti güncelleyin."
+        if eids_drop:
+            if not all(isinstance(x, str) and x for x in eids_drop):
+                return None, "Geçersiz bırakma listesi."
+            bind = {f"e{i}": eids_drop[i] for i in range(len(eids_drop))}
+            in_ph = ", ".join(f":e{i}" for i in range(len(eids_drop)))
+            res_drop = db.execute(
+                text(f"""
+                UPDATE obs_course_enrollments ce SET status = 'pending_drop'
+                FROM obs_course_sections cs
+                WHERE ce.course_section_id = cs.id AND ce.student_id = :spid
+                  AND cs.term_id = :tid AND ce.id IN ({in_ph})
+                  AND ce.status = 'active'
+                """),
+                {"spid": spid, "tid": term_id, **bind},
+            )
+            if res_drop.rowcount != len(eids_drop):
+                db.rollback()
+                return None, "Bırakılacak kayıtlar güncellenemedi."
+        db.execute(
+            text("""
+                UPDATE obs_course_enrollments ce SET status = 'pending'
+                FROM obs_course_sections cs
+                WHERE ce.course_section_id = cs.id AND ce.student_id = :spid
+                  AND cs.term_id = :tid AND ce.status = 'draft'
+                  AND ce.enrollment_reason = 'add_drop'
+            """),
+            {"spid": spid, "tid": term_id},
+        )
+        batch_note = BATCH_ADDDROP_TERM_NOTE_PREFIX + (term_id or "")
+
+    db.execute(
+        text("""
+            UPDATE obs_approval_requests SET status = 'cancelled', resolved_at = NOW()
+            WHERE student_id = :spid AND request_type = 'schedule_batch' AND status = 'pending'
+        """),
+        {"spid": spid},
+    )
+    if note and str(note).strip():
+        batch_note = batch_note + "\n" + str(note).strip()
+    rid = str(uuid.uuid4())
+    db.execute(
+        text("""
+        INSERT INTO obs_approval_requests
+        (id, student_id, approver_id, request_type, related_enrollment_id, status, note, created_at)
+        VALUES (:id, :spid, :appr, 'schedule_batch', NULL, 'pending', :note, NOW())
+        """),
+        {"id": rid, "spid": spid, "appr": approver_user_id, "note": batch_note},
+    )
+    db.commit()
+    return (
+        {
+            "batch_request_id": rid,
+            "term_id": term_id,
+            "status": "pending",
+            "flow": flow,
+        },
+        None,
+    )
+
+
+def list_advisee_enrollments(
+    db: Session,
+    advisor_user_id: str,
+    student_user_id: str,
+    term_id: Optional[str],
+) -> tuple[Optional[str], list[dict[str, Any]]]:
+    spid = resolve_student_profile_id(db, student_user_id)
+    if not spid or not _ensure_advisor_for_student(db, advisor_user_id, spid):
+        return None, []
+    tid = term_id or resolve_active_term_id(db)
+    if not tid:
+        return spid, []
+    _, rows = list_enrollments(
+        db, student_user_id, tid, ("draft", "pending", "pending_drop", "active")
+    )
+    return spid, rows
+
+
+def advisor_add_enrollment_line(
+    db: Session,
+    advisor_user_id: str,
+    student_user_id: str,
+    section_id: str,
+) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    spid = resolve_student_profile_id(db, student_user_id)
+    if not spid or not _ensure_advisor_for_student(db, advisor_user_id, spid):
+        return None, "Yetkisiz veya öğrenci yok."
+    meta = (
+        db.execute(
+            text("""
+            SELECT cs.term_id, cs.course_id, cs.capacity, COALESCE(c.akts, 0) AS course_akts,
+              (SELECT COUNT(*) FROM obs_course_enrollments ce
+               WHERE ce.course_section_id = cs.id
+                 AND ce.status IN ('active', 'pending', 'draft', 'pending_drop')) AS taken
+            FROM obs_course_sections cs
+            JOIN obs_courses c ON cs.course_id = c.id
+            WHERE cs.id = :sid
+            """),
+            {"sid": section_id},
+        )
+        .mappings()
+        .first()
+    )
+    if not meta:
+        return None, "Şube bulunamadı."
+    pending = db.execute(
+        text("""
+        SELECT 1 FROM obs_course_enrollments ce
+        JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+        WHERE ce.student_id = :spid AND cs.term_id = :tid
+          AND ce.status IN ('pending', 'pending_drop') LIMIT 1
+        """),
+        {"spid": spid, "tid": str(meta["term_id"])},
+    ).first()
+    if not pending:
+        return None, "Öğrencinin onay bekleyen listesi yok."
+    tid = _str_id(meta["term_id"])
+    dup = db.execute(
+        text("""
+        SELECT 1 FROM obs_course_enrollments ce
+        JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+        WHERE ce.student_id = :spid AND cs.term_id = :tid AND cs.course_id = :cid
+          AND ce.status IN ('active', 'pending', 'draft', 'pending_drop')
+        """),
+        {"spid": spid, "tid": tid, "cid": str(meta["course_id"])},
+    ).first()
+    if dup:
+        return None, "Bu ders zaten listede."
+    sc_msg = schedule_conflict_message_for_section(
+        db, spid, tid, section_id, None
+    )
+    if sc_msg:
+        return None, sc_msg
+    taken = int(meta.get("taken") or 0)
+    cap = int(meta.get("capacity") or 0)
+    if cap and taken >= cap:
+        return None, "Kontenjan dolu."
+    new_akts = int(meta.get("course_akts") or 0)
+    load = student_term_scheduled_akts(db, spid, tid)
+    akts_max, _, _ = effective_akts_limit_for_student(db, spid, tid)
+    if load + new_akts > akts_max:
+        return None, f"Öğrencinin AKTS üst sınırı ({akts_max}) aşılır (mevcut: {load})."
+    eid = str(uuid.uuid4())
+    db.execute(
+        text("""
+        INSERT INTO obs_course_enrollments
+        (id, student_id, course_section_id, status, enrollment_reason, advisor_approved)
+        VALUES (:id, :spid, :csid, 'pending', 'advisor_added', false)
+        """),
+        {"id": eid, "spid": spid, "csid": section_id},
+    )
+    db.execute(
+        text("""
+        INSERT INTO obs_advisor_actions
+        (id, student_user_id, advisor_user_id, term_id, action_type, section_id, approval_request_id, note, created_at)
+        VALUES (:id, :su, :au, :tid, 'add_section', :sid, NULL, NULL, NOW())
+        """),
+        {
+            "id": str(uuid.uuid4()),
+            "su": student_user_id,
+            "au": advisor_user_id,
+            "tid": tid,
+            "sid": section_id,
+        },
+    )
+    db.commit()
+    return ({"enrollment_id": eid, "section_id": section_id, "status": "pending"}, None)
+
+
+def advisor_remove_enrollment_line(
+    db: Session,
+    advisor_user_id: str,
+    student_user_id: str,
+    enrollment_id: str,
+) -> tuple[bool, Optional[str]]:
+    spid = resolve_student_profile_id(db, student_user_id)
+    if not spid or not _ensure_advisor_for_student(db, advisor_user_id, spid):
+        return False, "Yetkisiz."
+    row = db.execute(
+        text("""
+        SELECT ce.status, cs.term_id, ce.course_section_id FROM obs_course_enrollments ce
+        JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+        WHERE ce.id = :eid AND ce.student_id = :spid
+        """),
+        {"eid": enrollment_id, "spid": spid},
+    ).first()
+    if not row:
+        return False, "Kayıt yok."
+    st = row[0]
+    tid = _str_id(row[1])
+    csid = _str_id(row[2])
+    if st == "pending_drop":
+        db.execute(
+            text("""
+            UPDATE obs_course_enrollments SET status = 'active' WHERE id = :eid AND student_id = :spid
+            """),
+            {"eid": enrollment_id, "spid": spid},
+        )
+        db.execute(
+            text("""
+            INSERT INTO obs_advisor_actions
+            (id, student_user_id, advisor_user_id, term_id, action_type, section_id, approval_request_id, note, created_at)
+            VALUES (:id, :su, :au, :tid, 'remove_section', NULL, NULL, 'undo pending_drop enrollment_id=' || :eid, NOW())
+            """),
+            {
+                "id": str(uuid.uuid4()),
+                "su": student_user_id,
+                "au": advisor_user_id,
+                "tid": tid,
+                "eid": enrollment_id,
+            },
+        )
+        db.commit()
+        return True, None
+    if st != "pending":
+        return False, "Yalnızca onay bekleyen satırlar silinebilir."
+    db.execute(
+        text("DELETE FROM obs_grade_entries WHERE enrollment_id = :eid"),
+        {"eid": enrollment_id},
+    )
+    if csid:
+        db.execute(
+            text(
+                "DELETE FROM obs_attendance_records WHERE student_id = :spid AND course_section_id = :csid"
+            ),
+            {"spid": spid, "csid": csid},
+        )
+    db.execute(
+        text("DELETE FROM obs_approval_requests WHERE related_enrollment_id = :eid"),
+        {"eid": enrollment_id},
+    )
+    db.execute(
+        text("DELETE FROM obs_course_enrollments WHERE id = :eid"),
+        {"eid": enrollment_id},
+    )
+    db.execute(
+        text("""
+        INSERT INTO obs_advisor_actions
+        (id, student_user_id, advisor_user_id, term_id, action_type, section_id, approval_request_id, note, created_at)
+        VALUES (:id, :su, :au, :tid, 'remove_section', NULL, NULL, 'enrollment_id=' || :eid, NOW())
+        """),
+        {
+            "id": str(uuid.uuid4()),
+            "su": student_user_id,
+            "au": advisor_user_id,
+            "tid": tid,
+            "eid": enrollment_id,
+        },
+    )
+    db.commit()
+    return True, None
+
+
+def finalize_advisee_schedule(
+    db: Session,
+    advisor_user_id: str,
+    student_user_id: str,
+    term_id: str,
+) -> tuple[bool, Optional[str]]:
+    spid = resolve_student_profile_id(db, student_user_id)
+    if not spid or not _ensure_advisor_for_student(db, advisor_user_id, spid):
+        return False, "Yetkisiz."
+    prow = (
+        db.execute(
+            text("""
+            SELECT note FROM obs_approval_requests
+            WHERE student_id = :spid AND request_type = 'schedule_batch' AND status = 'pending'
+            ORDER BY created_at DESC LIMIT 1
+            """),
+            {"spid": spid},
+        )
+        .mappings()
+        .first()
+    )
+    if not prow:
+        return False, "Onay bekleyen liste talebi yok."
+    tnote, flow = _batch_flow_and_term_from_note(prow.get("note"))
+    if not tnote or tnote != term_id:
+        return False, "Talep bu dönem ile eşleşmiyor."
+    if flow == "add_drop":
+        _finalize_adddrop_batch(db, spid, term_id)
+    else:
+        _finalize_pending_enrollments_for_term(db, spid, term_id)
+    p1 = BATCH_TERM_NOTE_PREFIX + term_id
+    p2 = BATCH_ADDDROP_TERM_NOTE_PREFIX + term_id
+    db.execute(
+        text("""
+        UPDATE obs_approval_requests SET status = 'approved', resolved_at = NOW()
+        WHERE student_id = :spid AND request_type = 'schedule_batch' AND status = 'pending'
+          AND (note LIKE :p1 || '%' OR note LIKE :p2 || '%')
+        """),
+        {"spid": spid, "p1": p1, "p2": p2},
+    )
+    db.execute(
+        text("""
+        INSERT INTO obs_advisor_actions
+        (id, student_user_id, advisor_user_id, term_id, action_type, section_id, approval_request_id, note, created_at)
+        VALUES (:id, :su, :au, :tid, 'finalize_schedule', NULL, NULL, NULL, NOW())
+        """),
+        {
+            "id": str(uuid.uuid4()),
+            "su": student_user_id,
+            "au": advisor_user_id,
+            "tid": term_id,
+        },
+    )
+    db.commit()
+    return True, None
+
+
+def reject_advisee_schedule(
+    db: Session,
+    advisor_user_id: str,
+    student_user_id: str,
+    term_id: str,
+) -> tuple[bool, Optional[str]]:
+    spid = resolve_student_profile_id(db, student_user_id)
+    if not spid or not _ensure_advisor_for_student(db, advisor_user_id, spid):
+        return False, "Yetkisiz."
+    prow = (
+        db.execute(
+            text("""
+            SELECT note FROM obs_approval_requests
+            WHERE student_id = :spid AND request_type = 'schedule_batch' AND status = 'pending'
+            ORDER BY created_at DESC LIMIT 1
+            """),
+            {"spid": spid},
+        )
+        .mappings()
+        .first()
+    )
+    if not prow:
+        return False, "Onay bekleyen liste talebi yok."
+    tnote, flow = _batch_flow_and_term_from_note(prow.get("note"))
+    if not tnote or tnote != term_id:
+        return False, "Talep bu dönem ile eşleşmiyor."
+    if flow == "add_drop":
+        _revert_adddrop_batch(db, spid, term_id)
+    else:
+        _revert_pending_enrollments_to_draft(db, spid, term_id)
+    p1 = BATCH_TERM_NOTE_PREFIX + term_id
+    p2 = BATCH_ADDDROP_TERM_NOTE_PREFIX + term_id
+    db.execute(
+        text("""
+        UPDATE obs_approval_requests SET status = 'rejected', resolved_at = NOW()
+        WHERE student_id = :spid AND request_type = 'schedule_batch' AND status = 'pending'
+          AND (note LIKE :p1 || '%' OR note LIKE :p2 || '%')
+        """),
+        {"spid": spid, "p1": p1, "p2": p2},
+    )
+    db.commit()
+    return True, None
+
+
+def admin_update_term_registration_windows(
+    db: Session,
+    term_id: str,
+    registration_open: Optional[bool],
+    registration_start: Optional[str],
+    registration_end: Optional[str],
+    add_drop_open: Optional[bool],
+    add_drop_start: Optional[str],
+    add_drop_end: Optional[str],
+) -> Optional[dict[str, Any]]:
+    def dval(s: Optional[str]) -> Any:
+        if s is None or str(s).strip() == "":
+            return None
+        return str(s).strip()
+
+    db.execute(
+        text("""
+        UPDATE obs_terms SET
+            registration_open = COALESCE(:ro, registration_open),
+            registration_start = COALESCE(CAST(:rs AS date), registration_start),
+            registration_end = COALESCE(CAST(:re AS date), registration_end),
+            add_drop_open = COALESCE(:ado, add_drop_open),
+            add_drop_start = COALESCE(CAST(:ads AS date), add_drop_start),
+            add_drop_end = COALESCE(CAST(:ade AS date), add_drop_end)
+        WHERE id = :tid
+        """),
+        {
+            "tid": term_id,
+            "ro": registration_open,
+            "rs": dval(registration_start),
+            "re": dval(registration_end),
+            "ado": add_drop_open,
+            "ads": dval(add_drop_start),
+            "ade": dval(add_drop_end),
+        },
+    )
+    db.commit()
+    rows = list_terms(db)
+    for t in rows:
+        if t.get("id") == term_id:
+            return t
+    return None
+
+
 def resolve_approval(
     db: Session,
     request_id: str,
@@ -1487,6 +3138,46 @@ def resolve_approval(
     approve: bool,
     note: Optional[str],
 ) -> bool:
+    row = (
+        db.execute(
+            text("""
+            SELECT id, student_id, request_type, related_enrollment_id, status, note
+            FROM obs_approval_requests
+            WHERE id = :rid AND approver_id = :aid
+            """),
+            {"rid": request_id, "aid": approver_user_id},
+        )
+        .mappings()
+        .first()
+    )
+    if not row or (row.get("status") or "") != "pending":
+        return False
+    req_type = row.get("request_type") or ""
+    spid_prof = str(row["student_id"])
+    if approve and req_type == "drop_request" and row.get("related_enrollment_id"):
+        db.execute(
+            text("""
+            UPDATE obs_course_enrollments SET status = 'dropped', dropped_at = NOW()
+            WHERE id = :eid AND student_id = :spid
+            """),
+            {"eid": row["related_enrollment_id"], "spid": spid_prof},
+        )
+    if req_type == "schedule_batch":
+        if not _ensure_advisor_for_student(db, approver_user_id, spid_prof):
+            return False
+        term_id, flow = _batch_flow_and_term_from_note(row.get("note"))
+        if not term_id:
+            return False
+        if approve:
+            if flow == "add_drop":
+                _finalize_adddrop_batch(db, spid_prof, term_id)
+            else:
+                _finalize_pending_enrollments_for_term(db, spid_prof, term_id)
+        else:
+            if flow == "add_drop":
+                _revert_adddrop_batch(db, spid_prof, term_id)
+            else:
+                _revert_pending_enrollments_to_draft(db, spid_prof, term_id)
     st = "approved" if approve else "rejected"
     res = db.execute(
         text("""
@@ -1527,6 +3218,172 @@ def insert_announcement(
     )
     db.commit()
     return aid
+
+
+def _announcement_mgmt_row(r: Any) -> dict[str, Any]:
+    return {
+        "id": _str_id(r["id"]),
+        "title": r.get("title") or "",
+        "content": r.get("content") or "",
+        "audience_type": r.get("audience_type") or "",
+        "department_id": _str_id(r.get("department_id")),
+        "course_section_id": _str_id(r.get("course_section_id")),
+        "is_active": bool(r.get("is_active")),
+        "published_at": (
+            r.get("published_at").isoformat() if r.get("published_at") else None
+        ),
+        "created_at": (
+            r.get("created_at").isoformat() if r.get("created_at") else None
+        ),
+        "created_by": r.get("created_by_user_id"),
+        "created_by_name": r.get("creator_name") or "",
+    }
+
+
+def list_announcements_created_by(
+    db: Session, user_id: str, limit: int = 500
+) -> list[dict[str, Any]]:
+    rows = (
+        db.execute(
+            text(
+                f"""
+                SELECT a.id, a.title, a.content, a.audience_type, a.department_id, a.course_section_id,
+                       a.is_active, a.published_at, a.created_at, a.created_by_user_id,
+                       u.name AS creator_name
+                FROM obs_announcements a
+                LEFT JOIN {USER_TBL} u ON u.id = a.created_by_user_id
+                WHERE a.created_by_user_id = :uid
+                ORDER BY a.created_at DESC NULLS LAST, a.published_at DESC NULLS LAST
+                LIMIT :lim
+                """
+            ),
+            {"uid": user_id, "lim": limit},
+        )
+        .mappings()
+        .all()
+    )
+    return [_announcement_mgmt_row(r) for r in rows]
+
+
+def list_announcements_all_admin(db: Session, limit: int = 500) -> list[dict[str, Any]]:
+    rows = (
+        db.execute(
+            text(
+                f"""
+                SELECT a.id, a.title, a.content, a.audience_type, a.department_id, a.course_section_id,
+                       a.is_active, a.published_at, a.created_at, a.created_by_user_id,
+                       u.name AS creator_name
+                FROM obs_announcements a
+                LEFT JOIN {USER_TBL} u ON u.id = a.created_by_user_id
+                ORDER BY a.created_at DESC NULLS LAST, a.published_at DESC NULLS LAST
+                LIMIT :lim
+                """
+            ),
+            {"lim": limit},
+        )
+        .mappings()
+        .all()
+    )
+    return [_announcement_mgmt_row(r) for r in rows]
+
+
+def get_announcement_mgmt_by_id(
+    db: Session, announcement_id: str
+) -> Optional[dict[str, Any]]:
+    row = (
+        db.execute(
+            text(
+                f"""
+                SELECT a.id, a.title, a.content, a.audience_type, a.department_id, a.course_section_id,
+                       a.is_active, a.published_at, a.created_at, a.created_by_user_id,
+                       u.name AS creator_name
+                FROM obs_announcements a
+                LEFT JOIN {USER_TBL} u ON u.id = a.created_by_user_id
+                WHERE a.id = :id
+                """
+            ),
+            {"id": announcement_id},
+        )
+        .mappings()
+        .first()
+    )
+    return _announcement_mgmt_row(row) if row else None
+
+
+def update_announcement_owned(
+    db: Session,
+    announcement_id: str,
+    actor_user_id: str,
+    updates: dict[str, Any],
+    require_creator: bool,
+) -> tuple[bool, str]:
+    sel = db.execute(
+        text("SELECT created_by_user_id FROM obs_announcements WHERE id = :id"),
+        {"id": announcement_id},
+    ).first()
+    if not sel:
+        return False, "not_found"
+    if require_creator and str(sel[0]) != str(actor_user_id):
+        return False, "forbidden"
+
+    allowed_cols = {
+        "title",
+        "content",
+        "audience_type",
+        "department_id",
+        "course_section_id",
+        "is_active",
+    }
+    set_parts: list[str] = []
+    params: dict[str, Any] = {"id": announcement_id}
+
+    for key, val in updates.items():
+        if key not in allowed_cols:
+            continue
+        set_parts.append(f"{key} = :{key}")
+        params[key] = val
+
+    if not set_parts:
+        return False, "no_fields"
+
+    if require_creator:
+        stmt = (
+            f"UPDATE obs_announcements SET {', '.join(set_parts)} "
+            "WHERE id = :id AND created_by_user_id = :actor"
+        )
+        params["actor"] = actor_user_id
+    else:
+        stmt = f"UPDATE obs_announcements SET {', '.join(set_parts)} WHERE id = :id"
+
+    res = db.execute(text(stmt), params)
+    db.commit()
+    if res.rowcount > 0:
+        return True, ""
+    return False, "not_found"
+
+
+def delete_announcement_owned(
+    db: Session,
+    announcement_id: str,
+    actor_user_id: str,
+    require_creator: bool,
+) -> tuple[bool, str]:
+    if require_creator:
+        res = db.execute(
+            text(
+                "DELETE FROM obs_announcements WHERE id = :id AND created_by_user_id = :uid"
+            ),
+            {"id": announcement_id, "uid": actor_user_id},
+        )
+    else:
+        res = db.execute(
+            text("DELETE FROM obs_announcements WHERE id = :id"),
+            {"id": announcement_id},
+        )
+    db.commit()
+    if res.rowcount > 0:
+        return True, ""
+    return False, "not_found"
 
 
 def admin_counts(db: Session) -> dict[str, int]:
@@ -1577,24 +3434,70 @@ def resolve_active_term_id(db: Session) -> Optional[str]:
 def upsert_registration_settings(
     db: Session, term_id: str, body: dict[str, Any]
 ) -> dict[str, Any]:
-    max_akts = int(body.get("max_akts", 30))
-    bonus_akts = int(body.get("bonus_akts", 0))
-    gpa_threshold = float(body.get("gpa_threshold", 2.50))
+    cur = registration_settings_row(db, term_id) or {}
+    m: dict[str, Any] = {**cur, **body}
+
+    if m.get("max_akts") is not None and m.get("akts_limit_default") in (None, ""):
+        m["akts_limit_default"] = m["max_akts"]
+    if m.get("bonus_akts") is not None and m.get("akts_limit_high") in (None, ""):
+        base = int(m.get("max_akts") or m.get("akts_limit_default") or 30)
+        m["akts_limit_high"] = base + int(m["bonus_akts"])
+    if m.get("gpa_threshold") is not None and m.get("min_gpa_for_high_akts") in (None, ""):
+        m["min_gpa_for_high_akts"] = m["gpa_threshold"]
+
+    def fmt_date_val(v: Any) -> Any:
+        if v is None:
+            return None
+        if hasattr(v, "isoformat"):
+            return v.isoformat()[:10]
+        s = str(v).strip()
+        return s if s else None
+
+    akts_limit_default = int(m.get("akts_limit_default") or 30)
+    akts_limit_high = int(m.get("akts_limit_high") or 36)
+    akts_limit_top = int(m.get("akts_limit_top") or 45)
+    akts_limit_prep = int(m.get("akts_limit_prep") or 25)
+    min_gpa = float(m.get("min_gpa_for_high_akts") or 2.50)
+    min_gpa_top = float(m.get("min_gpa_for_top_akts") or 3.50)
+    registration_open = m.get("registration_open")
+    if registration_open is None:
+        registration_open = True
+    add_dd_raw = m.get("add_drop_deadline_days")
+    add_dd_i = int(add_dd_raw) if add_dd_raw is not None else None
+    enrollment_deadline = fmt_date_val(m.get("enrollment_deadline"))
+    add_drop_deadline = fmt_date_val(m.get("add_drop_deadline"))
+
     existing = db.execute(
         text("SELECT id FROM obs_registration_settings WHERE term_id = :tid LIMIT 1"),
         {"tid": term_id},
     ).first()
     params = {
         "tid": term_id,
-        "ma": max_akts,
-        "ba": bonus_akts,
-        "gt": gpa_threshold,
+        "ald": akts_limit_default,
+        "alh": akts_limit_high,
+        "altop": akts_limit_top,
+        "alp": akts_limit_prep,
+        "mg": min_gpa,
+        "mgtop": min_gpa_top,
+        "ro": bool(registration_open),
+        "addd": add_dd_i,
+        "ed": enrollment_deadline,
+        "ad": add_drop_deadline,
     }
     if existing:
         db.execute(
             text("""
-                UPDATE obs_registration_settings
-                SET max_akts = :ma, bonus_akts = :ba, gpa_threshold = :gt, updated_at = NOW()
+                UPDATE obs_registration_settings SET
+                    akts_limit_default = :ald,
+                    akts_limit_high = :alh,
+                    akts_limit_top = :altop,
+                    akts_limit_prep = :alp,
+                    min_gpa_for_high_akts = :mg,
+                    min_gpa_for_top_akts = :mgtop,
+                    registration_open = :ro,
+                    add_drop_deadline_days = :addd,
+                    enrollment_deadline = CAST(:ed AS date),
+                    add_drop_deadline = CAST(:ad AS date)
                 WHERE term_id = :tid
                 """),
             params,
@@ -1604,8 +3507,12 @@ def upsert_registration_settings(
         db.execute(
             text("""
                 INSERT INTO obs_registration_settings
-                    (id, term_id, max_akts, bonus_akts, gpa_threshold, created_at, updated_at)
-                VALUES (:id, :tid, :ma, :ba, :gt, NOW(), NOW())
+                    (id, term_id, akts_limit_default, akts_limit_high, akts_limit_top, akts_limit_prep,
+                     min_gpa_for_high_akts, min_gpa_for_top_akts, registration_open, add_drop_deadline_days,
+                     enrollment_deadline, add_drop_deadline)
+                VALUES
+                    (:id, :tid, :ald, :alh, :altop, :alp, :mg, :mgtop, :ro, :addd,
+                     CAST(:ed AS date), CAST(:ad AS date))
                 """),
             {**params, "id": rid},
         )
@@ -1762,10 +3669,10 @@ def create_drop_request(
     enrollment_id: str,
     reason: Optional[str],
     approver_user_id: Optional[str],
-) -> Optional[dict[str, Any]]:
+) -> tuple[Optional[dict[str, Any]], Optional[str]]:
     spid = resolve_student_profile_id(db, webui_user_id)
     if not spid:
-        return None
+        return None, "Öğrenci profili yok."
     row = db.execute(
         text(
             "SELECT id FROM obs_course_enrollments WHERE id = :eid AND student_id = :spid"
@@ -1773,7 +3680,10 @@ def create_drop_request(
         {"eid": enrollment_id, "spid": spid},
     ).first()
     if not row:
-        return None
+        return None, "Kayıt bulunamadı."
+    ok_drop, deny_reason = enrollment_drop_allowed(db, spid, enrollment_id)
+    if not ok_drop:
+        return None, deny_reason or "Bu ders için bırakma onaylanamaz."
     sp_row = db.execute(
         text("SELECT student_number FROM obs_student_profiles WHERE id = :id"),
         {"id": spid},
@@ -1795,17 +3705,20 @@ def create_drop_request(
         },
     )
     db.commit()
-    return {
-        "id": rid,
-        "student_user_id": webui_user_id,
-        "enrollment_id": enrollment_id,
-        "request_type": "drop_request",
-        "status": "pending",
-        "reason": reason,
-        "student_name": student_display_name,
-        "student_no": student_no,
-        "created_at": datetime.utcnow().isoformat(),
-    }
+    return (
+        {
+            "id": rid,
+            "student_user_id": webui_user_id,
+            "enrollment_id": enrollment_id,
+            "request_type": "drop_request",
+            "status": "pending",
+            "reason": reason,
+            "student_name": student_display_name,
+            "student_no": student_no,
+            "created_at": datetime.utcnow().isoformat(),
+        },
+        None,
+    )
 
 
 def list_roles_with_permissions(db: Session) -> list[dict[str, Any]]:
@@ -2061,7 +3974,8 @@ def list_sections_raw(db: Session, term_id: Optional[str]) -> list[dict[str, Any
                cs.day_of_week, cs.start_time, cs.end_time, cs.capacity, cs.created_at,
                c.code AS course_code, c.name AS course_name,
                cr.code AS classroom_code,
-               ins_u.name AS instructor_label
+               ins_u.name AS instructor_label,
+               ap.user_id AS instructor_user_id
         FROM obs_course_sections cs
         JOIN obs_courses c ON cs.course_id = c.id
         LEFT JOIN obs_classrooms cr ON cs.classroom_id = cr.id
@@ -2082,9 +3996,11 @@ def list_sections_raw(db: Session, term_id: Optional[str]) -> list[dict[str, Any
         d["course_id"] = _str_id(d.get("course_id"))
         d["term_id"] = _str_id(d.get("term_id"))
         d["instructor_id"] = _str_id(d.get("instructor_id"))
+        d["instructor_user_id"] = _str_id(d.get("instructor_user_id"))
         d["classroom_id"] = _str_id(d.get("classroom_id"))
         d["start_time"] = _fmt_time(d.get("start_time"))
         d["end_time"] = _fmt_time(d.get("end_time"))
+        d["day_of_week"] = normalize_weekday_tr(d.get("day_of_week"))
         if d.get("created_at"):
             d["created_at"] = (
                 d["created_at"].isoformat()
@@ -2112,3 +4028,543 @@ def list_calendar_raw(db: Session, term_id: Optional[str]) -> list[dict[str, Any
         d["end_date"] = _fmt_date(d.get("end_date")) or ""
         out.append(d)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Admin katalog CRUD (PUT/DELETE)
+# ---------------------------------------------------------------------------
+
+
+def admin_update_department(
+    db: Session, dept_id: str, updates: dict[str, Any]
+) -> Optional[dict[str, Any]]:
+    allowed = {"code", "name", "faculty_name"}
+    parts: list[str] = []
+    params: dict[str, Any] = {"id": dept_id}
+    for k, v in updates.items():
+        if k not in allowed:
+            continue
+        parts.append(f"{k} = :{k}")
+        params[k] = v
+    if not parts:
+        return None
+    res = db.execute(
+        text(f"UPDATE obs_departments SET {', '.join(parts)} WHERE id = :id"),
+        params,
+    )
+    db.commit()
+    if res.rowcount == 0:
+        return None
+    row = (
+        db.execute(
+            text("SELECT id, code, name FROM obs_departments WHERE id = :id"),
+            {"id": dept_id},
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        return None
+    return {
+        "id": _str_id(row["id"]),
+        "code": row.get("code") or "",
+        "name": row.get("name") or "",
+    }
+
+
+def admin_delete_department(db: Session, dept_id: str) -> tuple[bool, str]:
+    n = int(
+        db.execute(
+            text("SELECT COUNT(*) FROM obs_courses WHERE department_id = :id"),
+            {"id": dept_id},
+        ).scalar()
+        or 0
+    )
+    if n > 0:
+        return False, "in_use"
+    res = db.execute(
+        text("DELETE FROM obs_departments WHERE id = :id"), {"id": dept_id}
+    )
+    db.commit()
+    if res.rowcount and res.rowcount > 0:
+        return True, ""
+    return False, "not_found"
+
+
+def admin_update_term(db: Session, term_id: str, updates: dict[str, Any]) -> Optional[dict[str, Any]]:
+    u: dict[str, Any] = {}
+    if "name" in updates:
+        u["name"] = updates["name"]
+    if "is_active" in updates:
+        u["is_active"] = bool(updates["is_active"])
+    if "start_date" in updates or "starts_at" in updates:
+        v = updates.get("start_date", updates.get("starts_at"))
+        u["start_date"] = None if v in (None, "") else v
+    if "end_date" in updates or "ends_at" in updates:
+        v = updates.get("end_date", updates.get("ends_at"))
+        u["end_date"] = None if v in (None, "") else v
+    parts: list[str] = []
+    params: dict[str, Any] = {"id": term_id}
+    if "name" in u:
+        parts.append("name = :name")
+        params["name"] = u["name"]
+    if "is_active" in u:
+        parts.append("is_active = :is_active")
+        params["is_active"] = u["is_active"]
+    if "start_date" in u:
+        parts.append("start_date = CAST(:start_date AS date)")
+        params["start_date"] = u["start_date"]
+    if "end_date" in u:
+        parts.append("end_date = CAST(:end_date AS date)")
+        params["end_date"] = u["end_date"]
+    if not parts:
+        return None
+    res = db.execute(
+        text(f"UPDATE obs_terms SET {', '.join(parts)} WHERE id = :id"),
+        params,
+    )
+    db.commit()
+    if res.rowcount == 0:
+        return None
+    rows = list_terms(db)
+    for t in rows:
+        if t.get("id") == term_id:
+            return t
+    return None
+
+
+def admin_delete_term(db: Session, term_id: str) -> tuple[bool, str]:
+    n = int(
+        db.execute(
+            text("SELECT COUNT(*) FROM obs_course_sections WHERE term_id = :id"),
+            {"id": term_id},
+        ).scalar()
+        or 0
+    )
+    if n > 0:
+        return False, "in_use"
+    db.execute(
+        text("DELETE FROM obs_calendar_events WHERE term_id = :id"),
+        {"id": term_id},
+    )
+    db.execute(
+        text("DELETE FROM obs_registration_settings WHERE term_id = :id"),
+        {"id": term_id},
+    )
+    res = db.execute(text("DELETE FROM obs_terms WHERE id = :id"), {"id": term_id})
+    db.commit()
+    if res.rowcount and res.rowcount > 0:
+        return True, ""
+    return False, "not_found"
+
+
+def admin_update_course(db: Session, course_id: str, updates: dict[str, Any]) -> Optional[dict[str, Any]]:
+    allowed = {
+        "department_id",
+        "code",
+        "name",
+        "credits",
+        "akts",
+        "class_year",
+        "type",
+        "theory_hours",
+        "language",
+        "is_mandatory",
+        "semester_no",
+        "curriculum_semester",
+    }
+    parts: list[str] = []
+    params: dict[str, Any] = {"id": course_id}
+    for k, v in updates.items():
+        if k not in allowed:
+            continue
+        parts.append(f"{k} = :{k}")
+        params[k] = v
+    if not parts:
+        return None
+    res = db.execute(
+        text(f"UPDATE obs_courses SET {', '.join(parts)} WHERE id = :id"),
+        params,
+    )
+    db.commit()
+    if res.rowcount == 0:
+        return None
+    row = (
+        db.execute(text("SELECT * FROM obs_courses WHERE id = :id"), {"id": course_id})
+        .mappings()
+        .first()
+    )
+    return dict(row) if row else None
+
+
+def admin_delete_course(db: Session, course_id: str) -> tuple[bool, str]:
+    n = int(
+        db.execute(
+            text("SELECT COUNT(*) FROM obs_course_sections WHERE course_id = :id"),
+            {"id": course_id},
+        ).scalar()
+        or 0
+    )
+    if n > 0:
+        return False, "in_use"
+    res = db.execute(text("DELETE FROM obs_courses WHERE id = :id"), {"id": course_id})
+    db.commit()
+    if res.rowcount and res.rowcount > 0:
+        return True, ""
+    return False, "not_found"
+
+
+def admin_update_classroom(
+    db: Session, classroom_id: str, updates: dict[str, Any]
+) -> Optional[dict[str, Any]]:
+    allowed = {"code", "name", "building", "floor", "capacity", "is_online"}
+    parts: list[str] = []
+    params: dict[str, Any] = {"id": classroom_id}
+    for k, v in updates.items():
+        if k not in allowed:
+            continue
+        parts.append(f"{k} = :{k}")
+        params[k] = v
+    if not parts:
+        return None
+    res = db.execute(
+        text(f"UPDATE obs_classrooms SET {', '.join(parts)} WHERE id = :id"),
+        params,
+    )
+    db.commit()
+    if res.rowcount == 0:
+        return None
+    rows = list_classrooms_raw(db)
+    for r in rows:
+        if r.get("id") == classroom_id:
+            return r
+    return None
+
+
+def admin_delete_classroom(db: Session, classroom_id: str) -> tuple[bool, str]:
+    n = int(
+        db.execute(
+            text(
+                "SELECT COUNT(*) FROM obs_course_sections WHERE classroom_id = :id"
+            ),
+            {"id": classroom_id},
+        ).scalar()
+        or 0
+    )
+    if n > 0:
+        return False, "in_use"
+    res = db.execute(
+        text("DELETE FROM obs_classrooms WHERE id = :id"), {"id": classroom_id}
+    )
+    db.commit()
+    if res.rowcount and res.rowcount > 0:
+        return True, ""
+    return False, "not_found"
+
+
+def admin_update_course_section(
+    db: Session, section_id: str, updates: dict[str, Any]
+) -> Optional[dict[str, Any]]:
+    params: dict[str, Any] = {"id": section_id}
+    set_sql: list[str] = []
+
+    u = dict(updates)
+    if "instructor_user_id" in u:
+        uid = u.pop("instructor_user_id")
+        if uid:
+            apid = resolve_academic_profile_id(db, str(uid))
+            if not apid:
+                raise ValueError("invalid_instructor")
+            u["instructor_id"] = apid
+        else:
+            u["instructor_id"] = None
+
+    allowed = {
+        "course_id",
+        "term_id",
+        "instructor_id",
+        "section_no",
+        "classroom_id",
+        "day_of_week",
+        "capacity",
+    }
+    for k in ("start_time", "end_time"):
+        if k in u:
+            tv = str(u[k] or "")
+            if len(tv) == 5:
+                tv = tv + ":00"
+            u[k] = tv
+
+    if "day_of_week" in u and u.get("day_of_week"):
+        u["day_of_week"] = normalize_weekday_tr(str(u["day_of_week"]))
+
+    for k, v in u.items():
+        if k not in allowed and k not in ("start_time", "end_time"):
+            continue
+        if k in ("start_time", "end_time"):
+            set_sql.append(f"{k} = CAST(:{k} AS time)")
+        else:
+            set_sql.append(f"{k} = :{k}")
+        params[k] = v
+
+    if not set_sql:
+        return None
+    res = db.execute(
+        text(f"UPDATE obs_course_sections SET {', '.join(set_sql)} WHERE id = :id"),
+        params,
+    )
+    db.commit()
+    if res.rowcount == 0:
+        return None
+    rows = list_sections_raw(db, None)
+    for r in rows:
+        if r.get("id") == section_id:
+            return r
+    return None
+
+
+def admin_delete_course_section(db: Session, section_id: str) -> tuple[bool, str]:
+    checks = [
+        (
+            "SELECT COUNT(*) FROM obs_course_enrollments WHERE course_section_id = :id",
+            "enrollments",
+        ),
+        ("SELECT COUNT(*) FROM obs_exams WHERE course_section_id = :id", "exams"),
+        (
+            "SELECT COUNT(*) FROM obs_attendance_records WHERE course_section_id = :id",
+            "attendance",
+        ),
+    ]
+    for q, _ in checks:
+        n = int(db.execute(text(q), {"id": section_id}).scalar() or 0)
+        if n > 0:
+            return False, "in_use"
+    res = db.execute(
+        text("DELETE FROM obs_course_sections WHERE id = :id"), {"id": section_id}
+    )
+    db.commit()
+    if res.rowcount and res.rowcount > 0:
+        return True, ""
+    return False, "not_found"
+
+
+def admin_update_calendar_event(
+    db: Session, event_id: str, updates: dict[str, Any]
+) -> Optional[dict[str, Any]]:
+    allowed = {"term_id", "event_type", "title", "start_date", "end_date"}
+    parts: list[str] = []
+    params: dict[str, Any] = {"id": event_id}
+    for k, v in updates.items():
+        if k not in allowed:
+            continue
+        if k in ("start_date", "end_date"):
+            parts.append(f"{k} = CAST(:{k} AS date)")
+        else:
+            parts.append(f"{k} = :{k}")
+        params[k] = v
+    if not parts:
+        return None
+    res = db.execute(
+        text(f"UPDATE obs_calendar_events SET {', '.join(parts)} WHERE id = :id"),
+        params,
+    )
+    db.commit()
+    if res.rowcount == 0:
+        return None
+    row = (
+        db.execute(
+            text("SELECT * FROM obs_calendar_events WHERE id = :id"), {"id": event_id}
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        return None
+    d = dict(row)
+    d["id"] = _str_id(d.get("id"))
+    d["term_id"] = _str_id(d.get("term_id"))
+    d["start_date"] = _fmt_date(d.get("start_date")) or ""
+    d["end_date"] = _fmt_date(d.get("end_date")) or ""
+    return d
+
+
+def admin_delete_calendar_event(db: Session, event_id: str) -> tuple[bool, str]:
+    res = db.execute(
+        text("DELETE FROM obs_calendar_events WHERE id = :id"), {"id": event_id}
+    )
+    db.commit()
+    if res.rowcount and res.rowcount > 0:
+        return True, ""
+    return False, "not_found"
+
+
+def admin_update_academic_profile_by_user_id(
+    db: Session, user_id: str, updates: dict[str, Any]
+) -> Optional[dict[str, Any]]:
+    allowed = {"staff_number", "title", "department_id", "office", "phone"}
+    parts: list[str] = []
+    params: dict[str, Any] = {"uid": user_id}
+    for k, v in updates.items():
+        if k not in allowed:
+            continue
+        parts.append(f"{k} = :{k}")
+        params[k] = v
+    if not parts:
+        return None
+    res = db.execute(
+        text(
+            f"UPDATE obs_academic_profiles SET {', '.join(parts)} WHERE user_id = :uid"
+        ),
+        params,
+    )
+    db.commit()
+    if res.rowcount == 0:
+        return None
+    row = (
+        db.execute(
+            text(
+                """
+                SELECT ap.id, ap.user_id, ap.staff_number, ap.title, ap.department_id,
+                       ap.office, ap.phone, ap.created_at
+                FROM obs_academic_profiles ap WHERE ap.user_id = :uid
+                """
+            ),
+            {"uid": user_id},
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        return None
+    return {
+        "id": _str_id(row.get("id")),
+        "user_id": _str_id(row.get("user_id")),
+        "staff_number": row.get("staff_number") or "",
+        "title": row.get("title") or "",
+        "department_id": _str_id(row.get("department_id")),
+        "office": row.get("office") or "",
+        "phone": row.get("phone") or "",
+        "created_at": (
+            row.get("created_at").isoformat() if row.get("created_at") else None
+        ),
+    }
+
+
+def admin_delete_academic_profile_by_user_id(
+    db: Session, user_id: str
+) -> tuple[bool, str]:
+    apid = resolve_academic_profile_id(db, user_id)
+    if not apid:
+        return False, "not_found"
+    n = int(
+        db.execute(
+            text(
+                "SELECT COUNT(*) FROM obs_course_sections WHERE instructor_id = :id"
+            ),
+            {"id": apid},
+        ).scalar()
+        or 0
+    )
+    if n > 0:
+        return False, "in_use"
+    res = db.execute(
+        text("DELETE FROM obs_academic_profiles WHERE user_id = :uid"),
+        {"uid": user_id},
+    )
+    db.commit()
+    if res.rowcount and res.rowcount > 0:
+        return True, ""
+    return False, "not_found"
+
+
+def admin_update_student_profile_by_user_id(
+    db: Session, user_id: str, updates: dict[str, Any]
+) -> Optional[dict[str, Any]]:
+    allowed = {
+        "student_number",
+        "department_id",
+        "enrollment_date",
+        "class_year",
+        "program",
+        "gpa",
+        "completed_akts",
+        "total_akts_required",
+        "status",
+        "is_financially_eligible",
+        "phone",
+        "address",
+        "emergency_contact",
+        "emergency_phone",
+        "program_semester_number",
+    }
+    parts: list[str] = []
+    params: dict[str, Any] = {"uid": user_id}
+    for k, v in updates.items():
+        if k not in allowed:
+            continue
+        if k == "enrollment_date":
+            parts.append("enrollment_date = CAST(:enrollment_date AS date)")
+            params["enrollment_date"] = v if v not in (None, "") else None
+        else:
+            parts.append(f"{k} = :{k}")
+            params[k] = v
+    if not parts:
+        return None
+    parts.append("updated_at = NOW()")
+    res = db.execute(
+        text(
+            f"UPDATE obs_student_profiles SET {', '.join(parts)} WHERE user_id = :uid"
+        ),
+        params,
+    )
+    db.commit()
+    if res.rowcount == 0:
+        return None
+    row = (
+        db.execute(
+            text("SELECT id, user_id, student_number, department_id FROM obs_student_profiles WHERE user_id = :uid"),
+            {"uid": user_id},
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        return None
+    return {
+        "id": _str_id(row.get("id")),
+        "user_id": _str_id(row.get("user_id")),
+        "student_number": row.get("student_number") or "",
+        "department_id": _str_id(row.get("department_id")),
+    }
+
+
+def admin_delete_student_profile_by_user_id(
+    db: Session, user_id: str
+) -> tuple[bool, str]:
+    spid = resolve_student_profile_id(db, user_id)
+    if not spid:
+        return False, "not_found"
+    n = int(
+        db.execute(
+            text("SELECT COUNT(*) FROM obs_course_enrollments WHERE student_id = :id"),
+            {"id": spid},
+        ).scalar()
+        or 0
+    )
+    if n > 0:
+        return False, "in_use"
+    db.execute(
+        text("DELETE FROM obs_student_advisors WHERE student_id = :id"),
+        {"id": spid},
+    )
+    db.execute(
+        text("DELETE FROM obs_document_requests WHERE student_id = :id"),
+        {"id": spid},
+    )
+    res = db.execute(
+        text("DELETE FROM obs_student_profiles WHERE id = :id"), {"id": spid}
+    )
+    db.commit()
+    if res.rowcount and res.rowcount > 0:
+        return True, ""
+    return False, "not_found"

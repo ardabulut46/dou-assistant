@@ -278,13 +278,32 @@ async def student_me_advisor(
     return repo.get_advisor_api(obs_db, user.id)
 
 
-@student_router.get("/me/enrollments")
-async def student_me_enrollments(
+@student_router.get("/me/registration-limits")
+async def student_me_registration_limits(
     term_id: Optional[str] = Query(None),
     user=Depends(get_verified_user),
     obs_db: Session = Depends(get_obs_session),
 ):
-    spid, rows = repo.list_enrollments(obs_db, user.id, term_id)
+    row = repo.student_registration_limits_payload(obs_db, user.id, term_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Öğrenci profili bulunamadı")
+    return row
+
+
+@student_router.get("/me/enrollments")
+async def student_me_enrollments(
+    term_id: Optional[str] = Query(None),
+    statuses: str = Query(
+        "active",
+        description="Virgülle: draft,pending,active",
+    ),
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    st = tuple(s.strip() for s in statuses.split(",") if s.strip())
+    if not st:
+        st = ("active",)
+    spid, rows = repo.list_enrollments(obs_db, user.id, term_id, st)
     if spid is None:
         log.info(
             "[OBS-DATA] GET /student/me/enrollments user=%s spid=None rows=0 | SQL: obs_course_enrollments | db=%s | obs_primary_ile_ayni=%s",
@@ -322,7 +341,7 @@ async def student_me_schedule(
     user=Depends(get_verified_user),
     obs_db: Session = Depends(get_obs_session),
 ):
-    spid, rows = repo.list_enrollments(obs_db, user.id, term_id)
+    spid, rows = repo.list_enrollments(obs_db, user.id, term_id, ("active", "pending_drop"))
     if spid is None:
         return {"student_user_id": user.id, "term_id": term_id or "", "schedule": []}
     tid = term_id or (rows[0]["term_id"] if rows else "")
@@ -463,6 +482,73 @@ async def student_enrollment_request(
     return {"requests": reqs, "count": len(reqs)}
 
 
+class DraftEnrollmentsBody(BaseModel):
+    section_ids: list[str]
+    mode: str = "registration"
+
+
+@student_router.post(
+    "/me/draft-enrollments", status_code=status.HTTP_201_CREATED
+)
+async def student_draft_enrollments(
+    body: DraftEnrollmentsBody,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    rows, err = repo.upsert_draft_enrollments(
+        obs_db, user.id, body.section_ids, body.mode
+    )
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    if not rows and body.section_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Ders eklenemedi (kontenjan, tekrar veya pencere).",
+        )
+    return {"created": rows, "count": len(rows)}
+
+
+@student_router.delete("/me/draft-enrollments/{enrollment_id}")
+async def student_delete_draft_enrollment(
+    enrollment_id: str,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    ok = repo.delete_draft_enrollment(obs_db, user.id, enrollment_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Taslak kayıt bulunamadı")
+    return {"id": enrollment_id, "deleted": True}
+
+
+class SubmitScheduleBody(BaseModel):
+    note: Optional[str] = None
+    flow: str = "registration"
+    enrollment_ids_to_drop: list[str] = Field(default_factory=list)
+
+
+@student_router.post(
+    "/me/submit-schedule", status_code=status.HTTP_201_CREATED
+)
+async def student_submit_schedule(
+    body: SubmitScheduleBody,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    adv = repo.get_advisor_api(obs_db, user.id)
+    appr = (adv.get("advisor") or {}).get("academic_user_id")
+    data, err = repo.submit_schedule_to_advisor(
+        obs_db,
+        user.id,
+        body.note,
+        appr,
+        body.flow,
+        body.enrollment_ids_to_drop,
+    )
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    return data
+
+
 class DropRequest(BaseModel):
     enrollment_id: str
     reason: Optional[str] = None
@@ -476,7 +562,7 @@ async def student_drop_request(
 ):
     adv = repo.get_advisor_api(obs_db, user.id)
     appr = (adv.get("advisor") or {}).get("academic_user_id")
-    row = repo.create_drop_request(
+    row, drop_err = repo.create_drop_request(
         obs_db,
         user.id,
         getattr(user, "name", "") or "",
@@ -484,6 +570,8 @@ async def student_drop_request(
         body.reason,
         appr,
     )
+    if drop_err:
+        raise HTTPException(status_code=400, detail=drop_err)
     if not row:
         raise HTTPException(status_code=404, detail="Kayıt bulunamadı")
     return row
@@ -633,7 +721,7 @@ async def prep_schedule(
     obs_db: Session = Depends(get_obs_session),
 ):
     _prep_guard(obs_db, user.id)
-    _, rows = repo.list_enrollments(obs_db, user.id, term_id)
+    _, rows = repo.list_enrollments(obs_db, user.id, term_id, ("active", "pending_drop"))
     tid = term_id or (rows[0]["term_id"] if rows else "")
     sched = repo.schedule_from_enrollments(rows, tid) if tid else []
     return {"student_user_id": user.id, "schedule": sched}
@@ -777,6 +865,48 @@ async def academic_create_exam(
     )
 
 
+class ExamUpdate(BaseModel):
+    exam_type: Optional[str] = None
+    exam_date: Optional[str] = None
+    exam_time: Optional[str] = None
+    classroom: Optional[str] = None
+    weight_percent: Optional[float] = None
+
+
+@academic_user_router.put("/sections/{section_id}/exams/{exam_id}")
+async def academic_update_exam(
+    section_id: str,
+    exam_id: str,
+    body: ExamUpdate,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
+        raise HTTPException(status_code=403, detail="Bu şube size ait değil")
+    patch = {k: v for k, v in body.model_dump(exclude_unset=True).items()}
+    if not patch:
+        raise HTTPException(status_code=400, detail="Güncellenecek alan yok.")
+    row = repo.update_section_exam(obs_db, section_id, exam_id, patch)
+    if not row:
+        raise HTTPException(status_code=404, detail="Sınav bulunamadı")
+    return row
+
+
+@academic_user_router.delete("/sections/{section_id}/exams/{exam_id}")
+async def academic_delete_exam(
+    section_id: str,
+    exam_id: str,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
+        raise HTTPException(status_code=403, detail="Bu şube size ait değil")
+    ok = repo.delete_section_exam(obs_db, section_id, exam_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Sınav bulunamadı")
+    return {"section_id": section_id, "exam_id": exam_id, "deleted": True}
+
+
 @academic_user_router.get("/sections/{section_id}/grades")
 async def academic_section_grades(
     section_id: str,
@@ -808,6 +938,26 @@ async def academic_put_grades(
     return {"section_id": section_id, "updated": n}
 
 
+@academic_user_router.delete("/sections/{section_id}/grades/{enrollment_id}")
+async def academic_delete_grade(
+    section_id: str,
+    enrollment_id: str,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
+        raise HTTPException(status_code=403, detail="Bu şube size ait değil")
+    ok, err = repo.delete_grade_entry(obs_db, section_id, enrollment_id)
+    if not ok and err == "not_found":
+        raise HTTPException(status_code=404, detail="Not kaydı bulunamadı")
+    if not ok and err == "finalized":
+        raise HTTPException(
+            status_code=409,
+            detail="Kesinleşmiş not silinemez",
+        )
+    return {"section_id": section_id, "enrollment_id": enrollment_id, "deleted": True}
+
+
 @academic_user_router.post("/sections/{section_id}/grades/finalize")
 async def academic_finalize_grades(
     section_id: str,
@@ -825,8 +975,26 @@ class AttendanceInput(BaseModel):
     records: list[dict[str, Any]]
 
 
-@academic_user_router.put("/sections/{section_id}/attendance")
+class AttendanceRecordsInput(BaseModel):
+    records: list[dict[str, Any]]
+
+
+@academic_user_router.put("/sections/{section_id}/attendance/{week_no}")
 async def academic_put_attendance(
+    section_id: str,
+    week_no: int,
+    body: AttendanceRecordsInput,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
+        raise HTTPException(status_code=403, detail="Bu şube size ait değil")
+    n = repo.record_attendance(obs_db, section_id, week_no, body.records, user.id)
+    return {"section_id": section_id, "week_no": week_no, "recorded": n}
+
+
+@academic_user_router.put("/sections/{section_id}/attendance")
+async def academic_put_attendance_legacy(
     section_id: str,
     body: AttendanceInput,
     user=Depends(get_verified_user),
@@ -881,6 +1049,92 @@ async def academic_approve_request(
     }
 
 
+@academic_user_router.get("/me/advisees/{student_user_id}/enrollments")
+async def academic_advisee_enrollments(
+    student_user_id: str,
+    term_id: Optional[str] = Query(None),
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    spid, rows = repo.list_advisee_enrollments(
+        obs_db, user.id, student_user_id, term_id
+    )
+    if spid is None:
+        raise HTTPException(status_code=403, detail="Bu öğrencinin danışmanı değilsiniz.")
+    return {
+        "student_user_id": student_user_id,
+        "term_id": term_id,
+        "enrollments": rows,
+    }
+
+
+class AdviseeScheduleBody(BaseModel):
+    student_user_id: str
+    term_id: str
+
+
+@academic_user_router.post("/me/advisees/finalize-schedule")
+async def academic_finalize_advisee_schedule(
+    body: AdviseeScheduleBody,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    ok, err = repo.finalize_advisee_schedule(
+        obs_db, user.id, body.student_user_id, body.term_id
+    )
+    if not ok:
+        raise HTTPException(status_code=400, detail=err or "İşlem yapılamadı")
+    return {"ok": True, "student_user_id": body.student_user_id, "term_id": body.term_id}
+
+
+@academic_user_router.post("/me/advisees/reject-schedule")
+async def academic_reject_advisee_schedule(
+    body: AdviseeScheduleBody,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    ok, err = repo.reject_advisee_schedule(
+        obs_db, user.id, body.student_user_id, body.term_id
+    )
+    if not ok:
+        raise HTTPException(status_code=400, detail=err or "İşlem yapılamadı")
+    return {"ok": True, "student_user_id": body.student_user_id, "term_id": body.term_id}
+
+
+class AdviseeAddEnrollmentBody(BaseModel):
+    student_user_id: str
+    section_id: str
+
+
+@academic_user_router.post("/me/advisees/enrollments", status_code=status.HTTP_201_CREATED)
+async def academic_advisee_add_enrollment(
+    body: AdviseeAddEnrollmentBody,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    row, err = repo.advisor_add_enrollment_line(
+        obs_db, user.id, body.student_user_id, body.section_id
+    )
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    return row
+
+
+@academic_user_router.delete("/me/advisees/enrollments/{enrollment_id}")
+async def academic_advisee_remove_enrollment(
+    enrollment_id: str,
+    student_user_id: str = Query(..., description="Öğrenci user id"),
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    ok, err = repo.advisor_remove_enrollment_line(
+        obs_db, user.id, student_user_id, enrollment_id
+    )
+    if not ok:
+        raise HTTPException(status_code=400, detail=err or "Silinemedi")
+    return {"id": enrollment_id, "deleted": True}
+
+
 class AcademicAnnouncementCreate(BaseModel):
     title: str
     content: str
@@ -888,6 +1142,25 @@ class AcademicAnnouncementCreate(BaseModel):
     department_id: Optional[str] = None
     course_section_id: Optional[str] = None
     student_no: Optional[str] = None
+
+
+class AnnouncementUpdateBody(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+    audience_type: Optional[str] = None
+    department_id: Optional[str] = None
+    course_section_id: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+@academic_user_router.get("/announcements")
+async def academic_list_my_announcements(
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+    limit: int = Query(500, ge=1, le=2000),
+):
+    rows = repo.list_announcements_created_by(obs_db, user.id, limit=limit)
+    return {"announcements": rows}
 
 
 @academic_user_router.post("/announcements", status_code=status.HTTP_201_CREATED)
@@ -913,9 +1186,65 @@ async def academic_create_announcement(
     }
 
 
+@academic_user_router.put("/announcements/{announcement_id}")
+async def academic_update_announcement(
+    announcement_id: str,
+    body: AnnouncementUpdateBody,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    raw = body.model_dump(exclude_unset=True)
+    if not raw:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Güncellenecek alan yok."
+        )
+    ok, err = repo.update_announcement_owned(
+        obs_db, announcement_id, user.id, raw, require_creator=True
+    )
+    if not ok:
+        if err == "not_found":
+            raise HTTPException(status_code=404, detail="Duyuru bulunamadı.")
+        if err == "forbidden":
+            raise HTTPException(status_code=403, detail="Bu duyuruyu düzenleyemezsiniz.")
+        if err == "no_fields":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Güncellenecek alan yok."
+            )
+        raise HTTPException(status_code=400, detail="Güncellenemedi.")
+    row = repo.get_announcement_mgmt_by_id(obs_db, announcement_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Duyuru bulunamadı.")
+    return row
+
+
+@academic_user_router.delete("/announcements/{announcement_id}")
+async def academic_delete_announcement(
+    announcement_id: str,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    ok, err = repo.delete_announcement_owned(
+        obs_db, announcement_id, user.id, require_creator=True
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="Duyuru bulunamadı.")
+    return {"id": announcement_id, "deleted": True}
+
+
 # ---------------------------------------------------------------------------
 # Admin
 # ---------------------------------------------------------------------------
+
+
+def _admin_delete_result(ok: bool, err: str) -> dict[str, bool]:
+    if ok:
+        return {"deleted": True}
+    if err == "in_use":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Kayıt ilişkili veriler nedeniyle silinemiyor.",
+        )
+    raise HTTPException(status_code=404, detail="Bulunamadı.")
 
 
 @admin_router.get("/stats")
@@ -955,6 +1284,38 @@ async def admin_create_department(
     return repo.admin_insert_department(obs_db, body.code, body.name)
 
 
+class DepartmentUpdateBody(BaseModel):
+    code: Optional[str] = None
+    name: Optional[str] = None
+    faculty_name: Optional[str] = None
+
+
+@admin_router.put("/departments/{department_id}")
+async def admin_put_department(
+    department_id: str,
+    body: DepartmentUpdateBody,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
+    raw = body.model_dump(exclude_unset=True)
+    if not raw:
+        raise HTTPException(status_code=400, detail="Güncellenecek alan yok.")
+    row = repo.admin_update_department(obs_db, department_id, raw)
+    if not row:
+        raise HTTPException(status_code=404, detail="Bölüm bulunamadı.")
+    return row
+
+
+@admin_router.delete("/departments/{department_id}")
+async def admin_delete_department_route(
+    department_id: str,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
+    ok, err = repo.admin_delete_department(obs_db, department_id)
+    return _admin_delete_result(ok, err)
+
+
 @admin_router.get("/terms")
 async def admin_list_terms(
     obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)
@@ -986,6 +1347,72 @@ async def admin_create_term(
         body.ends_at,
         body.is_active,
     )
+
+
+class TermUpdateBody(BaseModel):
+    name: Optional[str] = None
+    starts_at: Optional[str] = None
+    ends_at: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+@admin_router.put("/terms/{term_id}")
+async def admin_put_term(
+    term_id: str,
+    body: TermUpdateBody,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
+    raw = body.model_dump(exclude_unset=True)
+    if not raw:
+        raise HTTPException(status_code=400, detail="Güncellenecek alan yok.")
+    row = repo.admin_update_term(obs_db, term_id, raw)
+    if not row:
+        raise HTTPException(status_code=404, detail="Dönem bulunamadı.")
+    return row
+
+
+@admin_router.delete("/terms/{term_id}")
+async def admin_delete_term_route(
+    term_id: str,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
+    ok, err = repo.admin_delete_term(obs_db, term_id)
+    return _admin_delete_result(ok, err)
+
+
+class TermRegistrationWindowsBody(BaseModel):
+    registration_open: Optional[bool] = None
+    registration_start: Optional[str] = None
+    registration_end: Optional[str] = None
+    add_drop_open: Optional[bool] = None
+    add_drop_start: Optional[str] = None
+    add_drop_end: Optional[str] = None
+
+
+@admin_router.patch("/terms/{term_id}/registration-windows")
+async def admin_patch_term_registration_windows(
+    term_id: str,
+    body: TermRegistrationWindowsBody,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
+    row = repo.admin_update_term_registration_windows(
+        obs_db,
+        term_id,
+        body.registration_open,
+        body.registration_start,
+        body.registration_end,
+        body.add_drop_open,
+        body.add_drop_start,
+        body.add_drop_end,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Dönem bulunamadı")
+    return row
 
 
 @admin_router.get("/courses")
@@ -1027,6 +1454,49 @@ async def admin_create_course(
     )
 
 
+class CourseUpdateBody(BaseModel):
+    department_id: Optional[str] = None
+    code: Optional[str] = None
+    name: Optional[str] = None
+    credits: Optional[int] = None
+    akts: Optional[int] = None
+    class_year: Optional[int] = None
+    course_type: Optional[str] = None
+    theory_hours: Optional[str] = None
+    language: Optional[str] = None
+    is_mandatory: Optional[bool] = None
+    semester_no: Optional[int] = None
+    curriculum_semester: Optional[int] = None
+
+
+@admin_router.put("/courses/{course_id}")
+async def admin_put_course(
+    course_id: str,
+    body: CourseUpdateBody,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
+    raw = body.model_dump(exclude_unset=True)
+    if not raw:
+        raise HTTPException(status_code=400, detail="Güncellenecek alan yok.")
+    if "course_type" in raw:
+        raw["type"] = raw.pop("course_type")
+    row = repo.admin_update_course(obs_db, course_id, raw)
+    if not row:
+        raise HTTPException(status_code=404, detail="Ders bulunamadı.")
+    return row
+
+
+@admin_router.delete("/courses/{course_id}")
+async def admin_delete_course_route(
+    course_id: str,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
+    ok, err = repo.admin_delete_course(obs_db, course_id)
+    return _admin_delete_result(ok, err)
+
+
 @admin_router.get("/classrooms")
 async def admin_list_classrooms(
     obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)
@@ -1052,11 +1522,128 @@ async def admin_create_classroom(
     )
 
 
+class ClassroomUpdateBody(BaseModel):
+    code: Optional[str] = None
+    name: Optional[str] = None
+    building: Optional[str] = None
+    floor: Optional[int] = None
+    capacity: Optional[int] = None
+    is_online: Optional[bool] = None
+
+
+@admin_router.put("/classrooms/{classroom_id}")
+async def admin_put_classroom(
+    classroom_id: str,
+    body: ClassroomUpdateBody,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
+    raw = body.model_dump(exclude_unset=True)
+    if not raw:
+        raise HTTPException(status_code=400, detail="Güncellenecek alan yok.")
+    row = repo.admin_update_classroom(obs_db, classroom_id, raw)
+    if not row:
+        raise HTTPException(status_code=404, detail="Derslik bulunamadı.")
+    return row
+
+
+@admin_router.delete("/classrooms/{classroom_id}")
+async def admin_delete_classroom_route(
+    classroom_id: str,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
+    ok, err = repo.admin_delete_classroom(obs_db, classroom_id)
+    return _admin_delete_result(ok, err)
+
+
 @admin_router.get("/instructors")
 async def admin_instructors(
     obs_db: Session = Depends(get_obs_session), _u=Depends(get_obs_admin_user)
 ):
     return repo.list_instructors(obs_db)
+
+
+class AcademicProfileUpdateBody(BaseModel):
+    staff_number: Optional[str] = None
+    title: Optional[str] = None
+    department_id: Optional[str] = None
+    office: Optional[str] = None
+    phone: Optional[str] = None
+
+
+@admin_router.put("/academics/{user_id}")
+async def admin_put_academic(
+    user_id: str,
+    body: AcademicProfileUpdateBody,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
+    raw = body.model_dump(exclude_unset=True)
+    if not raw:
+        raise HTTPException(status_code=400, detail="Güncellenecek alan yok.")
+    row = repo.admin_update_academic_profile_by_user_id(obs_db, user_id, raw)
+    if not row:
+        raise HTTPException(
+            status_code=404, detail="Akademisyen profili bulunamadı (user_id)."
+        )
+    return row
+
+
+@admin_router.delete("/academics/{user_id}")
+async def admin_delete_academic_route(
+    user_id: str,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
+    ok, err = repo.admin_delete_academic_profile_by_user_id(obs_db, user_id)
+    return _admin_delete_result(ok, err)
+
+
+class StudentProfileAdminUpdateBody(BaseModel):
+    student_number: Optional[str] = None
+    department_id: Optional[str] = None
+    enrollment_date: Optional[str] = None
+    class_year: Optional[int] = None
+    program: Optional[str] = None
+    gpa: Optional[float] = None
+    completed_akts: Optional[int] = None
+    total_akts_required: Optional[int] = None
+    status: Optional[str] = None
+    is_financially_eligible: Optional[bool] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    emergency_phone: Optional[str] = None
+    program_semester_number: Optional[int] = None
+
+
+@admin_router.put("/students/{user_id}")
+async def admin_put_student_profile(
+    user_id: str,
+    body: StudentProfileAdminUpdateBody,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
+    raw = body.model_dump(exclude_unset=True)
+    if not raw:
+        raise HTTPException(status_code=400, detail="Güncellenecek alan yok.")
+    row = repo.admin_update_student_profile_by_user_id(obs_db, user_id, raw)
+    if not row:
+        raise HTTPException(
+            status_code=404, detail="Öğrenci profili bulunamadı (user_id)."
+        )
+    return row
+
+
+@admin_router.delete("/students/{user_id}")
+async def admin_delete_student_profile_route(
+    user_id: str,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
+    ok, err = repo.admin_delete_student_profile_by_user_id(obs_db, user_id)
+    return _admin_delete_result(ok, err)
 
 
 @admin_router.get("/course-sections")
@@ -1153,6 +1740,54 @@ async def admin_create_section(
     return sid
 
 
+class CourseSectionUpdateBody(BaseModel):
+    course_id: Optional[str] = None
+    term_id: Optional[str] = None
+    section_no: Optional[int] = None
+    classroom_id: Optional[str] = None
+    instructor_user_id: Optional[str] = None
+    day_of_week: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    capacity: Optional[int] = None
+
+
+@admin_router.put("/sections/{section_id}")
+async def admin_put_section(
+    section_id: str,
+    body: CourseSectionUpdateBody,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
+    raw = body.model_dump(exclude_unset=True)
+    if not raw:
+        raise HTTPException(status_code=400, detail="Güncellenecek alan yok.")
+    if raw.get("classroom_id") == "":
+        raw["classroom_id"] = None
+    try:
+        row = repo.admin_update_course_section(obs_db, section_id, raw)
+    except ValueError as e:
+        if str(e) == "invalid_instructor":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Seçilen kullanıcı için obs_academic_profiles kaydı yok.",
+            ) from e
+        raise
+    if not row:
+        raise HTTPException(status_code=404, detail="Şube bulunamadı.")
+    return row
+
+
+@admin_router.delete("/sections/{section_id}")
+async def admin_delete_section_route(
+    section_id: str,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
+    ok, err = repo.admin_delete_course_section(obs_db, section_id)
+    return _admin_delete_result(ok, err)
+
+
 @admin_router.get("/calendar-events")
 async def admin_calendar(
     term_id: Optional[str] = Query(None),
@@ -1186,6 +1821,40 @@ async def admin_calendar_create(
     )
 
 
+class CalendarEventUpdateBody(BaseModel):
+    term_id: Optional[str] = None
+    event_type: Optional[str] = None
+    title: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+
+
+@admin_router.put("/calendar/{event_id}")
+async def admin_put_calendar_event(
+    event_id: str,
+    body: CalendarEventUpdateBody,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
+    raw = body.model_dump(exclude_unset=True)
+    if not raw:
+        raise HTTPException(status_code=400, detail="Güncellenecek alan yok.")
+    row = repo.admin_update_calendar_event(obs_db, event_id, raw)
+    if not row:
+        raise HTTPException(status_code=404, detail="Takvim kaydı bulunamadı.")
+    return row
+
+
+@admin_router.delete("/calendar/{event_id}")
+async def admin_delete_calendar_event_route(
+    event_id: str,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
+    ok, err = repo.admin_delete_calendar_event(obs_db, event_id)
+    return _admin_delete_result(ok, err)
+
+
 @admin_router.get("/registration-settings")
 async def admin_reg_settings(
     term_id: Optional[str] = Query(None),
@@ -1197,11 +1866,19 @@ async def admin_reg_settings(
 
 
 class RegistrationSettingsUpdate(BaseModel):
-    max_akts: int = 30
-    bonus_akts: int = 6
-    gpa_threshold: float = 2.50
-    enrollment_deadline: str = ""
-    add_drop_deadline: str = ""
+    akts_limit_default: Optional[int] = None
+    akts_limit_high: Optional[int] = None
+    akts_limit_top: Optional[int] = None
+    akts_limit_prep: Optional[int] = None
+    min_gpa_for_high_akts: Optional[float] = None
+    min_gpa_for_top_akts: Optional[float] = None
+    registration_open: Optional[bool] = None
+    add_drop_deadline_days: Optional[int] = None
+    enrollment_deadline: Optional[str] = None
+    add_drop_deadline: Optional[str] = None
+    max_akts: Optional[int] = None
+    bonus_akts: Optional[int] = None
+    gpa_threshold: Optional[float] = None
 
 
 @admin_router.post("/registration-settings")
@@ -1216,7 +1893,10 @@ async def admin_reg_settings_post(
         raise HTTPException(
             status_code=400, detail="Dönem belirtilmedi veya aktif dönem yok."
         )
-    return repo.upsert_registration_settings(obs_db, tid, body.model_dump())
+    payload = body.model_dump(exclude_unset=True)
+    if not payload:
+        raise HTTPException(status_code=400, detail="Güncellenecek alan yok.")
+    return repo.upsert_registration_settings(obs_db, tid, payload)
 
 
 class AdminAnnouncementCreate(BaseModel):
@@ -1242,6 +1922,59 @@ async def admin_ann_create(
         None,
     )
     return {"id": aid}
+
+
+@admin_router.get("/announcements")
+async def admin_list_announcements(
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+    limit: int = Query(500, ge=1, le=2000),
+):
+    rows = repo.list_announcements_all_admin(obs_db, limit=limit)
+    return {"announcements": rows}
+
+
+@admin_router.put("/announcements/{announcement_id}")
+async def admin_update_announcement(
+    announcement_id: str,
+    body: AnnouncementUpdateBody,
+    user=Depends(get_obs_admin_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    raw = body.model_dump(exclude_unset=True)
+    if not raw:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Güncellenecek alan yok."
+        )
+    ok, err = repo.update_announcement_owned(
+        obs_db, announcement_id, user.id, raw, require_creator=False
+    )
+    if not ok:
+        if err == "not_found":
+            raise HTTPException(status_code=404, detail="Duyuru bulunamadı.")
+        if err == "no_fields":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Güncellenecek alan yok."
+            )
+        raise HTTPException(status_code=400, detail="Güncellenemedi.")
+    row = repo.get_announcement_mgmt_by_id(obs_db, announcement_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Duyuru bulunamadı.")
+    return row
+
+
+@admin_router.delete("/announcements/{announcement_id}")
+async def admin_delete_announcement(
+    announcement_id: str,
+    user=Depends(get_obs_admin_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    ok, err = repo.delete_announcement_owned(
+        obs_db, announcement_id, user.id, require_creator=False
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="Duyuru bulunamadı.")
+    return {"id": announcement_id, "deleted": True}
 
 
 @admin_router.get("/document-requests")
@@ -1276,6 +2009,10 @@ async def admin_audit(
     return {"logs": logs, "total": total}
 
 
+# Admin kullanıcı oluşturma / güncelleme — Open WebUI user.role ile uyumlu (OBS obsAccess academician eşlemesi)
+OBS_ADMIN_ASSIGNABLE_USER_ROLES = frozenset({"user", "admin", "academician", "pending"})
+
+
 @admin_router.get("/users")
 async def admin_list_users(
     role_filter: Optional[str] = Query(None, alias="role"),
@@ -1287,6 +2024,8 @@ async def admin_list_users(
     if search:
         flt["query"] = search
     if role_filter:
+        if role_filter not in OBS_ADMIN_ASSIGNABLE_USER_ROLES:
+            raise HTTPException(status_code=400, detail="Geçersiz rol filtresi")
         flt["roles"] = [role_filter]
     res = Users.get_users(filter=flt or None, skip=0, limit=5000, db=db)
     users_out = []
@@ -1323,12 +2062,13 @@ async def admin_create_user(
     body: UserCreate, db: Session = Depends(get_session), _u=Depends(get_obs_admin_user)
 ):
     hashed = get_password_hash(body.password)
+    role = body.role if body.role in OBS_ADMIN_ASSIGNABLE_USER_ROLES else "user"
     nu = Auths.insert_new_auth(
         email=body.email,
         password=hashed,
         name=body.full_name,
         profile_image_url="",
-        role=body.role if body.role in ("admin", "user", "pending") else "user",
+        role=role,
         db=db,
     )
     if not nu:
@@ -1360,6 +2100,8 @@ async def admin_update_user(
     if body.full_name is not None:
         patch["name"] = body.full_name
     if body.role is not None:
+        if body.role not in OBS_ADMIN_ASSIGNABLE_USER_ROLES:
+            raise HTTPException(status_code=400, detail="Geçersiz rol")
         patch["role"] = body.role
     if patch:
         u = Users.update_user_by_id(user_id, patch, db=db)

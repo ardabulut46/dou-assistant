@@ -11,6 +11,7 @@
 		getDouTerms,
 		getDouStudentProfile,
 		getDouStudentAdvisor,
+		getDouStudentRegistrationLimits,
 		getDouStudentEnrollments,
 		getDouStudentGrades,
 		getDouStudentGpaSummary,
@@ -25,13 +26,15 @@
 		createDouDocumentRequest,
 		updateDouStudentProfile,
 		getDouAvailableCourses,
-		createDouEnrollmentRequest,
-		createDouDropRequest,
+		postDouDraftEnrollments,
+		deleteDouDraftEnrollment,
+		submitDouStudentSchedule,
 		sendDouMessageApi,
 		getDouCurriculumStatus,
 		type DouTerm,
 		type DouStudentProfile,
 		type DouAdvisorResponse,
+		type DouStudentRegistrationLimits,
 		type DouEnrollment,
 		type DouGradeEntry,
 		type DouAttendanceRow,
@@ -88,6 +91,36 @@
 	/** Ders kayıt başlığı — API’deki aktif dönem adı */
 	let enrollmentTermLabel = '—';
 
+	/** Kayıt kuralları (GNO / hazırlık) — GET /student/me/registration-limits */
+	let registrationLimits: DouStudentRegistrationLimits | null = null;
+	$: aktsMax = registrationLimits?.akts_max ?? 30;
+	$: aktsLimitHint = (() => {
+		const r = registrationLimits;
+		if (!r) return '';
+		const gno =
+			r.gpa_computed != null
+				? `${r.gpa_computed.toFixed(2)} (ΣAKTS payda: ${r.akts_counted_in_gpa ?? 0})`
+				: (r.gpa?.toFixed(2) ?? '—');
+		const profNote =
+			r.gpa_profile != null &&
+			r.gpa_computed != null &&
+			Math.abs(r.gpa_profile - r.gpa_computed) > 0.005
+				? ` Profilde kayıtlı GNO: ${r.gpa_profile.toFixed(2)}.`
+				: '';
+		if (r.rule === 'prep') return `Hazırlık: en fazla ${r.akts_max} AKTS.`;
+		if (r.rule === 'early_semesters')
+			return `1.–2. program yarıyılı (kayıtlı: ${r.program_semester_number ?? 1}): Madde 23 gereği ek AKTS yok; üst sınır ${r.akts_max} AKTS.${profNote}`;
+		if (r.rule === 'low_gpa')
+			return `GNO ${gno} < ${r.min_gpa_for_high_akts}: üst sınır ${r.akts_max} AKTS.${profNote}`;
+		if (r.rule === 'mid_gpa')
+			return `${r.min_gpa_for_high_akts} ≤ GNO (${gno}) < ${r.min_gpa_for_top_akts}: üst sınır ${r.akts_max} AKTS.${profNote}`;
+		if (r.rule === 'top_gpa')
+			return `GNO ${gno} ≥ ${r.min_gpa_for_top_akts}: üst sınır ${r.akts_max} AKTS.${profNote}`;
+		if (r.rule === 'high_gpa')
+			return `Yüksek GNO: üst sınır ${r.akts_max} AKTS.${profNote}`;
+		return `Üst sınır ${r.akts_max} AKTS (yıldız: ${r.akts_limit_default} / ${r.akts_limit_high} / ${r.akts_limit_top}). GNO: ${gno}.${profNote}`;
+	})();
+
 	// Profil düzenleme
 	let profileEdit = false;
 	let profileForm = {
@@ -101,19 +134,28 @@
 	let profileSaved = false;
 	let profileError: string | null = null;
 
-	// Ders Kayıt — sepet
-	let cart: AvailableCourse[] = [];
+	// Ders Kayıt — taslaklar obs_course_enrollments (status=draft)
 	let enrollSubmitting = false;
 	let enrollSuccess: string | null = null;
 	let enrollError: string | null = null;
-	$: cartAkts = cart.reduce((s, c) => s + c.akts, 0);
+	$: draftEnrollments = enrollments.filter((e) => e.status === 'draft');
+	$: hasPendingRegistration = enrollments.some((e) => e.status === 'pending');
+	$: draftAkts = draftEnrollments.reduce((s, e) => s + e.akts, 0);
+	/** Dönem yükü (API ile aynı: active + pending + draft + pending_drop) */
+	$: enrollmentScheduledAkts = enrollments
+		.filter((e) => ['active', 'pending', 'draft', 'pending_drop'].includes(e.status))
+		.reduce((s, e) => s + (e.akts || 0), 0);
+	$: addDropDraftRows = enrollments.filter((e) => e.status === 'draft');
+	$: hasPendingAddDrop = enrollments.some(
+		(e) => e.status === 'pending' || e.status === 'pending_drop'
+	);
 
-	// Ders Ekle/Bırak — bırakılacaklar + kesinleştir
+	// Ders Ekle/Bırak — bırakılacaklar + taslaklar tek pakette danışmana
 	let markedDrop: Set<string> = new Set();
-	let droppedIds: Set<string> = new Set(); // başarılı istek sonrası üstü çizili
 	let dropSubmitting = false;
 	let dropSuccess: string | null = null;
 	let dropError: string | null = null;
+	let addDropTermLabel = '—';
 
 	// Belge talebi
 	let docForm = {
@@ -153,7 +195,7 @@
 	// ---------------------------------------------------------------------------
 	// Veri yükleme
 	// ---------------------------------------------------------------------------
-	async function loadPage(_path: string) {
+	async function loadPage() {
 		if (!browser || !apiKey) return;
 		loading = true;
 		loadErr = null;
@@ -188,14 +230,44 @@
 			}
 			if (apiKey === 'terms') terms = await getDouTerms(token).catch(() => []);
 			if (apiKey === 'advisor') advisor = await getDouStudentAdvisor(token).catch(() => null);
-			if (apiKey === 'enrollments' || apiKey === 'ders-ekle') {
+			if (apiKey === 'enrollments') {
 				const r = await getDouStudentEnrollments(token).catch(() => null);
 				enrollments = r?.enrollments ?? [];
 				totalAkts = r?.total_akts ?? 0;
 			}
+			if (apiKey === 'ders-ekle') {
+				const [enrRes, avRes, termsRes] = await Promise.allSettled([
+					getDouStudentEnrollments(token, undefined, 'active,draft,pending,pending_drop'),
+					getDouAvailableCourses(token),
+					getDouTerms(token)
+				]);
+				if (enrRes.status === 'fulfilled') {
+					enrollments = enrRes.value.enrollments;
+					totalAkts = enrRes.value.total_akts ?? 0;
+				} else {
+					enrollments = [];
+					totalAkts = 0;
+				}
+				if (avRes.status === 'fulfilled') {
+					availableCourses = avRes.value.sections ?? [];
+				} else {
+					availableCourses = [];
+				}
+				if (termsRes.status === 'fulfilled') {
+					const tl = termsRes.value;
+					const at = tl.find((t) => t.is_active) ?? tl[tl.length - 1];
+					addDropTermLabel = at?.name ?? '—';
+				} else {
+					addDropTermLabel = '—';
+				}
+				{
+					const limTid = enrollments.find((e) => e.term_id)?.term_id;
+					registrationLimits = await getDouStudentRegistrationLimits(token, limTid).catch(() => null);
+				}
+			}
 			if (apiKey === 'ders-kayit') {
 				const [enrRes, avRes, termsRes] = await Promise.allSettled([
-					getDouStudentEnrollments(token),
+					getDouStudentEnrollments(token, undefined, 'draft,pending,active'),
 					getDouAvailableCourses(token),
 					getDouTerms(token)
 				]);
@@ -217,6 +289,10 @@
 					enrollmentTermLabel = at?.name ?? '—';
 				} else {
 					enrollmentTermLabel = '—';
+				}
+				{
+					const limTid = enrollments.find((e) => e.term_id)?.term_id;
+					registrationLimits = await getDouStudentRegistrationLimits(token, limTid).catch(() => null);
 				}
 			}
 			if (apiKey === 'grades') {
@@ -277,7 +353,7 @@
 	afterNavigate(async () => {
 		await tick();
 		if (!browser) return;
-		void loadPage(activePath);
+		void loadPage();
 	});
 
 	// ---------------------------------------------------------------------------
@@ -298,7 +374,7 @@
 			});
 			profileSaved = true;
 			profileEdit = false;
-			await loadPage(activePath);
+			await loadPage();
 		} catch (e: unknown) {
 			profileError = e instanceof Error ? e.message : 'Kaydetme hatası.';
 		} finally {
@@ -307,44 +383,88 @@
 	}
 
 	function toggleCart(course: AvailableCourse) {
-		if (cart.find((c) => c.id === course.id)) {
-			cart = cart.filter((c) => c.id !== course.id);
-		} else {
-			if (totalAkts + cartAkts + course.akts > 36) {
-				enrollError = `AKTS limitini aşıyor (maks. 36, mevcut: ${totalAkts + cartAkts}).`;
-				setTimeout(() => (enrollError = null), 3000);
-				return;
+		// Senkron imza korunur; async işlem aşağıda
+		void toggleCartAsync(course);
+	}
+
+	async function toggleCartAsync(course: AvailableCourse) {
+		if (!browser) return;
+		const token = localStorage.token ?? null;
+		if (!token) return;
+		const existing = enrollments.find((e) => e.status === 'draft' && e.section_id === course.id);
+		enrollError = null;
+		if (hasPendingRegistration) {
+			enrollError = 'Listeniz danışman onayında; değişiklik yapılamaz.';
+			setTimeout(() => (enrollError = null), 4000);
+			return;
+		}
+		try {
+			if (existing) {
+				await deleteDouDraftEnrollment(token, existing.id);
+			} else {
+				const maxAkts = registrationLimits?.akts_max ?? 30;
+				if (enrollmentScheduledAkts + course.akts > maxAkts) {
+					enrollError = `AKTS limitini aşıyor (maks. ${maxAkts}, mevcut: ${enrollmentScheduledAkts}).`;
+					setTimeout(() => (enrollError = null), 4000);
+					return;
+				}
+				await postDouDraftEnrollments(token, [course.id], 'registration');
 			}
-			cart = [...cart, course];
+			await loadPage();
+		} catch (e: unknown) {
+			enrollError = e instanceof Error ? e.message : 'İşlem yapılamadı.';
+		}
+	}
+
+	async function removeDraftEnrollmentRow(enrollmentId: string) {
+		const token = localStorage.token ?? null;
+		if (!token) return;
+		enrollError = null;
+		dropError = null;
+		try {
+			await deleteDouDraftEnrollment(token, enrollmentId);
+			await loadPage();
+		} catch (e: unknown) {
+			const msg = e instanceof Error ? e.message : 'Silinemedi.';
+			if (apiKey === 'ders-ekle') dropError = msg;
+			else enrollError = msg;
+		}
+	}
+
+	async function clearAllDraftEnrollments() {
+		const token = localStorage.token ?? null;
+		if (!token) return;
+		enrollError = null;
+		try {
+			await Promise.all(draftEnrollments.map((e) => deleteDouDraftEnrollment(token, e.id)));
+			await loadPage();
+		} catch (e: unknown) {
+			enrollError = e instanceof Error ? e.message : 'Temizlenemedi.';
 		}
 	}
 
 	async function finalizeEnrollment() {
-		if (!cart.length) return;
+		if (!draftEnrollments.length) return;
 		enrollSubmitting = true;
 		enrollSuccess = null;
 		enrollError = null;
 		const token = localStorage.token ?? null;
 		try {
-			await createDouEnrollmentRequest(
-				token,
-				cart.map((c) => c.id)
-			);
-			const dersListesi = cart
-				.map((c) => `• ${c.course_code} — ${c.course_name} (${c.akts} AKTS)`)
+			await submitDouStudentSchedule(token, undefined);
+			const dersListesi = draftEnrollments
+				.map((e) => `• ${e.course_code} — ${e.course_name} (${e.akts} AKTS)`)
 				.join('\n');
 			await sendDouMessageApi(token, {
 				receiver_name: 'Danışmanım',
 				receiver_type: 'akademisyen',
-				subject: 'Ders Kayıt Kesinleştirme Talebi',
-				body: `Sayın Danışmanım,\n\nAşağıdaki dersler için kayıt kesinleştirme talebinde bulunuyorum:\n\n${dersListesi}\n\nToplamda ${cartAkts} AKTS. Onayınızı bekliyorum.\n\nSaygılarımla`
+				subject: 'Ders Kayıt — Danışman onayı',
+				body: `Sayın Danışmanım,\n\nDers kayıt listemi onayınıza gönderdim:\n\n${dersListesi}\n\nToplamda ${draftAkts} AKTS. Saygılarımla`
 			}).catch(() => {
-				/* mesaj isteğe bağlı; kayıt talebi zaten oluştu */
+				/* mesaj isteğe bağlı */
 			});
-			const courseNames = cart.map((c) => c.course_code).join(', ');
-			enrollSuccess = `${cart.length} ders (${courseNames}) için kayıt isteği oluşturuldu; danışmanınıza bilgi iletildi.`;
-			cart = [];
-			await loadPage(activePath);
+			const courseNames = draftEnrollments.map((e) => e.course_code).join(', ');
+			enrollSuccess = `${draftEnrollments.length} ders (${courseNames}) danışman onayına gönderildi; liste kilitlendi.`;
+			await loadPage();
 		} catch (e: unknown) {
 			enrollError = e instanceof Error ? e.message : 'İstek gönderilemedi.';
 		} finally {
@@ -353,28 +473,77 @@
 	}
 
 	function toggleDrop(enrollmentId: string) {
+		if (hasPendingAddDrop) return;
 		const s = new Set(markedDrop);
 		if (s.has(enrollmentId)) s.delete(enrollmentId);
 		else s.add(enrollmentId);
 		markedDrop = s;
 	}
 
-	async function finalizeDrop() {
-		if (!markedDrop.size) return;
+	async function toggleAddDropCartAsync(course: AvailableCourse) {
+		if (!browser) return;
+		const token = localStorage.token ?? null;
+		if (!token) return;
+		const existing = enrollments.find((e) => e.status === 'draft' && e.section_id === course.id);
+		dropError = null;
+		if (hasPendingAddDrop) {
+			dropError = 'Listeniz danışman onayında; değişiklik yapılamaz.';
+			setTimeout(() => (dropError = null), 4000);
+			return;
+		}
+		try {
+			if (existing) {
+				await deleteDouDraftEnrollment(token, existing.id);
+			} else {
+				const maxAkts = registrationLimits?.akts_max ?? 30;
+				if (enrollmentScheduledAkts + course.akts > maxAkts) {
+					dropError = `AKTS limitini aşıyor (maks. ${maxAkts}, mevcut: ${enrollmentScheduledAkts}).`;
+					setTimeout(() => (dropError = null), 4000);
+					return;
+				}
+				await postDouDraftEnrollments(token, [course.id], 'add_drop');
+			}
+			await loadPage();
+		} catch (e: unknown) {
+			dropError = e instanceof Error ? e.message : 'İşlem yapılamadı.';
+		}
+	}
+
+	function toggleAddDropCart(course: AvailableCourse) {
+		void toggleAddDropCartAsync(course);
+	}
+
+	async function submitAddDropPackage() {
+		if (!addDropDraftRows.length && !markedDrop.size) return;
 		dropSubmitting = true;
 		dropSuccess = null;
 		dropError = null;
 		const token = localStorage.token ?? null;
 		try {
-			await Promise.all(
-				[...markedDrop].map((id) => createDouDropRequest(token, id, 'Ders ekle/bırak talebi'))
-			);
-			dropSuccess = `${markedDrop.size} ders bırakma isteği akademisyeninize gönderildi.`;
-			// Başarılı istekler → üstü çizili görünüm
-			droppedIds = new Set([...droppedIds, ...markedDrop]);
+			await submitDouStudentSchedule(token, undefined, {
+				flow: 'add_drop',
+				enrollment_ids_to_drop: [...markedDrop]
+			});
+			const adds = addDropDraftRows
+				.map((e) => `• + ${e.course_code} (${e.akts} AKTS)`)
+				.join('\n');
+			const drops = [...markedDrop]
+				.map((id) => enrollments.find((x) => x.id === id))
+				.filter(Boolean)
+				.map((e) => `• − ${e!.course_code}`)
+				.join('\n');
+			await sendDouMessageApi(token, {
+				receiver_name: 'Danışmanım',
+				receiver_type: 'akademisyen',
+				subject: 'Ders ekle/bırak — onay',
+				body: `Sayın Danışmanım,\n\nEkle/bırak paketimi onayınıza gönderdim.\n\n${adds || '(yeni ders yok)'}\n\n${drops || '(bırakma yok)'}\n\nSaygılarımla`
+			}).catch(() => {});
+			dropSuccess =
+				'Paket danışman onayına gönderildi; yeni dersler ve bırakma işaretleri kilitlendi.';
 			markedDrop = new Set();
+			await loadPage();
 		} catch (e: unknown) {
-			dropError = e instanceof Error ? e.message : 'Hata.';
+			dropError = e instanceof Error ? e.message : 'Gönderilemedi.';
 		} finally {
 			dropSubmitting = false;
 		}
@@ -460,7 +629,7 @@
 		FF: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
 	};
 
-	const AKTS_LIMIT = 30;
+	$: aktsBarDenom = Math.max(1, aktsMax);
 </script>
 
 <svelte:head><title>OBS — {pageTitle}</title></svelte:head>
@@ -864,52 +1033,81 @@
 				<div class="flex items-center justify-between text-sm">
 					<span class="font-semibold">{enrollmentTermLabel} — AKTS Durumu</span>
 					<span class="font-bold text-sky-700 dark:text-sky-300"
-						>{totalAkts + cartAkts} / {AKTS_LIMIT}</span
+						>{enrollmentScheduledAkts} / {aktsMax}</span
 					>
 				</div>
 				<div class="mt-2 h-2 w-full overflow-hidden rounded-full bg-sky-100 dark:bg-sky-900/40">
 					<div
 						class="h-2 rounded-full transition-all
-						{(totalAkts + cartAkts) / AKTS_LIMIT > 0.9
+						{(enrollmentScheduledAkts) / aktsBarDenom > 0.9
 							? 'bg-red-500'
-							: (totalAkts + cartAkts) / AKTS_LIMIT > 0.7
+							: enrollmentScheduledAkts / aktsBarDenom > 0.7
 								? 'bg-amber-400'
 								: 'bg-sky-500'}"
-						style="width:{Math.min(100, ((totalAkts + cartAkts) / AKTS_LIMIT) * 100)}%"
+						style="width:{Math.min(100, (enrollmentScheduledAkts / aktsBarDenom) * 100)}%"
 					></div>
 				</div>
+				{#if aktsLimitHint}
+					<p class="mt-2 text-[11px] text-sky-800/80 dark:text-sky-200/90">{aktsLimitHint}</p>
+				{/if}
 			</div>
 
-			<!-- Sepet / Kesinleştir -->
-			{#if cart.length}
+			{#if hasPendingRegistration}
 				<div
-					class="rounded-xl border border-emerald-200 bg-emerald-50/80 px-5 py-4 dark:border-emerald-900/40 dark:bg-emerald-950/20"
+					class="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-5 py-3 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-200"
+				>
+					<strong>Danışman onayında:</strong> Ders seçiminiz kilitli. Danışmanınız kesinleştirdiğinde
+					kayıtlarınız <strong>Kesinleştirildi</strong> olarak görünecek; haftalık programınız güncellenir
+					(<a href="/obs/ogrenci/ders-programi" class="underline font-semibold">Ders programı</a>).
+				</div>
+			{/if}
+
+			{#if enrollments.some((e) => e.status === 'active')}
+				<div
+					class="mt-3 rounded-xl border border-emerald-100 bg-emerald-50/80 px-5 py-3 text-sm text-emerald-900 dark:border-emerald-900/30 dark:bg-emerald-950/20 dark:text-emerald-200"
+				>
+					<span class="font-semibold">Kesinleşen dersler ({enrollments.filter((e) => e.status === 'active').length}):</span>
+					<span class="text-emerald-800 dark:text-emerald-300">
+						{enrollments
+							.filter((e) => e.status === 'active')
+							.map((e) => e.course_code)
+							.join(', ')}</span
+					>
+				</div>
+			{/if}
+
+			<!-- Sepet / Gönder -->
+			{#if draftEnrollments.length}
+				<div
+					class="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/80 px-5 py-4 dark:border-emerald-900/40 dark:bg-emerald-950/20"
 				>
 					<div class="mb-3 flex items-center justify-between">
 						<span class="font-semibold text-emerald-800 dark:text-emerald-200"
-							>Sepet ({cart.length} ders · {cartAkts} AKTS)</span
+							>Taslak sepet ({draftEnrollments.length} ders · {draftAkts} AKTS)</span
 						>
 						<button
-							on:click={() => (cart = [])}
+							on:click={clearAllDraftEnrollments}
+							disabled={hasPendingRegistration}
 							type="button"
-							class="text-xs text-emerald-600 hover:text-emerald-800 dark:text-emerald-400"
+							class="text-xs text-emerald-600 hover:text-emerald-800 dark:text-emerald-400 disabled:opacity-40"
 							>Temizle</button
 						>
 					</div>
 					<div class="mb-3 space-y-1.5">
-						{#each cart as c}
+						{#each draftEnrollments as e}
 							<div
 								class="flex items-center justify-between rounded-lg bg-white/70 px-3 py-2 dark:bg-white/5"
 							>
 								<span class="font-mono text-xs font-semibold text-slate-500 mr-2"
-									>{c.course_code}</span
+									>{e.course_code}</span
 								>
-								<span class="flex-1 text-sm font-medium">{c.course_name}</span>
-								<span class="mx-3 text-xs text-slate-400">{c.akts} AKTS</span>
+								<span class="flex-1 text-sm font-medium">{e.course_name}</span>
+								<span class="mx-3 text-xs text-slate-400">{e.akts} AKTS</span>
 								<button
-									on:click={() => toggleCart(c)}
+									on:click={() => removeDraftEnrollmentRow(e.id)}
+									disabled={hasPendingRegistration}
 									type="button"
-									class="text-red-400 hover:text-red-600 text-sm">✕</button
+									class="text-red-400 hover:text-red-600 text-sm disabled:opacity-40">✕</button
 								>
 							</div>
 						{/each}
@@ -930,7 +1128,7 @@
 					{/if}
 					<button
 						on:click={finalizeEnrollment}
-						disabled={enrollSubmitting}
+						disabled={enrollSubmitting || hasPendingRegistration}
 						type="button"
 						class="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-2.5 text-sm font-bold text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
 					>
@@ -941,12 +1139,12 @@
 						{/if}
 						{enrollSubmitting
 							? 'Gönderiliyor…'
-							: '✓ Kayıt İsteğini Kesinleştir → Akademisyene Gönder'}
+							: '✓ Danışmana Gönder (listeyi kilitle)'}
 					</button>
 				</div>
 			{:else if enrollSuccess}
 				<div
-					class="rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm text-emerald-800 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:text-emerald-200"
+					class="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm text-emerald-800 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:text-emerald-200"
 				>
 					{enrollSuccess}
 				</div>
@@ -954,7 +1152,7 @@
 
 			<!-- Açılan dersler tablosu -->
 			<div
-				class="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
+				class="mt-3 overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
 			>
 				<div
 					class="flex items-center justify-between border-b border-black/5 px-5 py-3 dark:border-white/10"
@@ -971,6 +1169,7 @@
 								<th class="px-4 py-3 text-left">Kod</th>
 								<th class="px-4 py-3 text-left">Ders Adı</th>
 								<th class="px-4 py-3 text-center">AKTS</th>
+								<th class="px-4 py-3 text-left text-xs">Öncelik</th>
 								<th class="px-4 py-3 text-left">Öğr. Elemanı</th>
 								<th class="px-4 py-3 text-left">Gün/Saat</th>
 								<th class="px-4 py-3 text-center">Kontenjan</th>
@@ -979,7 +1178,9 @@
 						</thead>
 						<tbody>
 							{#each availableCourses as c}
-								{@const inCart = !!cart.find((x) => x.id === c.id)}
+								{@const inCart = enrollments.some(
+									(x) => x.status === 'draft' && x.section_id === c.id
+								)}
 								{@const full = c.enrolled >= c.capacity}
 								<tr
 									class="border-t border-black/5 dark:border-white/10 {inCart
@@ -991,6 +1192,15 @@
 									>
 									<td class="px-4 py-3 font-medium">{c.course_name}</td>
 									<td class="px-4 py-3 text-center font-semibold">{c.akts}</td>
+									<td
+										class="px-4 py-3 text-[10px] leading-tight text-slate-600 dark:text-slate-400"
+										title={c.registration_priority_label ?? ''}
+									>
+										<span class="font-mono font-semibold">{c.registration_priority_tier ?? '—'}</span>
+										{#if c.registration_priority_label}
+											<div class="max-w-[7rem] truncate">{c.registration_priority_label}</div>
+										{/if}
+									</td>
 									<td class="px-4 py-3 text-xs text-slate-500">{c.instructor_name}</td>
 									<td class="px-4 py-3 text-xs">{c.day_of_week} {c.start_time}–{c.end_time}</td>
 									<td
@@ -1005,6 +1215,8 @@
 									<td class="px-4 py-3 text-center">
 										{#if full && !inCart}
 											<span class="text-xs text-slate-300">—</span>
+										{:else if hasPendingRegistration}
+											<span class="text-xs text-slate-400" title="Liste kilitli">Kilitli</span>
 										{:else}
 											<button
 												type="button"
@@ -1014,7 +1226,7 @@
 													? 'bg-sky-100 text-sky-700 ring-1 ring-sky-300 dark:bg-sky-900/40 dark:text-sky-300'
 													: 'bg-slate-100 text-slate-600 hover:bg-sky-50 hover:text-sky-700 dark:bg-white/10 dark:hover:bg-sky-900/20'}"
 											>
-												{inCart ? '✓ Sepette' : '+ Sepete Ekle'}
+												{inCart ? 'Sepette' : 'Sepete ekle'}
 											</button>
 										{/if}
 									</td>
@@ -1035,30 +1247,47 @@
 			<!-- DERS EKLE / BIRAK                                                 -->
 			<!-- ================================================================ -->
 		{:else if apiKey === 'ders-ekle'}
+			<p class="mb-2 text-xs text-slate-500">Dönem: {addDropTermLabel}</p>
 			<div
 				class="rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
 			>
 				<div
-					class="flex items-center justify-between border-b border-black/5 px-5 py-3 dark:border-white/10"
+					class="flex flex-wrap items-center justify-between gap-2 border-b border-black/5 px-5 py-3 dark:border-white/10"
 				>
 					<div>
-						<span class="text-sm font-semibold">{enrollments.length} aktif ders</span>
-						<span class="ml-2 text-xs text-slate-400">{totalAkts} AKTS</span>
-					</div>
-					{#if markedDrop.size > 0}
-						<div class="flex items-center gap-2">
-							<span class="text-xs text-slate-500">{markedDrop.size} seçildi</span>
-							<button
-								on:click={finalizeDrop}
-								disabled={dropSubmitting}
-								type="button"
-								class="flex items-center gap-1.5 rounded-lg bg-red-500 px-3 py-1.5 text-xs font-bold text-white hover:bg-red-400 disabled:opacity-50 transition-colors"
+						<span class="text-sm font-semibold">
+							{enrollments.filter((e) => e.status === 'active').length} aktif ders
+						</span>
+						<span class="ml-2 text-xs text-slate-400">{totalAkts} AKTS (aktif)</span>
+						{#if addDropDraftRows.length}
+							<span class="ml-2 text-xs font-medium text-sky-600 dark:text-sky-400"
+								>+{addDropDraftRows.length} taslak (eklenecek)</span
 							>
-								{dropSubmitting ? 'Gönderiliyor…' : '→ Bırakma İsteği Gönder'}
-							</button>
-						</div>
+						{/if}
+					</div>
+					{#if addDropDraftRows.length || markedDrop.size}
+						<button
+							on:click={submitAddDropPackage}
+							disabled={dropSubmitting || hasPendingAddDrop}
+							type="button"
+							class="flex items-center gap-1.5 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-500 disabled:opacity-50 transition-colors"
+						>
+							{dropSubmitting
+								? 'Gönderiliyor…'
+								: hasPendingAddDrop
+									? 'Liste kilitli'
+									: '→ Paketi danışmana gönder'}
+						</button>
 					{/if}
 				</div>
+
+				{#if hasPendingAddDrop}
+					<div
+						class="mt-0 border-b border-amber-100 bg-amber-50/80 px-5 py-2 text-xs text-amber-800 dark:border-amber-900/30 dark:bg-amber-950/30 dark:text-amber-200"
+					>
+						Listeniz danışman onayında; kesinleşene veya reddedilene kadar değişiklik yapılamaz.
+					</div>
+				{/if}
 
 				{#if dropSuccess}
 					<div
@@ -1084,83 +1313,214 @@
 								<th class="w-8 px-4 py-3"></th>
 								<th class="px-4 py-3 text-left">Kod</th>
 								<th class="px-4 py-3 text-left">Ders Adı</th>
+								<th class="px-4 py-3 text-left">Durum</th>
 								<th class="px-4 py-3 text-center">AKTS</th>
+								<th class="px-4 py-3 text-left text-xs">Önc.</th>
 								<th class="px-4 py-3 text-left">Öğr. Elemanı</th>
 								<th class="px-4 py-3 text-left">Gün/Saat</th>
+								<th class="px-4 py-3"></th>
 							</tr>
 						</thead>
 						<tbody>
-							{#each enrollments as e}
+							{#each enrollments.filter((x) => ['active', 'pending_drop', 'pending', 'draft'].includes(x.status)) as e}
 								{@const eId = e.id ?? e.course_code}
 								{@const marked = markedDrop.has(eId)}
-								{@const dropped = droppedIds.has(eId)}
+								{@const st = e.status}
 								<tr
-									class="border-t border-black/5 dark:border-white/10 transition-colors
-								{dropped
-										? 'bg-slate-50/80 opacity-60 dark:bg-white/5'
-										: marked
-											? 'bg-red-50/60 dark:bg-red-950/20'
-											: 'hover:bg-slate-50/50 dark:hover:bg-white/5'}"
+									class="border-t border-black/5 dark:border-white/10 transition-colors {st ===
+									'pending_drop'
+										? 'bg-amber-50/50 dark:bg-amber-950/20'
+										: st === 'draft'
+											? 'bg-sky-50/40 dark:bg-sky-950/20'
+											: marked
+												? 'bg-red-50/60 dark:bg-red-950/20'
+												: 'hover:bg-slate-50/50 dark:hover:bg-white/5'}"
 								>
 									<td class="px-4 py-3">
-										{#if dropped}
-											<span title="Bırakma isteği gönderildi" class="text-slate-400 text-sm"
-												>⏳</span
-											>
-										{:else}
+										{#if st === 'active' && !hasPendingAddDrop}
 											<input
 												type="checkbox"
 												checked={marked}
 												on:change={() => toggleDrop(eId)}
 												class="accent-red-500 h-4 w-4 cursor-pointer"
 											/>
+										{:else if st === 'active' && hasPendingAddDrop}
+											<span class="text-slate-300">—</span>
+										{:else}
+											<span class="text-slate-300">—</span>
 										{/if}
 									</td>
 									<td
 										class="px-4 py-3 font-mono text-xs font-semibold {marked
 											? 'text-red-500'
-											: dropped
-												? 'text-slate-400'
-												: 'text-slate-500'}">{e.course_code}</td
+											: 'text-slate-500'}"
 									>
+										{e.course_code}
+									</td>
 									<td
-										class="px-4 py-3 font-medium {dropped
-											? 'line-through text-slate-400'
-											: marked
-												? 'line-through text-slate-400'
-												: ''}">{e.course_name}</td
+										class="px-4 py-3 font-medium {marked || st === 'pending_drop'
+											? 'text-slate-500 line-through'
+											: ''}"
 									>
-									<td class="px-4 py-3 text-center {dropped ? 'text-slate-400' : ''}">{e.akts}</td>
-									<td class="px-4 py-3 text-xs {dropped ? 'text-slate-400' : 'text-slate-500'}"
-										>{e.instructor_name ?? '—'}</td
+										{e.course_name}
+									</td>
+									<td class="px-4 py-3">
+										{#if st === 'draft'}
+											<span
+												class="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-bold text-sky-800 dark:bg-sky-900/50 dark:text-sky-200"
+												>Taslak (eklenecek)</span
+											>
+										{:else if st === 'pending'}
+											<span
+												class="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-bold text-violet-800 dark:bg-violet-900/50 dark:text-violet-200"
+												>Onayda (yeni ders)</span
+											>
+										{:else if st === 'pending_drop'}
+											<span
+												class="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800 dark:bg-amber-900/50 dark:text-amber-200"
+												>Bırakma onayında</span
+											>
+										{:else}
+											<span class="text-xs text-slate-400">Kayıtlı</span>
+										{/if}
+									</td>
+									<td class="px-4 py-3 text-center">{e.akts}</td>
+									<td
+										class="px-4 py-3 text-[10px] leading-tight text-slate-500"
+										title={e.registration_priority_label ?? ''}
 									>
-									<td class="px-4 py-3 text-xs {dropped ? 'text-slate-400' : ''}"
-										>{e.day_of_week ?? '—'}
-										{e.start_time ?? ''}
-										{#if dropped}<span
-												class="ml-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
-												>Beklemede</span
-											>{/if}
+										<span class="font-mono font-semibold">{e.registration_priority_tier ?? '—'}</span>
+										{#if e.registration_priority_label}
+											<div class="max-w-[6.5rem] truncate">{e.registration_priority_label}</div>
+										{/if}
+									</td>
+									<td class="px-4 py-3 text-xs text-slate-500">{e.instructor_name ?? '—'}</td>
+									<td class="px-4 py-3 text-xs">
+										{e.day_of_week ?? '—'} {e.start_time ?? ''}
+									</td>
+									<td class="px-4 py-3 text-right">
+										{#if st === 'draft' && !hasPendingAddDrop}
+											<button
+												type="button"
+												class="text-xs font-semibold text-red-600 hover:underline"
+												on:click={() => removeDraftEnrollmentRow(eId)}>Kaldır</button
+											>
+										{/if}
 									</td>
 								</tr>
 							{:else}
 								<tr
-									><td colspan="6" class="px-4 py-8 text-center text-sm text-slate-400"
-										>Kayıtlı ders yok.</td
+									><td colspan="9" class="px-4 py-8 text-center text-sm text-slate-400"
+										>Henüz satır yok.</td
 									></tr
 								>
 							{/each}
 						</tbody>
 					</table>
 				</div>
-				{#if markedDrop.size > 0}
+				{#if markedDrop.size > 0 || addDropDraftRows.length > 0}
 					<div
-						class="border-t border-black/5 bg-red-50/40 px-5 py-3 text-xs text-red-600 dark:border-white/10 dark:bg-red-950/10 dark:text-red-400"
+						class="border-t border-black/5 bg-slate-50/50 px-5 py-3 text-xs text-slate-600 dark:border-white/10 dark:bg-white/5 dark:text-slate-400"
 					>
-						İşaretlenen dersler için bırakma talebi akademisyeninize iletilecek. Onaylandıktan sonra
-						kaydınız silinecektir.
+						Aktif dersleri işaretleyerek bırakma talebinizi sepete ekleyin; aşağıdan yeni şube
+						ekleyin. Tek pakette danışmana gönderilir; kesinleşince eklenenler kayda, işaretlenenler
+						düşer.
 					</div>
 				{/if}
+			</div>
+
+			<div
+				class="mt-6 overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
+			>
+				<div
+					class="flex items-center justify-between border-b border-black/5 px-5 py-3 dark:border-white/10"
+				>
+					<div class="text-sm font-bold text-slate-600 dark:text-slate-300">
+						Ekle-bırak için açılan dersler
+					</div>
+					<div class="text-xs text-slate-400">{availableCourses.length} şube</div>
+				</div>
+				<div class="overflow-x-auto">
+					<table class="w-full text-sm">
+						<thead
+							class="bg-slate-50 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
+						>
+							<tr>
+								<th class="px-4 py-3 text-left">Kod</th>
+								<th class="px-4 py-3 text-left">Ders Adı</th>
+								<th class="px-4 py-3 text-center">AKTS</th>
+								<th class="px-4 py-3 text-left text-xs">Öncelik</th>
+								<th class="px-4 py-3 text-left">Öğr. Elemanı</th>
+								<th class="px-4 py-3 text-left">Gün/Saat</th>
+								<th class="px-4 py-3 text-center">Kontenjan</th>
+								<th class="px-4 py-3 text-center"></th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each availableCourses as c}
+								{@const inCart = enrollments.some(
+									(x) => x.status === 'draft' && x.section_id === c.id
+								)}
+								{@const full = c.enrolled >= c.capacity}
+								<tr
+									class="border-t border-black/5 dark:border-white/10 {inCart
+										? 'bg-sky-50/50 dark:bg-sky-900/10'
+										: 'hover:bg-slate-50/50 dark:hover:bg-white/5'} transition-colors"
+								>
+									<td class="px-4 py-3 font-mono text-xs font-semibold text-slate-500"
+										>{c.course_code}</td
+									>
+									<td class="px-4 py-3 font-medium">{c.course_name}</td>
+									<td class="px-4 py-3 text-center font-semibold">{c.akts}</td>
+									<td
+										class="px-4 py-3 text-[10px] leading-tight text-slate-600 dark:text-slate-400"
+										title={c.registration_priority_label ?? ''}
+									>
+										<span class="font-mono font-semibold">{c.registration_priority_tier ?? '—'}</span>
+										{#if c.registration_priority_label}
+											<div class="max-w-[7rem] truncate">{c.registration_priority_label}</div>
+										{/if}
+									</td>
+									<td class="px-4 py-3 text-xs text-slate-500">{c.instructor_name}</td>
+									<td class="px-4 py-3 text-xs">{c.day_of_week} {c.start_time}–{c.end_time}</td>
+									<td
+										class="px-4 py-3 text-center text-xs {full ? 'text-red-500' : 'text-slate-500'}"
+									>
+										{c.enrolled}/{c.capacity}
+										{#if full}<span
+												class="ml-1 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-700 dark:bg-red-900/40 dark:text-red-300"
+												>Dolu</span
+											>{/if}
+									</td>
+									<td class="px-4 py-3 text-center">
+										{#if full && !inCart}
+											<span class="text-xs text-slate-300">—</span>
+										{:else if hasPendingAddDrop}
+											<span class="text-xs text-slate-400" title="Liste kilitli">Kilitli</span>
+										{:else}
+											<button
+												type="button"
+												on:click={() => toggleAddDropCart(c)}
+												class="rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors
+													{inCart
+													? 'bg-sky-100 text-sky-700 ring-1 ring-sky-300 dark:bg-sky-900/40 dark:text-sky-300'
+													: 'bg-slate-100 text-slate-600 hover:bg-sky-50 hover:text-sky-700 dark:bg-white/10 dark:hover:bg-sky-900/20'}"
+											>
+												{inCart ? 'Sepette' : 'Sepete ekle'}
+											</button>
+										{/if}
+									</td>
+								</tr>
+							{:else}
+								<tr
+									><td colspan="7" class="px-4 py-8 text-center text-sm text-slate-400"
+										>Açılan ders bulunamadı.</td
+									></tr
+								>
+							{/each}
+						</tbody>
+					</table>
+				</div>
 			</div>
 
 			<!-- ================================================================ -->
@@ -1701,7 +2061,15 @@
 								</span>
 							</div>
 							<p class="mt-2 text-sm text-slate-600 dark:text-slate-300">{ann.content}</p>
-							<div class="mt-2 text-xs text-slate-400">{ann.published_at ?? ''}</div>
+							<div class="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
+								{#if ann.created_by_name}
+									<span class="font-medium text-slate-500 dark:text-slate-400"
+										>Gönderen: {ann.created_by_name}</span
+									>
+									<span class="hidden sm:inline">·</span>
+								{/if}
+								<span>{ann.published_at ?? ''}</span>
+							</div>
 						</div>
 					{/each}
 				</div>

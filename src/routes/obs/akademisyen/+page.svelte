@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
+	import { page } from '$app/stores';
 	import { onMount } from 'svelte';
 	import ObsShell from '$lib/components/obs/ObsShell.svelte';
 	import { user } from '$lib/stores';
@@ -77,7 +78,7 @@
 <svelte:head><title>OBS — Akademisyen Paneli</title></svelte:head>
 
 <ObsShell
-	activePath="/obs/akademisyen"
+	activePath={($page.url.pathname || '/obs/akademisyen').replace(/\/+$/, '') || '/obs/akademisyen'}
 	role="akademisyen"
 	termLabel={activeTerm?.name ?? '2025-2026 Bahar'}
 >

@@ -37,7 +37,11 @@
 </script>
 
 {#if allowed}
-	<ObsShell activePath={$page.url.pathname} role="ogrenci" termLabel={activeTerm?.name ?? '—'}>
+	<ObsShell
+		activePath={($page.url.pathname || '/obs/ogrenci').replace(/\/+$/, '') || '/obs/ogrenci'}
+		role="ogrenci"
+		termLabel={activeTerm?.name ?? '—'}
+	>
 		<span slot="userline">{$user?.name ?? 'Öğrenci'} • {subTitle}</span>
 		<slot />
 	</ObsShell>

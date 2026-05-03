@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
+	import { page } from '$app/stores';
 	import { onMount } from 'svelte';
 	import ObsShell from '$lib/components/obs/ObsShell.svelte';
 	import { user } from '$lib/stores';
@@ -114,7 +115,11 @@
 
 <svelte:head><title>OBS — Admin Paneli</title></svelte:head>
 
-<ObsShell activePath="/obs/admin" role="admin" termLabel="2025-2026 Bahar">
+<ObsShell
+	activePath={($page.url.pathname || '/obs/admin').replace(/\/+$/, '') || '/obs/admin'}
+	role="admin"
+	termLabel="2025-2026 Bahar"
+>
 	<span slot="userline">{$user?.name ?? 'Admin'} • Admin Paneli</span>
 
 	{#if statsErr}
