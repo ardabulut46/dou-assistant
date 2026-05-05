@@ -1432,6 +1432,20 @@ export const putDouSectionAttendance = (
 		{ method: 'PUT', body: JSON.stringify({ records }) }
 	);
 
+export const getDouSectionAttendance = (
+	token: string | null,
+	sectionId: string,
+	week_no: number
+) =>
+	authFetch<{
+		section_id: string;
+		week_no: number;
+		records: { enrollment_id: string; status: 'present' | 'absent' | 'excused' }[];
+	}>(
+		`/academic/sections/${encodeURIComponent(sectionId)}/attendance/${encodeURIComponent(String(week_no))}`,
+		token
+	);
+
 export type AcademicAnnouncementBody = {
 	title: string;
 	content: string;

@@ -20,6 +20,7 @@
 		updateDouSectionExam,
 		deleteDouSectionExam,
 		putDouSectionAttendance,
+		getDouSectionAttendance,
 		getDouAcademicAdvisees,
 		getDouAcademicApprovalRequests,
 		resolveDouApprovalRequest,
@@ -76,6 +77,7 @@
 	let loadErr: string | null = null;
 
 	let sections: DouSection[] = [];
+	let terms: { id: string; starts_at?: string; ends_at?: string; start_date?: string; end_date?: string }[] = [];
 	let selectedSection = '';
 	$: selectedSectionMeta = sections.find((s) => s.id === selectedSection) ?? null;
 	let sectionStudents: AcademicStudent[] = [];
@@ -96,8 +98,60 @@
 	let approvals: DouApprovalRequest[] = [];
 	let inboxMsgs: DouMessage[] = [];
 	let sentMsgs: DouMessage[] = [];
-	let weekNo = 1;
+	let weekNoUi = '1';
 	let attendanceStatus: Record<string, 'present' | 'absent' | 'excused'> = {};
+	let weekCount = 14;
+	let attendanceSaving = false;
+	let attendanceSaved = false;
+	let weekTouched = false;
+	let attendanceLoadingWeek = false;
+
+	function toDateOnly(s: unknown): Date | null {
+		if (!s) return null;
+		const d = new Date(String(s));
+		return Number.isFinite(d.getTime()) ? d : null;
+	}
+
+	function weeksBetweenInclusive(start: Date, end: Date): number {
+		// Gün farkını haftaya yuvarla; minimum 1.
+		const ms = end.getTime() - start.getTime();
+		const days = Math.floor(ms / (1000 * 60 * 60 * 24)) + 1;
+		return Math.max(1, Math.ceil(days / 7));
+	}
+
+	function pickTermRange(term: {
+		starts_at?: string;
+		ends_at?: string;
+		start_date?: string;
+		end_date?: string;
+	}): { start: Date | null; end: Date | null } {
+		// Backend farklı alan isimleri döndürebilir: starts_at/ends_at veya start_date/end_date
+		const start = toDateOnly(term.starts_at ?? term.start_date);
+		const end = toDateOnly(term.ends_at ?? term.end_date);
+		return { start, end };
+	}
+
+	$: {
+		// Şubenin term_id'sine göre dönem tarihini bul; yoksa 14 hafta fallback.
+		const termId = (selectedSectionMeta as unknown as { term_id?: string } | null)?.term_id;
+		const term = termId ? terms.find((t) => t.id === termId) : null;
+		const { start, end } = term ? pickTermRange(term) : { start: null, end: null };
+		const computed = start && end ? weeksBetweenInclusive(start, end) : 14;
+		weekCount = Math.max(1, Math.min(30, computed));
+
+		// Varsayılan hafta: bugün hangi haftaya denk geliyor? (dönem aralığı varsa)
+		const today = new Date();
+		const currentWeek =
+			start && end
+				? Math.max(1, Math.min(weekCount, weeksBetweenInclusive(start, new Date(Math.min(today.getTime(), end.getTime())))))
+				: 1;
+
+		// Kullanıcı elle değiştirmediyse seçimi güncelle; elle değiştirdiyse sadece clamp yap.
+		const uiWeek = Number(weekNoUi) || 1;
+		if (!weekTouched) weekNoUi = String(currentWeek);
+		else if (uiWeek > weekCount) weekNoUi = String(weekCount);
+		else if (uiWeek < 1) weekNoUi = '1';
+	}
 
 	// exam form
 	let examForm = {
@@ -165,6 +219,11 @@
 				sections = [];
 			}
 			if (!selectedSection && sections.length) selectedSection = sections[0].id;
+			// Dönem bilgisi: hafta hesaplamak için lazım (yoklama ekranı başta olmak üzere).
+			if (!terms.length) {
+				const tr = await Promise.allSettled([getDouTerms(token)]);
+				if (tr[0].status === 'fulfilled') terms = (tr[0].value as unknown as typeof terms) ?? [];
+			}
 
 			if (apiKey === 'grades-entry') {
 				if (selectedSection) {
@@ -203,6 +262,7 @@
 				recalcAllLetters();
 			}
 			if (apiKey === 'attendance-entry' && selectedSection) {
+				weekTouched = false; // şube değişince varsayılan "mevcut hafta" seçilsin
 				const r = await Promise.allSettled([getDouSectionStudents(token, selectedSection)]);
 				if (r[0].status === 'fulfilled') {
 					sectionStudents =
@@ -213,6 +273,8 @@
 				sectionStudents.forEach((s) => {
 					attendanceStatus[s.enrollment_id] = attendanceStatus[s.enrollment_id] ?? 'present';
 				});
+				// İlk açılışta seçili haftanın mevcut kayıtlarını yükle
+				await loadAttendanceWeek();
 			}
 			if (apiKey === 'exam-define' && selectedSection) {
 				editingExamId = '';
@@ -483,14 +545,55 @@
 	async function saveAttendance() {
 		const token = localStorage.token ?? null;
 		attendanceErr = null;
+		attendanceSaved = false;
+		attendanceSaving = true;
+		if (!token || !selectedSection) {
+			attendanceErr = 'Oturum veya şube seçimi yok.';
+			attendanceSaving = false;
+			return;
+		}
+		const week = Number(weekNoUi) || 1;
+		if (!Number.isFinite(week) || week < 1) {
+			attendanceErr = 'Hafta seçimi geçersiz.';
+			attendanceSaving = false;
+			return;
+		}
 		const records = Object.entries(attendanceStatus).map(([enrollment_id, status]) => ({
 			enrollment_id,
 			status
 		}));
 		try {
-			await putDouSectionAttendance(token, selectedSection, weekNo, records);
+			await putDouSectionAttendance(token, selectedSection, week, records);
+			attendanceSaved = true;
+			setTimeout(() => (attendanceSaved = false), 3000);
 		} catch (e: unknown) {
 			attendanceErr = e instanceof Error ? e.message : 'Yoklama kaydedilemedi.';
+		} finally {
+			attendanceSaving = false;
+		}
+	}
+
+	async function loadAttendanceWeek() {
+		if (!browser) return;
+		const token = localStorage.token ?? null;
+		if (!token || !selectedSection) return;
+		const week = Number(weekNoUi) || 1;
+		attendanceErr = null;
+		attendanceLoadingWeek = true;
+		try {
+			const r = await getDouSectionAttendance(token, selectedSection, week);
+			const map: Record<string, 'present' | 'absent' | 'excused'> = {};
+			for (const rec of r.records ?? []) {
+				map[rec.enrollment_id] = rec.status;
+			}
+			// Listedeki öğrenciler için set et; kayıt yoksa default present
+			for (const s of sectionStudents) {
+				attendanceStatus[s.enrollment_id] = map[s.enrollment_id] ?? 'present';
+			}
+		} catch (e: unknown) {
+			attendanceErr = e instanceof Error ? e.message : 'Yoklama yüklenemedi.';
+		} finally {
+			attendanceLoadingWeek = false;
 		}
 	}
 
@@ -973,15 +1076,30 @@
 				</div>
 				<div class="flex items-center gap-2">
 					<span class="text-xs font-semibold text-slate-500">Hafta:</span>
-					<input
-						type="number"
-						bind:value={weekNo}
-						min="1"
-						max="16"
-						class="w-16 rounded-lg border border-black/10 bg-white px-2 py-1.5 text-sm outline-none dark:border-white/10 dark:bg-white/5"
-					/>
+					<select
+						bind:value={weekNoUi}
+						on:change={async () => {
+							weekTouched = true;
+							await loadAttendanceWeek();
+						}}
+						class="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+					>
+						{#each Array.from({ length: weekCount }, (_, i) => i + 1) as w}
+							<option value={String(w)}>{w}. hafta</option>
+						{/each}
+					</select>
+					{#if attendanceLoadingWeek}
+						<span class="text-xs text-slate-400">Yükleniyor…</span>
+					{/if}
 				</div>
 			</div>
+			{#if attendanceSaved}
+				<div
+					class="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+				>
+					Yoklama kaydedildi.
+				</div>
+			{/if}
 			{#if attendanceErr}
 				<div
 					class="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300"
@@ -1028,10 +1146,11 @@
 					<div class="border-t border-black/5 px-5 py-3 dark:border-white/10">
 						<button
 							on:click={saveAttendance}
+							disabled={attendanceSaving}
 							type="button"
-							class="rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-400 transition-colors"
+							class="rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-400 transition-colors disabled:opacity-50"
 						>
-							Yoklamayı Kaydet
+							{attendanceSaving ? 'Kaydediliyor…' : 'Yoklamayı Kaydet'}
 						</button>
 					</div>
 				{/if}

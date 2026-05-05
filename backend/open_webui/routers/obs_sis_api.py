@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -132,6 +133,16 @@ async def dev_seed_users(db: Session = Depends(get_session)):
 async def dev_obs_role(user=Depends(get_verified_user)):
     email = getattr(user, "email", "") or ""
     return {"obs_role": _obs_role_for_user(user), "email": email}
+
+
+@public_router.get("/dev/obs-db-ping", summary="[DEV] OBS DB bağlantı testi")
+async def dev_obs_db_ping(obs_db: Session = Depends(get_obs_session)):
+    # OBS DB gerçekten erişilebilir mi? (bağlantı / auth / network)
+    try:
+        obs_db.execute(text("SELECT 1"))
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:500]}
 
 
 @public_router.post(
@@ -1023,6 +1034,19 @@ class AttendanceRecordsInput(BaseModel):
     records: list[dict[str, Any]]
 
 
+@academic_user_router.get("/sections/{section_id}/attendance/{week_no}")
+async def academic_get_attendance(
+    section_id: str,
+    week_no: int,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
+        raise HTTPException(status_code=403, detail="Bu şube size ait değil")
+    rows = repo.section_attendance_week(obs_db, section_id, week_no)
+    return {"section_id": section_id, "week_no": week_no, "records": rows}
+
+
 @academic_user_router.put("/sections/{section_id}/attendance/{week_no}")
 async def academic_put_attendance(
     section_id: str,
@@ -1033,7 +1057,10 @@ async def academic_put_attendance(
 ):
     if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
         raise HTTPException(status_code=403, detail="Bu şube size ait değil")
-    n = repo.record_attendance(obs_db, section_id, week_no, body.records, user.id)
+    # obs_course_sections.instructor_id -> obs_academic_profiles.id olduğu için
+    # yoklama kaydında recorded_by alanını da akademik profil id olarak tutuyoruz.
+    apid = repo.resolve_academic_profile_id(obs_db, user.id)
+    n = repo.record_attendance(obs_db, section_id, week_no, body.records, str(apid or user.id))
     return {"section_id": section_id, "week_no": week_no, "recorded": n}
 
 
@@ -1046,7 +1073,8 @@ async def academic_put_attendance_legacy(
 ):
     if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
         raise HTTPException(status_code=403, detail="Bu şube size ait değil")
-    n = repo.record_attendance(obs_db, section_id, body.week_no, body.records, user.id)
+    apid = repo.resolve_academic_profile_id(obs_db, user.id)
+    n = repo.record_attendance(obs_db, section_id, body.week_no, body.records, str(apid or user.id))
     return {"section_id": section_id, "week_no": body.week_no, "recorded": n}
 
 

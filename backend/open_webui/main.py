@@ -1606,6 +1606,29 @@ if ENABLE_SCIM:
     app.include_router(scim.router, prefix="/api/v1/scim/v2", tags=["scim"])
 
 
+@app.on_event("startup")
+async def _debug_obs_routes_on_startup():
+    # 405 gibi durumlarda, çalışan instance gerçekten ilgili method+path'i yüklemiş mi görmek için.
+    try:
+        target_path = "/api/v1/academic/sections/{section_id}/grade-weights"
+        matches: list[tuple[str, str]] = []
+
+        for r in getattr(app, "routes", []) or []:
+            path = getattr(r, "path", None)
+            if path != target_path:
+                continue
+            for m in sorted(getattr(r, "methods", None) or set()):
+                matches.append((m, path))
+
+        if matches:
+            for m, p in matches:
+                logger.info("[OBS-ROUTES] loaded %s %s", m, p)
+        else:
+            logger.warning("[OBS-ROUTES] NOT loaded %s", target_path)
+    except Exception:
+        logger.exception("[OBS-ROUTES] route scan failed")
+
+
 try:
     audit_level = AuditLevel(AUDIT_LOG_LEVEL)
 except ValueError as e:

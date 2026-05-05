@@ -1648,7 +1648,6 @@ def section_meta(db: Session, section_id: str) -> Optional[dict[str, Any]]:
         SELECT cs.id, cs.course_id, c.code AS course_code, c.name AS course_name,
                cs.section_no, cs.term_id, cs.instructor_id, cs.classroom_id,
                cs.day_of_week, cs.start_time, cs.end_time, cs.capacity,
-               cs.midterm_weight_percent, cs.final_weight_percent,
                cr.code AS classroom_code, u.name AS instructor_name,
                (SELECT COUNT(*) FROM obs_course_enrollments ce WHERE ce.course_section_id = cs.id AND ce.status = 'active') AS enrollment_count
         FROM obs_course_sections cs
@@ -2232,6 +2231,43 @@ def record_attendance(
         )
     db.commit()
     return len(records)
+
+
+def section_attendance_week(
+    db: Session, section_id: str, week_no: int
+) -> list[dict[str, Any]]:
+    """
+    Şube + hafta için mevcut yoklamayı döndürür.
+    UI tarafı enrollment_id üzerinden çalıştığı için ar kayıtlarını ce.id ile map'ler.
+    """
+    rows = (
+        db.execute(
+            text(
+                """
+            SELECT
+              ce.id AS enrollment_id,
+              ar.status
+            FROM obs_attendance_records ar
+            JOIN obs_course_enrollments ce
+              ON ce.student_id = ar.student_id
+             AND ce.course_section_id = ar.course_section_id
+            WHERE ar.course_section_id = :sid
+              AND ar.week_no = :w
+              AND ce.status = 'active'
+            """
+            ),
+            {"sid": section_id, "w": int(week_no)},
+        )
+        .mappings()
+        .all()
+    )
+    return [
+        {
+            "enrollment_id": str(r.get("enrollment_id")),
+            "status": r.get("status") or "present",
+        }
+        for r in rows
+    ]
 
 
 def academic_advisees(db: Session, webui_user_id: str) -> list[dict[str, Any]]:
