@@ -114,7 +114,6 @@
 			items: [
 				{ label: 'Akademik Takvim', href: '/obs/admin/akademik-takvim' },
 				{ label: 'Kayıt Kuralları', href: '/obs/admin/kayit-kurallari' },
-				{ label: 'Belge Talebi İşleme', href: '/obs/admin/belge-talebi-isleme' },
 				{ label: 'Duyuru (Global)', href: '/obs/admin/duyuru-global' },
 				{ label: 'Audit Kayıtları', href: '/obs/admin/audit-kayitlari' }
 			]

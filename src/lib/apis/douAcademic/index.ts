@@ -1351,6 +1351,28 @@ export const finalizeDouSectionGrades = (token: string | null, sectionId: string
 		{ method: 'POST', body: '{}' }
 	);
 
+export const putDouSectionGradeWeights = (
+	token: string | null,
+	sectionId: string,
+	body: { midterm_weight_percent: number; final_weight_percent: number }
+) =>
+	authFetch<{ section_id: string; section?: DouSection | null }>(
+		`/academic/sections/${encodeURIComponent(sectionId)}/grade-weights`,
+		token,
+		{ method: 'PUT', body: JSON.stringify(body) }
+	);
+
+export const unfinalizeDouSectionGrade = (
+	token: string | null,
+	sectionId: string,
+	enrollmentId: string
+) =>
+	authFetch<{ section_id: string; enrollment_id: string; unfinalized: boolean }>(
+		`/academic/sections/${encodeURIComponent(sectionId)}/grades/${encodeURIComponent(enrollmentId)}/unfinalize`,
+		token,
+		{ method: 'POST', body: '{}' }
+	);
+
 export const getDouSectionExams = (token: string | null, sectionId: string) =>
 	authFetch<{ section_id: string; exams: AcademicExam[]; _mock?: boolean }>(
 		`/academic/sections/${sectionId}/exams`,

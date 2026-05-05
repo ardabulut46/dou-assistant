@@ -1602,6 +1602,7 @@ def academic_sections(
                cs.section_no, cs.term_id, cs.instructor_id, cs.classroom_id,
                cs.day_of_week, cs.start_time, cs.end_time, cs.capacity,
                cr.code AS classroom_code, u.name AS instructor_name,
+               cs.midterm_weight_percent, cs.final_weight_percent,
                (SELECT COUNT(*) FROM obs_course_enrollments ce WHERE ce.course_section_id = cs.id AND ce.status = 'active') AS enrollment_count
         FROM obs_course_sections cs
         JOIN obs_courses c ON cs.course_id = c.id
@@ -1632,9 +1633,75 @@ def academic_sections(
             "end_time": _fmt_time(r.get("end_time")),
             "enrollment_count": int(r.get("enrollment_count") or 0),
             "capacity": int(r.get("capacity") or 0),
+            "midterm_weight_percent": float(r.get("midterm_weight_percent") or 40.0),
+            "final_weight_percent": float(r.get("final_weight_percent") or 60.0),
         }
         for r in rows
     ]
+
+
+def section_meta(db: Session, section_id: str) -> Optional[dict[str, Any]]:
+    sec = (
+        db.execute(
+            text(
+                """
+        SELECT cs.id, cs.course_id, c.code AS course_code, c.name AS course_name,
+               cs.section_no, cs.term_id, cs.instructor_id, cs.classroom_id,
+               cs.day_of_week, cs.start_time, cs.end_time, cs.capacity,
+               cs.midterm_weight_percent, cs.final_weight_percent,
+               cr.code AS classroom_code, u.name AS instructor_name,
+               (SELECT COUNT(*) FROM obs_course_enrollments ce WHERE ce.course_section_id = cs.id AND ce.status = 'active') AS enrollment_count
+        FROM obs_course_sections cs
+        JOIN obs_courses c ON cs.course_id = c.id
+        LEFT JOIN obs_classrooms cr ON cs.classroom_id = cr.id
+        LEFT JOIN obs_academic_profiles ap ON cs.instructor_id = ap.id
+        LEFT JOIN "user" u ON u.id = ap.user_id
+        WHERE cs.id = :sid
+        """
+            ),
+            {"sid": section_id},
+        )
+        .mappings()
+        .first()
+    )
+    if not sec:
+        return None
+    return {
+        "id": _str_id(sec["id"]),
+        "course_id": _str_id(sec["course_id"]),
+        "course_code": sec.get("course_code") or "",
+        "course_name": sec.get("course_name") or "",
+        "section_code": chr(64 + int(sec.get("section_no") or 1)),
+        "section_no": int(sec.get("section_no") or 1),
+        "term_id": _str_id(sec["term_id"]),
+        "instructor_id": _str_id(sec.get("instructor_id")),
+        "instructor_name": sec.get("instructor_name") or "",
+        "classroom": sec.get("classroom_code") or "",
+        "day_of_week": normalize_weekday_tr(sec.get("day_of_week")),
+        "start_time": _fmt_time(sec.get("start_time")),
+        "end_time": _fmt_time(sec.get("end_time")),
+        "enrollment_count": int(sec.get("enrollment_count") or 0),
+        "capacity": int(sec.get("capacity") or 0),
+        "midterm_weight_percent": float(sec.get("midterm_weight_percent") or 40.0),
+        "final_weight_percent": float(sec.get("final_weight_percent") or 60.0),
+    }
+
+
+def update_section_grade_weights(
+    db: Session, section_id: str, midterm_weight_percent: float, final_weight_percent: float
+) -> bool:
+    db.execute(
+        text(
+            """
+            UPDATE obs_course_sections
+            SET midterm_weight_percent = :m, final_weight_percent = :f
+            WHERE id = :sid
+            """
+        ),
+        {"sid": section_id, "m": float(midterm_weight_percent), "f": float(final_weight_percent)},
+    )
+    db.commit()
+    return True
 
 
 def section_owned_by_instructor(
@@ -1924,7 +1991,74 @@ def section_grade_rows(db: Session, section_id: str) -> list[dict[str, Any]]:
     ]
 
 
-def upsert_grades(db: Session, section_id: str, grades: list[dict[str, Any]]) -> int:
+def _letter_from_score(score: float) -> str:
+    s = float(score)
+    if s >= 90:
+        return "AA"
+    if s >= 85:
+        return "BA"
+    if s >= 80:
+        return "BB"
+    if s >= 75:
+        return "CB"
+    if s >= 70:
+        return "CC"
+    if s >= 65:
+        return "DC"
+    if s >= 60:
+        return "DD"
+    if s >= 50:
+        return "FD"
+    return "FF"
+
+
+def unfinalize_grade_entry(db: Session, section_id: str, enrollment_id: str) -> tuple[bool, str]:
+    row = db.execute(
+        text(
+            """
+            SELECT g.is_finalized
+            FROM obs_grade_entries g
+            JOIN obs_course_enrollments ce ON ce.id = g.enrollment_id
+            WHERE g.enrollment_id = :eid AND ce.course_section_id = :sid
+            """
+        ),
+        {"eid": enrollment_id, "sid": section_id},
+    ).first()
+    if not row:
+        return False, "not_found"
+    db.execute(
+        text(
+            """
+            UPDATE obs_grade_entries
+            SET is_finalized = false, finalized_at = NULL, finalized_by = NULL, updated_at = NOW()
+            WHERE enrollment_id = :eid
+            """
+        ),
+        {"eid": enrollment_id},
+    )
+    db.commit()
+    return True, ""
+
+
+def upsert_grades(
+    db: Session, section_id: str, grades: list[dict[str, Any]]
+) -> tuple[int, Optional[str]]:
+    # Ağırlıklar (şubeden): yoksa 40/60 varsay
+    wrow = db.execute(
+        text(
+            """
+            SELECT midterm_weight_percent, final_weight_percent
+            FROM obs_course_sections
+            WHERE id = :sid
+            """
+        ),
+        {"sid": section_id},
+    ).mappings().first()
+    w_mid = float((wrow or {}).get("midterm_weight_percent") or 40.0)
+    w_fin = float((wrow or {}).get("final_weight_percent") or 60.0)
+    if w_mid + w_fin <= 0:
+        w_mid, w_fin = 40.0, 60.0
+
     n = 0
     for item in grades:
         eid = item.get("enrollment_id")
@@ -1941,17 +2075,34 @@ def upsert_grades(db: Session, section_id: str, grades: list[dict[str, Any]]) ->
         mid = item.get("midterm")
         fin = item.get("final")
         exists = db.execute(
-            text("SELECT id FROM obs_grade_entries WHERE enrollment_id = :eid"),
+            text("SELECT id, is_finalized FROM obs_grade_entries WHERE enrollment_id = :eid"),
             {"eid": eid},
         ).first()
         if exists:
+            if bool(exists[1]):
+                # Kesinleşmiş kayda update yok (unfinalize endpoint'i kullanılmalı)
+                return n, "finalized"
+
+            # Harf notu hesapla (gövdede yoksa veya boşsa)
+            computed_lg: Optional[str] = None
+            if "letter_grade" not in item or (
+                isinstance(item.get("letter_grade"), str)
+                and not str(item.get("letter_grade") or "").strip()
+            ):
+                if mid is not None and fin is not None:
+                    score = (float(mid) * w_mid + float(fin) * w_fin) / 100.0
+                    computed_lg = _letter_from_score(score)
+
             set_parts = [
                 "midterm = COALESCE(:m, midterm)",
                 "final = COALESCE(:f, final)",
                 "updated_at = NOW()",
             ]
             params: dict[str, Any] = {"eid": eid, "m": mid, "f": fin}
-            if "letter_grade" in item:
+            if computed_lg is not None:
+                set_parts.insert(2, "letter_grade = :lg")
+                params["lg"] = computed_lg
+            elif "letter_grade" in item:
                 lv = item.get("letter_grade")
                 if lv is None or (isinstance(lv, str) and not str(lv).strip()):
                     set_parts.insert(2, "letter_grade = NULL")
@@ -1967,7 +2118,16 @@ def upsert_grades(db: Session, section_id: str, grades: list[dict[str, Any]]) ->
         else:
             gid = str(uuid.uuid4())
             lg_insert: Optional[str] = None
-            if "letter_grade" in item:
+
+            # Harf notu (gövdede yoksa) hesapla
+            if "letter_grade" not in item or (
+                isinstance(item.get("letter_grade"), str)
+                and not str(item.get("letter_grade") or "").strip()
+            ):
+                if mid is not None and fin is not None:
+                    score2 = (float(mid) * w_mid + float(fin) * w_fin) / 100.0
+                    lg_insert = _letter_from_score(score2)
+            elif "letter_grade" in item:
                 lv2 = item.get("letter_grade")
                 if lv2 is not None and str(lv2).strip():
                     lg_insert = str(lv2).strip().upper()[:8]

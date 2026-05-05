@@ -915,8 +915,10 @@ async def academic_section_grades(
 ):
     if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
         raise HTTPException(status_code=403, detail="Bu şube size ait değil")
+    sec = repo.section_meta(obs_db, section_id)
     return {
         "section_id": section_id,
+        "section": sec,
         "students": repo.section_grade_rows(obs_db, section_id),
     }
 
@@ -934,7 +936,9 @@ async def academic_put_grades(
 ):
     if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
         raise HTTPException(status_code=403, detail="Bu şube size ait değil")
-    n = repo.upsert_grades(obs_db, section_id, body.grades)
+    n, err = repo.upsert_grades(obs_db, section_id, body.grades)
+    if err == "finalized":
+        raise HTTPException(status_code=409, detail="Kesinleşmiş not güncellenemez")
     return {"section_id": section_id, "updated": n}
 
 
@@ -968,6 +972,46 @@ async def academic_finalize_grades(
         raise HTTPException(status_code=403, detail="Bu şube size ait değil")
     repo.finalize_section_grades(obs_db, section_id)
     return {"section_id": section_id, "finalized": True}
+
+
+class GradeWeightsUpdate(BaseModel):
+    midterm_weight_percent: float
+    final_weight_percent: float
+
+
+@academic_user_router.put("/sections/{section_id}/grade-weights")
+@academic_user_router.post("/sections/{section_id}/grade-weights")
+async def academic_update_grade_weights(
+    section_id: str,
+    body: GradeWeightsUpdate,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
+        raise HTTPException(status_code=403, detail="Bu şube size ait değil")
+    if body.midterm_weight_percent + body.final_weight_percent != 100:
+        raise HTTPException(status_code=400, detail="Toplam %100 olmalı")
+    repo.update_section_grade_weights(
+        obs_db, section_id, body.midterm_weight_percent, body.final_weight_percent
+    )
+    sec = repo.section_meta(obs_db, section_id)
+    return {"section_id": section_id, "section": sec}
+
+
+@academic_user_router.post("/sections/{section_id}/grades/{enrollment_id}/unfinalize")
+@academic_user_router.put("/sections/{section_id}/grades/{enrollment_id}/unfinalize")
+async def academic_unfinalize_grade(
+    section_id: str,
+    enrollment_id: str,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
+        raise HTTPException(status_code=403, detail="Bu şube size ait değil")
+    ok, err = repo.unfinalize_grade_entry(obs_db, section_id, enrollment_id)
+    if not ok and err == "not_found":
+        raise HTTPException(status_code=404, detail="Not kaydı bulunamadı")
+    return {"section_id": section_id, "enrollment_id": enrollment_id, "unfinalized": True}
 
 
 class AttendanceInput(BaseModel):

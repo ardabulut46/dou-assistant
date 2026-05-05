@@ -13,6 +13,8 @@
 		putDouSectionGrades,
 		deleteDouSectionGrade,
 		finalizeDouSectionGrades,
+		putDouSectionGradeWeights,
+		unfinalizeDouSectionGrade,
 		getDouSectionExams,
 		createDouSectionExam,
 		updateDouSectionExam,
@@ -75,12 +77,15 @@
 
 	let sections: DouSection[] = [];
 	let selectedSection = '';
+	$: selectedSectionMeta = sections.find((s) => s.id === selectedSection) ?? null;
 	let sectionStudents: AcademicStudent[] = [];
 	let gradeRows: AcademicGradeRow[] = [];
 	let gradeEdits: Record<string, { midterm?: number; final?: number; letter_grade?: string }> = {};
 	let gradeDeletingId: string | null = null;
 	let gradeSaving = false;
 	let gradeSaved = false;
+	let gradeWeights = { midterm_weight_percent: 40, final_weight_percent: 60 };
+	let weightsSaving = false;
 	let exams: AcademicExam[] = [];
 	let advisees: unknown[] = [];
 	let adviseeDetailUserId: string | null = null;
@@ -166,6 +171,20 @@
 					const r = await Promise.allSettled([getDouSectionGrades(token, selectedSection)]);
 					if (r[0].status === 'fulfilled') {
 						gradeRows = r[0].value.students ?? [];
+						const sec = r[0].value.section ?? null;
+						if (sec) {
+							// şube meta (ders adı vb) ve ağırlıklar
+							selectedSectionMeta = sec as unknown as DouSection;
+							gradeWeights = {
+								midterm_weight_percent: Number(sec.midterm_weight_percent ?? 40),
+								final_weight_percent: Number(sec.final_weight_percent ?? 60)
+							};
+						} else if (selectedSectionMeta) {
+							gradeWeights = {
+								midterm_weight_percent: Number(selectedSectionMeta.midterm_weight_percent ?? 40),
+								final_weight_percent: Number(selectedSectionMeta.final_weight_percent ?? 60)
+							};
+						}
 					} else {
 						gradeRows = [];
 					}
@@ -180,6 +199,8 @@
 						letter_grade: row.letter_grade?.trim() ?? ''
 					};
 				});
+				// İlk yüklemede de otomatik harf notunu hesapla
+				recalcAllLetters();
 			}
 			if (apiKey === 'attendance-entry' && selectedSection) {
 				const r = await Promise.allSettled([getDouSectionStudents(token, selectedSection)]);
@@ -325,6 +346,7 @@
 				enrollment_id,
 				midterm: g.midterm,
 				final: g.final,
+				// Harf notunu backend de hesaplayabiliyor; yine de UI'daki değeri gönderiyoruz
 				letter_grade: (g.letter_grade ?? '').trim()
 			}));
 			await putDouSectionGrades(token, selectedSection, grades);
@@ -332,6 +354,8 @@
 			setTimeout(() => {
 				gradeSaved = false;
 			}, 3500);
+			// Backend tarafında hesaplanan harf notu / finalize bilgisi ekrana yansısın
+			await loadPage();
 		} catch (e: unknown) {
 			gradeErr = e instanceof Error ? e.message : 'Notlar kaydedilemedi.';
 		} finally {
@@ -367,6 +391,92 @@
 			await loadPage();
 		} catch (e: unknown) {
 			gradeErr = e instanceof Error ? e.message : 'Notlar kesinleştirilemedi.';
+		}
+	}
+
+	function clampPct(x: unknown, fallback: number) {
+		const n = Number(x);
+		if (!Number.isFinite(n)) return fallback;
+		return Math.max(0, Math.min(100, n));
+	}
+
+	function letterFromScore(score: number): string {
+		if (score >= 90) return 'AA';
+		if (score >= 85) return 'BA';
+		if (score >= 80) return 'BB';
+		if (score >= 75) return 'CB';
+		if (score >= 70) return 'CC';
+		if (score >= 65) return 'DC';
+		if (score >= 60) return 'DD';
+		if (score >= 50) return 'FD';
+		return 'FF';
+	}
+
+	function recalcLetter(enrollmentId: string) {
+		const g = gradeEdits[enrollmentId];
+		if (!g) return;
+		const mid = g.midterm;
+		const fin = g.final;
+		if (mid == null || fin == null) {
+			g.letter_grade = '';
+			return;
+		}
+		const wMid = clampPct(gradeWeights.midterm_weight_percent, 40);
+		const wFin = clampPct(gradeWeights.final_weight_percent, 60);
+		const total = wMid + wFin;
+		if (total !== 100) return;
+		const score = (Number(mid) * wMid + Number(fin) * wFin) / 100;
+		g.letter_grade = letterFromScore(score);
+	}
+
+	function recalcAllLetters() {
+		for (const row of gradeRows) recalcLetter(row.enrollment_id);
+	}
+
+	async function saveWeights() {
+		if (!browser) return;
+		const token = localStorage.token ?? null;
+		if (!token || !selectedSection) return;
+		const wMid = clampPct(gradeWeights.midterm_weight_percent, 40);
+		const wFin = clampPct(gradeWeights.final_weight_percent, 60);
+		if (wMid + wFin !== 100) {
+			gradeErr = 'Vize/Final etkisi toplamı %100 olmalı.';
+			return;
+		}
+		weightsSaving = true;
+		gradeErr = null;
+		try {
+			const r = await putDouSectionGradeWeights(token, selectedSection, {
+				midterm_weight_percent: wMid,
+				final_weight_percent: wFin
+			});
+			if (r.section) {
+				// local cache güncelle
+				sections = sections.map((s) =>
+					s.id === selectedSection ? ({ ...s, ...r.section } as DouSection) : s
+				);
+			}
+			recalcAllLetters();
+			gradeSaved = true;
+			setTimeout(() => (gradeSaved = false), 2500);
+		} catch (e: unknown) {
+			gradeErr = e instanceof Error ? e.message : 'Ağırlıklar kaydedilemedi.';
+		} finally {
+			weightsSaving = false;
+		}
+	}
+
+	async function unfinalizeRow(enrollmentId: string) {
+		if (!browser || !confirm('Bu öğrencinin kesinleşmiş notunu tekrar düzenlenebilir yapmak istiyor musunuz?'))
+			return;
+		const token = localStorage.token ?? null;
+		if (!token || !selectedSection) return;
+		gradeErr = null;
+		try {
+			await unfinalizeDouSectionGrade(token, selectedSection, enrollmentId);
+			await loadPage();
+		} catch (e: unknown) {
+			gradeErr = e instanceof Error ? e.message : 'Readonly kaldırılamadı.';
 		}
 	}
 
@@ -650,7 +760,7 @@
 			<!-- NOT GİRİŞİ                                                   -->
 			<!-- ============================================================ -->
 		{:else if apiKey === 'grades-entry'}
-			<div class="flex items-center gap-3">
+			<div class="flex flex-wrap items-center gap-3">
 				<span class="text-xs font-semibold text-slate-500">Şube:</span>
 				<select
 					bind:value={selectedSection}
@@ -661,6 +771,59 @@
 						<option value={s.id}>{s.course_code} — {s.course_name}</option>
 					{/each}
 				</select>
+				{#if selectedSectionMeta}
+					<span class="text-xs text-slate-500">
+						<strong class="text-slate-700 dark:text-slate-200">{selectedSectionMeta.course_code}</strong>
+						— {selectedSectionMeta.course_name} · Şube {selectedSectionMeta.section_no}
+						{#if selectedSectionMeta.day_of_week}
+							· {selectedSectionMeta.day_of_week} {selectedSectionMeta.start_time}
+						{/if}
+					</span>
+				{/if}
+			</div>
+
+			<!-- Vize/Final etkisi -->
+			<div
+				class="rounded-xl border border-black/10 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/5"
+			>
+				<div class="flex flex-wrap items-end gap-3">
+					<div class="text-sm font-semibold text-slate-800 dark:text-slate-100">Not girişi ayarları</div>
+					<div class="ml-auto text-xs text-slate-400">Toplam %100 olmalı</div>
+				</div>
+				<div class="mt-3 flex flex-wrap items-end gap-3">
+					<label class="block">
+						<div class="mb-1 text-xs font-semibold text-slate-500">Vize etkisi %</div>
+						<input
+							type="number"
+							min="0"
+							max="100"
+							step="1"
+							bind:value={gradeWeights.midterm_weight_percent}
+							on:input={() => recalcAllLetters()}
+							class="w-28 rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+						/>
+					</label>
+					<label class="block">
+						<div class="mb-1 text-xs font-semibold text-slate-500">Final etkisi %</div>
+						<input
+							type="number"
+							min="0"
+							max="100"
+							step="1"
+							bind:value={gradeWeights.final_weight_percent}
+							on:input={() => recalcAllLetters()}
+							class="w-28 rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+						/>
+					</label>
+					<button
+						type="button"
+						on:click={saveWeights}
+						disabled={weightsSaving}
+						class="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-500 disabled:opacity-50"
+					>
+						{weightsSaving ? 'Kaydediliyor…' : 'Ağırlıkları Kaydet'}
+					</button>
+				</div>
 			</div>
 
 			{#if gradeSaved}
@@ -708,6 +871,8 @@
 											max="100"
 											step="0.5"
 											bind:value={gradeEdits[g.enrollment_id].midterm}
+											disabled={g.is_finalized}
+											on:input={() => recalcLetter(g.enrollment_id)}
 											class="w-full rounded-lg border border-black/10 bg-white px-2 py-1 text-center text-sm outline-none focus:ring-2 focus:ring-sky-400/40 dark:border-white/10 dark:bg-white/5"
 										/>
 									</td>
@@ -718,31 +883,19 @@
 											max="100"
 											step="0.5"
 											bind:value={gradeEdits[g.enrollment_id].final}
+											disabled={g.is_finalized}
+											on:input={() => recalcLetter(g.enrollment_id)}
 											class="w-full rounded-lg border border-black/10 bg-white px-2 py-1 text-center text-sm outline-none focus:ring-2 focus:ring-sky-400/40 dark:border-white/10 dark:bg-white/5"
 										/>
 									</td>
 									<td class="px-4 py-2.5 text-center">
-										{#if g.is_finalized}
-											<span
-												class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
-											>
-												{g.letter_grade ?? '—'}
-											</span>
-										{:else}
-											<select
-												bind:value={gradeEdits[g.enrollment_id].letter_grade}
-												class="w-full max-w-[7.5rem] rounded-lg border border-black/10 bg-white px-2 py-1 text-center text-xs outline-none focus:ring-2 focus:ring-sky-400/40 dark:border-white/10 dark:bg-white/5"
-											>
-												{#each LETTER_GRADE_OPTIONS as lg}
-													<option value={lg}>{lg === '' ? '—' : lg}</option>
-												{/each}
-												{#if needsCustomLetterOption(g.enrollment_id)}
-													<option value={gradeEdits[g.enrollment_id].letter_grade}>
-														{gradeEdits[g.enrollment_id].letter_grade}
-													</option>
-												{/if}
-											</select>
-										{/if}
+										<span
+											class="rounded-full px-2 py-0.5 text-xs font-bold {g.is_finalized
+												? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
+												: 'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300'}"
+										>
+											{(gradeEdits[g.enrollment_id].letter_grade || g.letter_grade || '—') as string}
+										</span>
 									</td>
 									<td class="px-4 py-2.5 text-center text-xs">
 										{#if g.is_finalized}
@@ -762,7 +915,13 @@
 												{gradeDeletingId === g.enrollment_id ? '…' : 'Notu sil'}
 											</button>
 										{:else}
-											<span class="text-slate-300">—</span>
+											<button
+												type="button"
+												on:click={() => unfinalizeRow(g.enrollment_id)}
+												class="text-xs font-semibold text-violet-600 hover:underline dark:text-violet-400"
+											>
+												Readonly kaldır
+											</button>
 										{/if}
 									</td>
 								</tr>

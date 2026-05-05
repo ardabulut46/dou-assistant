@@ -93,12 +93,6 @@
 			desc: 'AKTS limit, GPA eşiği, deadline'
 		},
 		{
-			href: '/obs/admin/belge-talebi-isleme',
-			title: 'Belge Talebi İşleme',
-			icon: '📄',
-			desc: 'Bekleyen talepleri tamamla'
-		},
-		{
 			href: '/obs/admin/duyuru-global',
 			title: 'Global Duyuru',
 			icon: '📢',
