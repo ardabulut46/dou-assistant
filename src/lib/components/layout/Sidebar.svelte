@@ -783,6 +783,44 @@
 					</div>
 				{/if}
 
+				{#if $user !== undefined && $user !== null}
+					<div>
+						<Tooltip content="OBS" placement="right">
+							<a
+								class=" cursor-pointer flex rounded-xl hover:bg-gray-100 dark:hover:bg-gray-850 transition group"
+								href="/obs"
+								draggable="false"
+								on:click={async (e) => {
+									e.stopImmediatePropagation();
+									e.preventDefault();
+
+									await goto('/obs');
+									itemClickHandler();
+								}}
+								aria-label="OBS"
+							>
+								<div class=" self-center flex items-center justify-center size-9">
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										fill="none"
+										viewBox="0 0 24 24"
+										stroke-width="1.5"
+										stroke="currentColor"
+										class="size-4.5"
+										aria-hidden="true"
+									>
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											d="M12 21v-8.25M15.75 21v-8.25M8.25 21v-8.25M3 9l9-6 9 6v.75m-18 0V21h18V9.75"
+										/>
+									</svg>
+								</div>
+							</a>
+						</Tooltip>
+					</div>
+				{/if}
+
 				{#if $user?.role === 'admin' || $user?.permissions?.workspace?.models || $user?.permissions?.workspace?.knowledge || $user?.permissions?.workspace?.prompts || $user?.permissions?.workspace?.tools}
 					<div class="">
 						<Tooltip content={$i18n.t('Workspace')} placement="right">
@@ -842,7 +880,7 @@
 								<div class="self-center relative">
 									<img
 										src={`${WEBUI_API_BASE_URL}/users/${$user?.id}/profile/image`}
-										class=" size-7 object-cover rounded-full"
+										class="dou-ai-sidebar-avatar size-7 object-cover rounded-full"
 										alt={$i18n.t('Open User Profile Menu')}
 										aria-label={$i18n.t('Open User Profile Menu')}
 									/>
@@ -1009,6 +1047,41 @@
 
 								<div class="flex self-center translate-y-[0.5px]">
 									<div class=" self-center text-sm font-primary">{$i18n.t('Notes')}</div>
+								</div>
+							</a>
+						</div>
+					{/if}
+
+					{#if $user !== undefined && $user !== null}
+						<div class="px-[0.4375rem] flex justify-center text-gray-800 dark:text-gray-200">
+							<a
+								id="sidebar-obs-button"
+								class="grow flex items-center space-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition"
+								href="/obs"
+								on:click={itemClickHandler}
+								draggable="false"
+								aria-label="OBS"
+							>
+								<div class="self-center">
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										fill="none"
+										viewBox="0 0 24 24"
+										stroke-width="2"
+										stroke="currentColor"
+										class="size-4.5"
+										aria-hidden="true"
+									>
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											d="M12 21v-8.25M15.75 21v-8.25M8.25 21v-8.25M3 9l9-6 9 6v.75m-18 0V21h18V9.75"
+										/>
+									</svg>
+								</div>
+
+								<div class="flex self-center translate-y-[0.5px]">
+									<div class=" self-center text-sm font-primary">OBS</div>
 								</div>
 							</a>
 						</div>
@@ -1411,7 +1484,7 @@
 								<div class=" self-center mr-3 relative">
 									<img
 										src={`${WEBUI_API_BASE_URL}/users/${$user?.id}/profile/image`}
-										class=" size-7 object-cover rounded-full"
+										class="dou-ai-sidebar-avatar size-7 object-cover rounded-full"
 										alt={$i18n.t('Open User Profile Menu')}
 										aria-label={$i18n.t('Open User Profile Menu')}
 									/>
@@ -1428,7 +1501,7 @@
 										</div>
 									{/if}
 								</div>
-								<div class=" self-center font-medium">{$user?.name}</div>
+								<div class="dou-ai-sidebar-userline self-center font-medium">{$user?.name}</div>
 							</div>
 						</UserMenu>
 					{/if}
@@ -1438,15 +1511,15 @@
 	</div>
 
 	{#if !$mobile}
+		<!-- Görünmez ince şerit; genişlik (.dou-ai-sidebar-spacer) layout’ta -->
 		<div
-			class="relative flex items-center justify-center group border-l border-gray-50 dark:border-gray-850/30 hover:border-gray-200 dark:hover:border-gray-800 transition z-20"
 			id="sidebar-resizer"
+			class="pointer-events-auto fixed top-0 bottom-0 z-[45] w-1 cursor-col-resize bg-transparent"
+			style="left: calc(var(--sidebar-width, 260px) - 2px);"
 			on:mousedown={resizeStartHandler}
 			role="separator"
-		>
-			<div
-				class=" absolute -left-1.5 -right-1.5 -top-0 -bottom-0 z-20 cursor-col-resize bg-transparent"
-			/>
-		</div>
+			aria-orientation="vertical"
+			aria-label="Yan panel genişliği"
+		></div>
 	{/if}
 {/if}

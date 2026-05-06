@@ -25,7 +25,7 @@
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import OnBoarding from '$lib/components/OnBoarding.svelte';
 	import SensitiveInput from '$lib/components/common/SensitiveInput.svelte';
-	import { redirect } from '@sveltejs/kit';
+	import { obsAreaHome, resolveObsArea } from '$lib/obs/obsAccess';
 
 	const i18n = getContext('i18n');
 
@@ -67,10 +67,10 @@
 			if (!redirectPath) {
 				// Önce explicit redirect paramı (mevcut akışı bozmamak için)
 				redirectPath = $page.url.searchParams.get('redirect');
-				// Yoksa role göre varsayılan yönlendirme
+				// Yoksa sunucu rolü / obs_role ile doğrudan ilgili OBS paneli
 				if (!redirectPath) {
-					// Login sonrası OBS ana ekrana düş
-					redirectPath = '/obs';
+					const area = await resolveObsArea(sessionUser.token ?? null, sessionUser.role ?? null);
+					redirectPath = obsAreaHome(area);
 				}
 			}
 
@@ -180,7 +180,12 @@
 		const redirectPath = $page.url.searchParams.get('redirect');
 		// Store initial değeri null olabildiği için sadece gerçek user varken redirect yap.
 		if ($user) {
-			goto(redirectPath || '/');
+			let dest = redirectPath;
+			if (!dest) {
+				const area = await resolveObsArea(localStorage.token ?? null, $user.role ?? null);
+				dest = obsAreaHome(area);
+			}
+			goto(dest);
 		} else {
 			if (redirectPath) {
 				localStorage.setItem('redirectPath', redirectPath);

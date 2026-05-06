@@ -45,7 +45,6 @@
 	import ChangelogModal from '$lib/components/ChangelogModal.svelte';
 	import AccountPending from '$lib/components/layout/Overlay/AccountPending.svelte';
 	import UpdateInfoToast from '$lib/components/layout/UpdateInfoToast.svelte';
-	import Spinner from '$lib/components/common/Spinner.svelte';
 	import { Shortcut, shortcuts } from '$lib/shortcuts';
 
 	const i18n = getContext('i18n');
@@ -55,6 +54,9 @@
 	let localDBChats = [];
 
 	let version;
+
+	$: douAiBrandBackdrop =
+		$page.url.pathname === '/' || $page.url.pathname.startsWith('/c/');
 
 	const clearChatInputStorage = () => {
 		const chatInputKeys = Object.keys(localStorage).filter((key) => key.startsWith('chat-input'));
@@ -190,6 +192,11 @@
 		const toolsData = await getTools(localStorage.token);
 		tools.set(toolsData);
 	};
+
+	onMount(() => {
+		document.documentElement.classList.add('dou-obs-ai');
+		return () => document.documentElement.classList.remove('dou-obs-ai');
+	});
 
 	onMount(async () => {
 		if ($user === undefined || $user === null) {
@@ -381,9 +388,9 @@
 {/if}
 
 {#if $user}
-	<div class="app relative">
+	<div class="app relative isolate">
 		<div
-			class=" text-gray-700 dark:text-gray-100 bg-white dark:bg-gray-900 h-screen max-h-[100dvh] overflow-auto flex flex-row justify-end"
+			class="dou-ai-shell-inner text-gray-700 dark:text-gray-100 bg-transparent dark:bg-transparent h-screen max-h-[100dvh] overflow-hidden flex flex-row min-h-0"
 		>
 			{#if !['user', 'admin', 'academician'].includes($user?.role)}
 				<AccountPending />
@@ -445,17 +452,31 @@
 
 				<Sidebar />
 
-				{#if loaded}
-					<slot />
-				{:else}
+				{#if $showSidebar && !$mobile}
 					<div
-						class="w-full flex-1 h-full flex items-center justify-center {$showSidebar
-							? '  md:max-w-[calc(100%-var(--sidebar-width))]'
-							: ' '}"
-					>
-						<Spinner className="size-5" />
-					</div>
+						class="dou-ai-sidebar-spacer shrink-0 pointer-events-none select-none"
+						style="width: var(--sidebar-width, 260px)"
+						aria-hidden="true"
+					></div>
 				{/if}
+
+				<div
+					class="dou-ai-main-shell relative flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-visible"
+				>
+					{#if douAiBrandBackdrop}
+						<div class="dou-ai-brand-watermark" aria-hidden="true"></div>
+						<div class="dou-ai-shell-veil" aria-hidden="true"></div>
+					{/if}
+					<div
+						class="dou-ai-main-scroll relative z-[2] flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto"
+					>
+						{#if loaded}
+							<slot />
+						{:else}
+							<div class="min-h-[50vh] w-full flex-1" aria-busy="true"></div>
+						{/if}
+					</div>
+				</div>
 			{/if}
 		</div>
 	</div>

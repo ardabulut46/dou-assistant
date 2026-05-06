@@ -292,9 +292,7 @@
 </svelte:head>
 
 <div
-	class="h-screen max-h-[100dvh] transition-width duration-200 ease-in-out {$showSidebar
-		? 'md:max-w-[calc(100%-var(--sidebar-width))]'
-		: ''} w-full max-w-full flex flex-col"
+	class="flex h-screen max-h-[100dvh] w-full max-w-full flex-col"
 	id="channel-container"
 >
 	<PaneGroup direction="horizontal" class="w-full h-full">

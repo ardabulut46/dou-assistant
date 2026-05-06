@@ -801,3 +801,432 @@ body {
 #note-content-container .ProseMirror {
 	padding-bottom: 2rem; /* space for the bottom toolbar */
 }
+
+/* -------------------------------------------------------------------------- */
+/* Doğuş — AI sohbet kabuğu (OBS rotalarına dokunulmaz; yalnız html.dou-obs-ai) */
+/* 50 / 30 / 20: ~50% beyaz/açık zemin, ~30% lacivert yan alan, ~20% kırmızı vurgu */
+/* Logo filigranı: static/splash.png — kurumsal dosyayla değiştirin              */
+/* -------------------------------------------------------------------------- */
+:root {
+	/* Sidebar.svelte onMount öncesi; resize ile güncellenir */
+	--sidebar-width: 260px;
+
+	--dou-brand: #b91c1c;
+	--dou-brand-soft: #fecaca;
+	/* Açık tema */
+	--dou-ai-p50: #f6f8fc;
+	--dou-ai-p30: #15365f;
+	--dou-ai-p30-deep: #0f2744;
+	--dou-ai-p20: #b91c1c;
+	--dou-ai-p20-hover: #991b1b;
+}
+
+html.dark.dou-obs-ai {
+	--dou-ai-p50: #101c2f;
+	--dou-ai-p30: #0a1628;
+	--dou-ai-p30-deep: #070f1a;
+	--dou-ai-p20: #dc2626;
+	--dou-ai-p20-hover: #b91c1c;
+}
+
+/* Kabukta kırmızı şerit yok — nötr slate çizgi */
+html.dou-obs-ai .dou-ai-shell-inner {
+	position: relative;
+	border-top: 1px solid rgb(15 23 42 / 0.12);
+}
+
+html.dark.dou-obs-ai .dou-ai-shell-inner {
+	border-top-color: rgb(255 255 255 / 0.06);
+}
+
+@keyframes dou-ai-veil-open {
+	from {
+		opacity: 0;
+		transform: scaleY(0.06);
+	}
+	to {
+		opacity: 1;
+		transform: scaleY(1);
+	}
+}
+
+/* Madeni para: iki yüz (aynı görsel), tam rotateY — arka yüz ön ile özdeş görünür */
+@keyframes dou-ai-coin-face-a {
+	0% {
+		transform: translate3d(-50%, -50%, 0) rotateX(11deg) rotateY(0deg);
+	}
+	100% {
+		transform: translate3d(-50%, -50%, 0) rotateX(11deg) rotateY(360deg);
+	}
+}
+
+@keyframes dou-ai-coin-face-b {
+	0% {
+		transform: translate3d(-50%, -50%, 0) rotateX(11deg) rotateY(180deg);
+	}
+	100% {
+		transform: translate3d(-50%, -50%, 0) rotateX(11deg) rotateY(540deg);
+	}
+}
+
+html.dou-obs-ai .dou-ai-brand-watermark {
+	position: absolute;
+	inset: 0;
+	z-index: 0;
+	pointer-events: none;
+	overflow: visible;
+	background-image: none;
+	perspective: 1100px;
+	perspective-origin: 50% 45%;
+	transform-style: preserve-3d;
+}
+
+html.dou-obs-ai .dou-ai-brand-watermark::before,
+html.dou-obs-ai .dou-ai-brand-watermark::after {
+	content: '';
+	position: absolute;
+	left: 50%;
+	top: 50%;
+	width: min(88vmin, 600px);
+	height: min(88vmin, 600px);
+	box-sizing: border-box;
+	background-image: url('/static/splash.png');
+	background-repeat: no-repeat;
+	background-position: center center;
+	background-size: contain;
+	transform-origin: center center;
+	-webkit-backface-visibility: hidden;
+	backface-visibility: hidden;
+	opacity: 0;
+	filter: brightness(1.08) contrast(1.12) saturate(2.35)
+		drop-shadow(0 16px 36px rgb(0 0 0 / 0.18));
+	will-change: transform;
+}
+
+html.dou-obs-ai .dou-ai-brand-watermark::before {
+	animation:
+		dou-ai-logo-fade-in 0.85s ease-out 0.25s forwards,
+		dou-ai-coin-face-a 15s linear infinite;
+}
+
+html.dou-obs-ai .dou-ai-brand-watermark::after {
+	animation:
+		dou-ai-logo-fade-in 0.85s ease-out 0.25s forwards,
+		dou-ai-coin-face-b 15s linear infinite;
+}
+
+@keyframes dou-ai-logo-fade-in {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+
+html.dark.dou-obs-ai .dou-ai-brand-watermark::before,
+html.dark.dou-obs-ai .dou-ai-brand-watermark::after {
+	background-image: url('/static/splash-dark.png');
+	filter: brightness(1.14) contrast(1.1) saturate(2.28)
+		drop-shadow(0 16px 40px rgb(0 0 0 / 0.42));
+}
+
+/* Örtü: kenarlarda hafif okunabilirlik; merkezde logo tam renkli kalsın */
+html.dou-obs-ai .dou-ai-shell-veil {
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	pointer-events: none;
+	transform-origin: top center;
+	animation: dou-ai-veil-open 0.95s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+	will-change: transform, opacity;
+	background:
+		radial-gradient(
+			ellipse 88% 88% at 50% 50%,
+			rgba(255, 255, 255, 0) 0%,
+			rgba(255, 255, 255, 0) 58%,
+			rgba(255, 255, 255, 0.06) 76%,
+			rgba(248 250 252 / 0.28) 100%
+		),
+		linear-gradient(
+			180deg,
+			rgba(255, 255, 255, 0.22) 0%,
+			rgba(255, 255, 255, 0.08) 42%,
+			rgba(248 250 252 / 0.14) 100%
+		);
+	opacity: 0.58;
+}
+
+html.dark.dou-obs-ai .dou-ai-shell-veil {
+	background:
+		radial-gradient(
+			ellipse 86% 86% at 50% 50%,
+			rgba(15, 23, 42, 0) 0%,
+			rgba(15, 23, 42, 0) 52%,
+			rgba(15, 23, 42, 0.28) 72%,
+			rgb(15 23 42 / 0.62) 100%
+		),
+		linear-gradient(
+			180deg,
+			rgba(15, 23, 42, 0.42) 0%,
+			rgba(15, 23, 42, 0.22) 48%,
+			rgba(15, 23, 42, 0.32) 100%
+		);
+	opacity: 0.72;
+	animation: dou-ai-veil-open 0.95s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	html.dou-obs-ai .dou-ai-shell-veil {
+		animation: none !important;
+		opacity: 1 !important;
+		transform: none !important;
+	}
+
+	html.dou-obs-ai .dou-ai-brand-watermark::before {
+		animation: none !important;
+		opacity: 1 !important;
+		transform: translate3d(-50%, -50%, 0) rotateX(11deg) rotateY(0deg) !important;
+		filter: brightness(1.08) contrast(1.12) saturate(2.35)
+			drop-shadow(0 16px 36px rgb(0 0 0 / 0.18)) !important;
+	}
+
+	html.dou-obs-ai .dou-ai-brand-watermark::after {
+		display: none !important;
+	}
+
+	html.dark.dou-obs-ai .dou-ai-brand-watermark::before {
+		filter: brightness(1.14) contrast(1.1) saturate(2.28)
+			drop-shadow(0 16px 40px rgb(0 0 0 / 0.42)) !important;
+	}
+}
+
+html.dou-obs-ai.dark .dou-ai-shell-inner {
+	color: rgb(241 245 249) !important;
+}
+
+html.dou-obs-ai.dark .dou-ai-shell-inner .text-gray-700,
+html.dou-obs-ai.dark .dou-ai-shell-inner .text-gray-600 {
+	color: rgb(226 232 240) !important;
+}
+
+html.dou-obs-ai .dou-ai-shell-inner > :not(.dou-ai-brand-watermark):not(.dou-ai-shell-veil):not(#sidebar) {
+	position: relative;
+	z-index: 2;
+}
+
+html.dou-obs-ai .dou-ai-main-shell > :not(.dou-ai-brand-watermark):not(.dou-ai-shell-veil) {
+	position: relative;
+	z-index: 2;
+}
+
+/* Sohbet alanı — beyaza yakın zemin */
+html.dou-obs-ai #chat-container {
+	background-color: #ffffff;
+}
+
+html.dark.dou-obs-ai #chat-container {
+	background-color: color-mix(in srgb, var(--dou-ai-p50) 92%, black);
+}
+
+/* Üst navbar — kurumsal kırmızı (eskiden sol menü tonları) */
+html.dou-obs-ai #dou-ai-chat-navbar {
+	border-bottom: 1px solid color-mix(in srgb, black 28%, var(--dou-ai-p20));
+	background: linear-gradient(
+		180deg,
+		#7f1d1d 0%,
+		var(--dou-ai-p20) 52%,
+		#b91c1c 100%
+	) !important;
+	backdrop-filter: blur(10px);
+	box-shadow: 0 1px 0 rgb(0 0 0 / 0.22);
+	color: rgb(254 242 242);
+}
+
+html.dark.dou-obs-ai #dou-ai-chat-navbar {
+	border-bottom-color: color-mix(in srgb, black 35%, var(--dou-ai-p20));
+	background: linear-gradient(180deg, #450a0a 0%, #7f1d1d 48%, #991b1b 100%) !important;
+	box-shadow: 0 1px 0 rgb(0 0 0 / 0.35);
+	color: rgb(254 242 242);
+}
+
+html.dou-obs-ai #dou-ai-chat-navbar .text-gray-600,
+html.dou-obs-ai #dou-ai-chat-navbar .text-gray-400,
+html.dou-obs-ai #dou-ai-chat-navbar .text-gray-700,
+html.dou-obs-ai #dou-ai-chat-navbar .text-gray-800,
+html.dou-obs-ai #dou-ai-chat-navbar .text-gray-900 {
+	color: rgb(254 226 226) !important;
+}
+
+html.dark.dou-obs-ai #dou-ai-chat-navbar .text-gray-600,
+html.dark.dou-obs-ai #dou-ai-chat-navbar .text-gray-400,
+html.dark.dou-obs-ai #dou-ai-chat-navbar .text-gray-700 {
+	color: rgb(254 215 215) !important;
+}
+
+html.dou-obs-ai #dou-ai-chat-navbar svg {
+	color: rgb(254 226 226);
+	stroke: currentColor;
+}
+
+html.dark.dou-obs-ai #dou-ai-chat-navbar svg {
+	color: rgb(254 215 215);
+}
+
+html.dou-obs-ai #dou-ai-chat-navbar button:hover,
+html.dou-obs-ai #dou-ai-chat-navbar a.rounded-lg.border {
+	transition:
+		background-color 0.15s ease,
+		color 0.15s ease;
+}
+
+html.dou-obs-ai #dou-ai-chat-navbar button.rounded-xl:hover,
+html.dou-obs-ai #dou-ai-chat-navbar button.rounded-lg:hover {
+	background-color: rgb(255 255 255 / 0.12) !important;
+}
+
+html.dark.dou-obs-ai #dou-ai-chat-navbar button.rounded-xl:hover,
+html.dark.dou-obs-ai #dou-ai-chat-navbar button.rounded-lg:hover {
+	background-color: rgb(255 255 255 / 0.1) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	html.dou-obs-ai #dou-ai-chat-navbar {
+		box-shadow: 0 1px 0 rgb(0 0 0 / 0.06);
+	}
+}
+
+/* Navbar içinde global “kırmızıya çevir” kuralını iptal et — sky/OBS mavisi kalsın */
+html.dou-obs-ai #dou-ai-chat-navbar .bg-sky-500 {
+	background-color: rgb(14 165 233) !important;
+}
+
+html.dou-obs-ai #dou-ai-chat-navbar .hover\:bg-sky-400:hover {
+	background-color: rgb(56 189 248) !important;
+}
+
+html.dou-obs-ai #dou-ai-chat-navbar .text-sky-500,
+html.dou-obs-ai #dou-ai-chat-navbar .text-sky-600 {
+	color: rgb(2 132 199) !important;
+}
+
+html.dou-obs-ai #dou-ai-chat-navbar .hover\:text-sky-400:hover {
+	color: rgb(14 165 233) !important;
+}
+
+/* Chat navbar’daki eski üst gradient bandını kapat — OBS düz üst çubuk */
+html.dou-obs-ai #navbar-bg-gradient-to-b {
+	display: none !important;
+}
+
+/* Yan menü — lacivert / slate (eskiden üst navbar) */
+html.dou-obs-ai #sidebar {
+	z-index: 10 !important;
+	background: linear-gradient(180deg, rgb(15 23 42) 0%, rgb(30 41 59) 48%, rgb(15 23 42) 100%)
+		!important;
+	border-right-color: rgb(51 65 85 / 0.45) !important;
+	box-shadow: inset -1px 0 0 rgb(255 255 255 / 0.06);
+	color: rgb(241 245 249) !important;
+}
+
+html.dark.dou-obs-ai #sidebar {
+	background: linear-gradient(180deg, rgb(15 23 42) 0%, rgb(17 24 39) 52%, rgb(10 15 28) 100%)
+		!important;
+	border-right-color: rgb(51 65 85 / 0.35) !important;
+}
+
+html.dou-obs-ai #sidebar .text-gray-600,
+html.dou-obs-ai #sidebar .text-gray-800,
+html.dou-obs-ai #sidebar .text-gray-900 {
+	color: rgb(203 213 225) !important;
+}
+
+html.dou-obs-ai #sidebar .dark\:text-gray-200,
+html.dou-obs-ai #sidebar .dark\:text-gray-400 {
+	color: rgb(148 163 184) !important;
+}
+
+html.dou-obs-ai #sidebar-webui-name {
+	color: rgb(248 250 252) !important;
+	text-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
+}
+
+html.dou-obs-ai #sidebar .dou-ai-sidebar-userline {
+	color: rgb(203 213 225) !important;
+	text-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
+}
+
+html.dark.dou-obs-ai #sidebar .dou-ai-sidebar-userline {
+	color: rgb(226 232 240) !important;
+}
+
+/* Yan menü hover — slate üzerinde cam */
+html.dou-obs-ai #sidebar .rounded-2xl:hover,
+html.dou-obs-ai #sidebar .rounded-xl:hover {
+	background-color: rgb(255 255 255 / 0.08) !important;
+	box-shadow: inset 3px 0 0 rgb(56 189 248 / 0.65);
+}
+
+html.dark.dou-obs-ai #sidebar .rounded-2xl:hover,
+html.dark.dou-obs-ai #sidebar .rounded-xl:hover {
+	background-color: rgb(255 255 255 / 0.07) !important;
+	box-shadow: inset 3px 0 0 rgb(56 189 248 / 0.5);
+}
+
+html.dou-obs-ai #sidebar-new-chat-button:hover {
+	background-color: rgb(255 255 255 / 0.12) !important;
+	color: rgb(248 250 252) !important;
+}
+
+html.dark.dou-obs-ai #sidebar-new-chat-button:hover {
+	background-color: rgb(255 255 255 / 0.1) !important;
+	color: rgb(241 245 249) !important;
+}
+
+/* Sol alt “beyaz buğu”: liste altı/üstü gri fade katmanlarını kapat */
+html.dou-obs-ai #sidebar .sidebar-bg-gradient-to-t,
+html.dou-obs-ai #sidebar .sidebar-bg-gradient-to-b {
+	display: none !important;
+}
+
+/* Kullanıcı kutusu — slate üzerinde cam */
+html.dou-obs-ai #sidebar .hover\:bg-gray-100\/50:hover,
+html.dou-obs-ai #sidebar .dark\:hover\:bg-gray-900\/50:hover {
+	background-color: rgb(255 255 255 / 0.08) !important;
+}
+
+html.dou-obs-ai #sidebar .hover\:bg-gray-100:hover,
+html.dou-obs-ai #sidebar .dark\:hover\:bg-gray-850:hover {
+	background-color: rgb(255 255 255 / 0.08) !important;
+}
+
+html.dou-obs-ai #sidebar .dou-ai-sidebar-userline {
+	text-shadow: 0 1px 3px rgb(0 0 0 / 0.35);
+}
+
+/* Varsayılan gri siluet avatar — hafif kurumsal kırmızı ton, okunaklılık */
+html.dou-obs-ai #sidebar .dou-ai-sidebar-avatar {
+	filter: sepia(0.22) saturate(1.45) hue-rotate(332deg) brightness(1.06);
+}
+
+html.dark.dou-obs-ai #sidebar .dou-ai-sidebar-avatar {
+	filter: sepia(0.16) saturate(1.3) hue-rotate(328deg) brightness(1.08);
+}
+
+/* AI içinde gökyüzü mavisi yerine kurumsal kırmızı (OBS etkilenmez) */
+html.dou-obs-ai .bg-sky-500 {
+	background-color: var(--dou-ai-p20) !important;
+}
+
+html.dou-obs-ai .hover\:bg-sky-400:hover {
+	background-color: var(--dou-ai-p20-hover) !important;
+}
+
+html.dou-obs-ai .text-sky-500,
+html.dou-obs-ai .text-sky-600 {
+	color: var(--dou-ai-p20) !important;
+}
+
+html.dou-obs-ai .hover\:text-sky-400:hover {
+	color: var(--dou-ai-p20-hover) !important;
+}

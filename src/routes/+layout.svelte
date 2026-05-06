@@ -39,9 +39,8 @@
 		pyodideWorker
 	} from '$lib/stores';
 	import { getFileContentById } from '$lib/apis/files';
-	import { goto } from '$app/navigation';
+	import { goto, beforeNavigate, afterNavigate } from '$app/navigation';
 	import { page } from '$app/stores';
-	import { beforeNavigate } from '$app/navigation';
 	import { updated } from '$app/state';
 
 	import i18n, { initI18n, getLanguages, changeLanguage } from '$lib/i18n';
@@ -81,11 +80,30 @@
 		return false;
 	};
 
+	let obsRouteLoader = false;
+
 	// handle frontend updates (https://svelte.dev/docs/kit/configuration#version)
-	beforeNavigate(async ({ willUnload, to }) => {
+	beforeNavigate(async ({ willUnload, to, from }) => {
 		if (updated.current && !willUnload && to?.url) {
 			await unregisterServiceWorkers();
 			location.href = to.url.href;
+			return;
+		}
+		if (from && to) {
+			const toObs = to.url.pathname === '/obs' || to.url.pathname.startsWith('/obs/');
+			const fromObs =
+				from.url.pathname === '/obs' || from.url.pathname.startsWith('/obs/');
+			if (toObs && !fromObs) {
+				obsRouteLoader = true;
+			}
+		}
+	});
+
+	afterNavigate(({ to }) => {
+		if (!to) return;
+		const onObs = to.url.pathname === '/obs' || to.url.pathname.startsWith('/obs/');
+		if (onObs) {
+			obsRouteLoader = false;
 		}
 	});
 
@@ -974,6 +992,27 @@
 {#if showRefresh}
 	<div class=" py-5">
 		<Spinner className="size-5" />
+	</div>
+{/if}
+
+{#if obsRouteLoader}
+	<div
+		class="dou-route-obs-loader fixed inset-0 z-[200] flex items-center justify-center bg-white dark:bg-[#0f172a] pointer-events-none"
+		aria-busy="true"
+		aria-label="Yükleniyor"
+	>
+		<img
+			src="/static/splash.png"
+			alt=""
+			class="h-24 w-auto motion-safe:animate-spin dark:hidden"
+			draggable="false"
+		/>
+		<img
+			src="/static/splash-dark.png"
+			alt=""
+			class="hidden h-24 w-auto motion-safe:animate-spin dark:block"
+			draggable="false"
+		/>
 	</div>
 {/if}
 

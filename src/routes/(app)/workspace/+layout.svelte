@@ -52,9 +52,7 @@
 
 {#if loaded}
 	<div
-		class=" relative flex flex-col w-full h-screen max-h-[100dvh] transition-width duration-200 ease-in-out {$showSidebar
-			? 'md:max-w-[calc(100%-var(--sidebar-width))]'
-			: ''} max-w-full"
+		class=" relative flex max-w-full flex-col w-full h-screen max-h-[100dvh]"
 	>
 		<nav class="   px-2.5 pt-1.5 backdrop-blur-xl drag-region select-none">
 			<div class=" flex items-center gap-1">

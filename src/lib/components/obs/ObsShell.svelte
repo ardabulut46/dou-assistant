@@ -343,6 +343,16 @@
 
 			<!-- Nav -->
 			<nav class="flex-1 overflow-y-auto overflow-x-hidden px-3 pb-4 pt-2">
+				<div class="mb-3 px-3">
+					<div class="mb-1 text-[10px] font-bold tracking-widest text-slate-500">ASİSTAN</div>
+					<a
+						href={aiAskHref}
+						class="flex w-full items-center gap-2 rounded-lg bg-sky-500/15 px-3 py-2 text-[13px] font-semibold text-sky-300 ring-1 ring-sky-500/25 transition-colors hover:bg-sky-500/25"
+					>
+						<span aria-hidden="true">✨</span>
+						<span>AI Asistan</span>
+					</a>
+				</div>
 				{#each navGroups as group}
 					<div class="mb-1 mt-4 px-3 text-[10px] font-bold tracking-widest text-slate-500">
 						{group.section}

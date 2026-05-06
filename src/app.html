@@ -93,9 +93,14 @@
 
 				const logo = document.createElement('img');
 				logo.id = 'logo';
-				logo.style =
-					'position: absolute; width: auto; height: 6rem; top: 44%; left: 50%; transform: translateX(-50%); display:block;';
+				logo.style = 'width: auto; height: 6rem; display:block;';
 				logo.src = isDarkMode ? '/static/splash-dark.png' : '/static/splash.png';
+
+				const spinWrap = document.createElement('div');
+				spinWrap.id = 'dou-splash-logo-spin';
+				spinWrap.style =
+					'position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display:flex; align-items:center; justify-content:center;';
+				spinWrap.appendChild(logo);
 
 				document.addEventListener('DOMContentLoaded', function () {
 					const splash = document.getElementById('splash-screen');
@@ -103,7 +108,7 @@
 						return;
 					}
 
-					if (splash) splash.prepend(logo);
+					if (splash) splash.prepend(spinWrap);
 				});
 			})();
 		</script>
@@ -140,12 +145,14 @@
 					align-items: center;
 				"
 			>
-				<img
-					id="logo-her"
-					style="width: auto; height: 13rem"
-					src="/static/splash.png"
-					class="animate-pulse-fast"
-				/>
+				<div id="dou-splash-her-spin">
+					<img
+						id="logo-her"
+						style="width: auto; height: 13rem"
+						src="/static/splash.png"
+						alt=""
+					/>
+				</div>
 
 				<div style="position: relative; width: 24rem; margin-top: 0.5rem">
 					<div
@@ -237,14 +244,36 @@
 			}
 		}
 
-		@keyframes pulse {
+		@keyframes dou-splash-spin {
+			0% {
+				transform: translateX(-50%) rotate(0deg) scale(1);
+			}
 			50% {
-				opacity: 0.65;
+				transform: translateX(-50%) rotate(180deg) scale(1.14);
+			}
+			100% {
+				transform: translateX(-50%) rotate(360deg) scale(1);
 			}
 		}
 
-		.animate-pulse-fast {
-			animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+		@keyframes dou-splash-spin-center {
+			0% {
+				transform: rotate(0deg) scale(1);
+			}
+			50% {
+				transform: rotate(180deg) scale(1.14);
+			}
+			100% {
+				transform: rotate(360deg) scale(1);
+			}
+		}
+
+		#dou-splash-logo-spin {
+			animation: dou-splash-spin-center 1.35s ease-in-out infinite;
+		}
+
+		#dou-splash-her-spin {
+			animation: dou-splash-spin-center 1.35s ease-in-out infinite;
 		}
 	</style>
 </html>
