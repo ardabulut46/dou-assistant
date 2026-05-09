@@ -645,6 +645,21 @@
 	}
 
 	const GRADE_COLOR: Record<string, string> = {
+		'A+': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
+		A: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
+		'B+': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
+		B: 'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300',
+		'C+': 'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300',
+		C: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
+		'D+': 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
+		D: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
+		F: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',
+		M: 'bg-slate-100 text-slate-600 dark:bg-white/10 dark:text-slate-300',
+		S: 'bg-slate-100 text-slate-600 dark:bg-white/10 dark:text-slate-300',
+		DZ: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',
+		G: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
+		K: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',
+		TKR: 'bg-slate-100 text-slate-600 dark:bg-white/10 dark:text-slate-300',
 		AA: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
 		BA: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
 		BB: 'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300',
@@ -652,6 +667,7 @@
 		CC: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
 		DC: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
 		DD: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
+		FD: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
 		FF: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
 	};
 

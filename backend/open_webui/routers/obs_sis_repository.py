@@ -71,7 +71,26 @@ def _mapping_weight_pct(row: Any, column_name: str, default: float) -> float:
     return _obs_section_weight_pct(raw, default)
 
 
+# RG 24/8/2021-31578 (100 üzerinden yüzde → harf). Eski 4'lük harfler geri uyumluluk için saklanır.
 LETTER_POINTS: dict[str, float] = {
+    # Yeni ölçek (öğretim elemanı girişi / otomatik hesap)
+    "A+": 4.0,
+    "A": 3.75,
+    "B+": 3.5,
+    "B": 3.0,
+    "C+": 2.5,
+    "C": 2.0,
+    "D+": 1.5,
+    "D": 1.0,
+    "F": 0.0,
+    # Özel (ortalamaya katılmaz / manuel)
+    "M": 0.0,
+    "S": 0.0,
+    "DZ": 0.0,
+    "G": 0.0,
+    "K": 0.0,
+    "TKR": 0.0,
+    # Eski 4'lük (mevcut kayıtlar)
     "AA": 4.0,
     "BA": 3.5,
     "BB": 3.0,
@@ -2022,24 +2041,81 @@ def section_grade_rows(db: Session, section_id: str) -> list[dict[str, Any]]:
 
 
 def _letter_from_score(score: float) -> str:
+    """
+    Ağırlıklı yüzde notu (0–100) → harf notu.
+    Tablo: RG 24/8/2021-31578 (Değişik: … — EN düşük / EN yüksek aralığı).
+    """
     s = float(score)
+    if s >= 95:
+        return "A+"
     if s >= 90:
-        return "AA"
+        return "A"
     if s >= 85:
-        return "BA"
-    if s >= 80:
-        return "BB"
+        return "B+"
     if s >= 75:
-        return "CB"
-    if s >= 70:
-        return "CC"
+        return "B"
     if s >= 65:
-        return "DC"
-    if s >= 60:
-        return "DD"
-    if s >= 50:
-        return "FD"
-    return "FF"
+        return "C+"
+    if s >= 55:
+        return "C"
+    if s >= 45:
+        return "D+"
+    if s >= 40:
+        return "D"
+    return "F"
+
+
+def recompute_section_letter_grades_rg(db: Session, section_id: str) -> None:
+    """
+    Şube vize/final ağırlıkları + RG tablosuna göre harf notunu yazar.
+    Yalnızca vize ve final ikisi de dolu olan (taslak) satırlar güncellenir.
+    Kesinleştirme öncesi çağrılır.
+    """
+    wrow = db.execute(
+        text(
+            """
+            SELECT midterm_weight_percent AS midterm_weight_percent,
+                   final_weight_percent AS final_weight_percent
+            FROM obs_course_sections
+            WHERE id = :sid
+            """
+        ),
+        {"sid": section_id},
+    ).mappings().first()
+    w_mid = _mapping_weight_pct(wrow, "midterm_weight_percent", 40.0)
+    w_fin = _mapping_weight_pct(wrow, "final_weight_percent", 60.0)
+    if w_mid + w_fin <= 0:
+        w_mid, w_fin = 40.0, 60.0
+
+    rows = db.execute(
+        text(
+            """
+            SELECT g.enrollment_id AS eid, g.midterm AS mid, g."final" AS fin, g.is_finalized AS finz
+            FROM obs_grade_entries g
+            JOIN obs_course_enrollments ce ON ce.id = g.enrollment_id
+            WHERE ce.course_section_id = :sid
+              AND ce.status = 'active'
+            """
+        ),
+        {"sid": section_id},
+    ).mappings().all()
+    for r in rows:
+        if bool(r.get("finz")):
+            continue
+        mid, fin = r.get("mid"), r.get("fin")
+        if mid is None or fin is None:
+            continue
+        try:
+            sc = (float(mid) * w_mid + float(fin) * w_fin) / 100.0
+        except (TypeError, ValueError):
+            continue
+        lg = _letter_from_score(sc)
+        db.execute(
+            text(
+                "UPDATE obs_grade_entries SET letter_grade = :lg WHERE enrollment_id = :eid"
+            ),
+            {"lg": lg, "eid": str(r["eid"])},
+        )
 
 
 def unfinalize_grade_entry(db: Session, section_id: str, enrollment_id: str) -> tuple[bool, str]:
@@ -2230,6 +2306,8 @@ def finalize_section_grades(
     Not: PostgreSQL `UPDATE ... FROM` ve SQLite uyumu için `WHERE enrollment_id IN (SELECT ...)`
     kullanılır. `NOW()` yerine `CURRENT_TIMESTAMP` (SQLite + PostgreSQL).
     """
+    recompute_section_letter_grades_rg(db, section_id)
+
     set_fb = ""
     params: dict[str, Any] = {"sid": section_id}
     if finalized_by_user_id:

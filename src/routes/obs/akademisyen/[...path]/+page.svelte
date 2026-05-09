@@ -587,6 +587,21 @@
 
 	const LETTER_GRADE_OPTIONS = [
 		'',
+		'A+',
+		'A',
+		'B+',
+		'B',
+		'C+',
+		'C',
+		'D+',
+		'D',
+		'F',
+		'M',
+		'S',
+		'DZ',
+		'G',
+		'K',
+		'TKR',
 		'AA',
 		'BA',
 		'BB',
@@ -596,10 +611,8 @@
 		'DD',
 		'FD',
 		'FF',
-		'DZ',
 		'GR',
-		'İ',
-		'S'
+		'İ'
 	];
 
 	/** Svelte {#if} içinde `!==` vb. ifadeler bazı sürümlerde `>` ile ayrıştırma hatası verebiliyor */
@@ -685,15 +698,15 @@
 	}
 
 	function letterFromScore(score: number): string {
-		if (score >= 90) return 'AA';
-		if (score >= 85) return 'BA';
-		if (score >= 80) return 'BB';
-		if (score >= 75) return 'CB';
-		if (score >= 70) return 'CC';
-		if (score >= 65) return 'DC';
-		if (score >= 60) return 'DD';
-		if (score >= 50) return 'FD';
-		return 'FF';
+		if (score >= 95) return 'A+';
+		if (score >= 90) return 'A';
+		if (score >= 85) return 'B+';
+		if (score >= 75) return 'B';
+		if (score >= 65) return 'C+';
+		if (score >= 55) return 'C';
+		if (score >= 45) return 'D+';
+		if (score >= 40) return 'D';
+		return 'F';
 	}
 
 	function recalcLetter(enrollmentId: string) {
@@ -705,10 +718,12 @@
 			g.letter_grade = '';
 			return;
 		}
-		const wMid = clampPct(gradeWeights.midterm_weight_percent, 40);
-		const wFin = clampPct(gradeWeights.final_weight_percent, 60);
-		const total = wMid + wFin;
-		if (total !== 100) return;
+		let wMid = clampPct(gradeWeights.midterm_weight_percent, 40);
+		let wFin = clampPct(gradeWeights.final_weight_percent, 60);
+		if (wMid + wFin <= 0) {
+			wMid = 40;
+			wFin = 60;
+		}
 		const score = (Number(mid) * wMid + Number(fin) * wFin) / 100;
 		g.letter_grade = letterFromScore(score);
 	}
