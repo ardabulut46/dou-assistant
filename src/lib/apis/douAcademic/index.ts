@@ -266,6 +266,8 @@ export type DouSection = {
 	end_time: string;
 	enrollment_count: number;
 	capacity: number;
+	midterm_weight_percent?: number;
+	final_weight_percent?: number;
 };
 
 export type DouAcademicSectionsResponse = {
@@ -1313,10 +1315,12 @@ export type AcademicExam = {
 };
 
 export const getDouSectionGrades = (token: string | null, sectionId: string) =>
-	authFetch<{ section_id: string; students: AcademicGradeRow[]; _mock?: boolean }>(
-		`/academic/sections/${encodeURIComponent(sectionId)}/grades`,
-		token
-	);
+	authFetch<{
+		section_id: string;
+		section?: DouSection | null;
+		students: AcademicGradeRow[];
+		_mock?: boolean;
+	}>(`/academic/sections/${encodeURIComponent(sectionId)}/grades`, token);
 
 export const putDouSectionGrades = (
 	token: string | null,

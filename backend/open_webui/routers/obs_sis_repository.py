@@ -45,6 +45,32 @@ def _num(v: Any) -> Optional[float]:
     return float(v)
 
 
+def _obs_section_weight_pct(raw: Any, default: float) -> float:
+    """obs_course_sections ağırlık kolonları (NUMERIC/DECIMAL); None ise varsayılan."""
+    if raw is None:
+        return default
+    try:
+        if isinstance(raw, Decimal):
+            return float(raw)
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _mapping_weight_pct(row: Any, column_name: str, default: float) -> float:
+    """SQLAlchemy RowMapping / dict — anahtar adı sürücüye göre değişirse case-insensitive yedek."""
+    if row is None:
+        return default
+    raw = row.get(column_name) if hasattr(row, "get") else None
+    if raw is None and hasattr(row, "keys"):
+        want = column_name.lower()
+        for k in row.keys():
+            if str(k).lower() == want:
+                raw = row[k]
+                break
+    return _obs_section_weight_pct(raw, default)
+
+
 LETTER_POINTS: dict[str, float] = {
     "AA": 4.0,
     "BA": 3.5,
@@ -1602,7 +1628,8 @@ def academic_sections(
                cs.section_no, cs.term_id, cs.instructor_id, cs.classroom_id,
                cs.day_of_week, cs.start_time, cs.end_time, cs.capacity,
                cr.code AS classroom_code, u.name AS instructor_name,
-               cs.midterm_weight_percent, cs.final_weight_percent,
+               cs.midterm_weight_percent AS midterm_weight_percent,
+               cs.final_weight_percent AS final_weight_percent,
                (SELECT COUNT(*) FROM obs_course_enrollments ce WHERE ce.course_section_id = cs.id AND ce.status = 'active') AS enrollment_count
         FROM obs_course_sections cs
         JOIN obs_courses c ON cs.course_id = c.id
@@ -1633,8 +1660,8 @@ def academic_sections(
             "end_time": _fmt_time(r.get("end_time")),
             "enrollment_count": int(r.get("enrollment_count") or 0),
             "capacity": int(r.get("capacity") or 0),
-            "midterm_weight_percent": float(r.get("midterm_weight_percent") or 40.0),
-            "final_weight_percent": float(r.get("final_weight_percent") or 60.0),
+            "midterm_weight_percent": _mapping_weight_pct(r, "midterm_weight_percent", 40.0),
+            "final_weight_percent": _mapping_weight_pct(r, "final_weight_percent", 60.0),
         }
         for r in rows
     ]
@@ -1648,6 +1675,8 @@ def section_meta(db: Session, section_id: str) -> Optional[dict[str, Any]]:
         SELECT cs.id, cs.course_id, c.code AS course_code, c.name AS course_name,
                cs.section_no, cs.term_id, cs.instructor_id, cs.classroom_id,
                cs.day_of_week, cs.start_time, cs.end_time, cs.capacity,
+               cs.midterm_weight_percent AS midterm_weight_percent,
+               cs.final_weight_percent AS final_weight_percent,
                cr.code AS classroom_code, u.name AS instructor_name,
                (SELECT COUNT(*) FROM obs_course_enrollments ce WHERE ce.course_section_id = cs.id AND ce.status = 'active') AS enrollment_count
         FROM obs_course_sections cs
@@ -1681,8 +1710,8 @@ def section_meta(db: Session, section_id: str) -> Optional[dict[str, Any]]:
         "end_time": _fmt_time(sec.get("end_time")),
         "enrollment_count": int(sec.get("enrollment_count") or 0),
         "capacity": int(sec.get("capacity") or 0),
-        "midterm_weight_percent": float(sec.get("midterm_weight_percent") or 40.0),
-        "final_weight_percent": float(sec.get("final_weight_percent") or 60.0),
+        "midterm_weight_percent": _mapping_weight_pct(sec, "midterm_weight_percent", 40.0),
+        "final_weight_percent": _mapping_weight_pct(sec, "final_weight_percent", 60.0),
     }
 
 
@@ -2048,15 +2077,16 @@ def upsert_grades(
     wrow = db.execute(
         text(
             """
-            SELECT midterm_weight_percent, final_weight_percent
+            SELECT midterm_weight_percent AS midterm_weight_percent,
+                   final_weight_percent AS final_weight_percent
             FROM obs_course_sections
             WHERE id = :sid
             """
         ),
         {"sid": section_id},
     ).mappings().first()
-    w_mid = float((wrow or {}).get("midterm_weight_percent") or 40.0)
-    w_fin = float((wrow or {}).get("final_weight_percent") or 60.0)
+    w_mid = _mapping_weight_pct(wrow, "midterm_weight_percent", 40.0)
+    w_fin = _mapping_weight_pct(wrow, "final_weight_percent", 60.0)
     if w_mid + w_fin <= 0:
         w_mid, w_fin = 40.0, 60.0
 

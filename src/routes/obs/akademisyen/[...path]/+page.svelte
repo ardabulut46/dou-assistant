@@ -86,7 +86,8 @@
 	/** Not girişi: seçili akademik dönem (ilk açılışta aktif dönem); şube listesi buna göre filtrelenir. */
 	let selectedGradesTermId = '';
 	let selectedSection = '';
-	$: selectedSectionMeta = sections.find((s) => s.id === selectedSection) ?? null;
+	$: selectedSectionMeta =
+		sections.find((s) => String(s.id) === String(selectedSection)) ?? null;
 	let sectionStudents: AcademicStudent[] = [];
 	let gradeRows: AcademicGradeRow[] = [];
 	let gradeEdits: Record<string, { midterm?: number; final?: number; letter_grade?: string }> = {};
@@ -293,23 +294,41 @@
 			if (!selectedSection && sections.length) selectedSection = sections[0].id;
 
 			if (apiKey === 'grades-entry') {
+				// Şube listesi (GET /me/sections) doğru ağırlığı taşır. GET /grades içindeki section bazen 40/60
+				// varsayılanı dönüyor; `??` zinciri sec önce yazılırsa 40 sayısı listeyi ezer — önce listRow.
+				const listRow = sections.find((s) => String(s.id) === String(selectedSection));
+				if (listRow) {
+					gradeWeights = {
+						midterm_weight_percent: Number(listRow.midterm_weight_percent ?? 40),
+						final_weight_percent: Number(listRow.final_weight_percent ?? 60)
+					};
+				}
+
 				if (selectedSection) {
 					const r = await Promise.allSettled([getDouSectionGrades(token, selectedSection)]);
 					if (r[0].status === 'fulfilled') {
-						gradeRows = r[0].value.students ?? [];
-						const sec = r[0].value.section ?? null;
+						const payload = r[0].value;
+						gradeRows = payload.students ?? [];
+						const sec = payload.section ?? null;
 						if (sec) {
-							// şube meta (ders adı vb) ve ağırlıklar
-							selectedSectionMeta = sec as unknown as DouSection;
+							const mid = listRow?.midterm_weight_percent ?? sec.midterm_weight_percent;
+							const fin = listRow?.final_weight_percent ?? sec.final_weight_percent;
+							const midW = Number(mid ?? 40);
+							const finW = Number(fin ?? 60);
 							gradeWeights = {
-								midterm_weight_percent: Number(sec.midterm_weight_percent ?? 40),
-								final_weight_percent: Number(sec.final_weight_percent ?? 60)
+								midterm_weight_percent: midW,
+								final_weight_percent: finW
 							};
-						} else if (selectedSectionMeta) {
-							gradeWeights = {
-								midterm_weight_percent: Number(selectedSectionMeta.midterm_weight_percent ?? 40),
-								final_weight_percent: Number(selectedSectionMeta.final_weight_percent ?? 60)
-							};
+							sections = sections.map((s) =>
+								String(s.id) === String(selectedSection)
+									? ({
+											...s,
+											...sec,
+											midterm_weight_percent: midW,
+											final_weight_percent: finW
+										} as DouSection)
+									: s
+							);
 						}
 					} else {
 						gradeRows = [];
@@ -698,14 +717,21 @@
 		weightsSaving = true;
 		gradeErr = null;
 		try {
-			const r = await putDouSectionGradeWeights(token, selectedSection, {
+			const body = {
 				midterm_weight_percent: wMid,
 				final_weight_percent: wFin
-			});
+			};
+			const r = await putDouSectionGradeWeights(token, selectedSection, body);
 			if (r.section) {
-				// local cache güncelle
 				sections = sections.map((s) =>
-					s.id === selectedSection ? ({ ...s, ...r.section } as DouSection) : s
+					String(s.id) === String(selectedSection)
+						? ({
+								...s,
+								...r.section,
+								midterm_weight_percent: wMid,
+								final_weight_percent: wFin
+							} as DouSection)
+						: s
 				);
 			}
 			recalcAllLetters();
