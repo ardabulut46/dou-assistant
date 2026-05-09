@@ -55,6 +55,7 @@ asgiref==3.11.1
 # AI libraries (remote API only — no local models)
 tiktoken
 openai
+mcp==1.26.0
 
 # RAG framework (needed by OpenWebUI internals)
 langchain==1.2.10

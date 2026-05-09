@@ -17,7 +17,6 @@ from open_webui.utils.tools import (
     set_tool_servers,
     set_terminal_servers,
 )
-from open_webui.utils.mcp.client import MCPClient
 from open_webui.models.oauth_sessions import OAuthSessions
 
 
@@ -310,6 +309,7 @@ async def verify_tool_servers_config(
                 )
             else:
                 try:
+                    from open_webui.utils.mcp.client import MCPClient
                     client = MCPClient()
                     headers = None
 

@@ -57,6 +57,7 @@ dependencies = [
     # AI (remote API only)
     "tiktoken",
     "openai",
+    "mcp==1.26.0",
 
     # RAG framework (needed by OpenWebUI internals)
     "langchain==1.2.10",
