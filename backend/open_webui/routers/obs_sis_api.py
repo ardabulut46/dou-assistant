@@ -1265,10 +1265,9 @@ async def academic_put_attendance(
 ):
     if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
         raise HTTPException(status_code=403, detail="Bu şube size ait değil")
-    # obs_course_sections.instructor_id -> obs_academic_profiles.id olduğu için
-    # yoklama kaydında recorded_by alanını da akademik profil id olarak tutuyoruz.
-    apid = repo.resolve_academic_profile_id(obs_db, user.id)
-    n = repo.record_attendance(obs_db, section_id, week_no, body.records, str(apid or user.id))
+    # recorded_by → PostgreSQL FK `user.id` (Open WebUI kullanıcısı).
+    # obs_academic_profiles.id ile karıştırma — FK ihlali ve HTTP 500 oluşur.
+    n = repo.record_attendance(obs_db, section_id, week_no, body.records, str(user.id))
     return {"section_id": section_id, "week_no": week_no, "recorded": n}
 
 
@@ -1281,8 +1280,9 @@ async def academic_put_attendance_legacy(
 ):
     if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
         raise HTTPException(status_code=403, detail="Bu şube size ait değil")
-    apid = repo.resolve_academic_profile_id(obs_db, user.id)
-    n = repo.record_attendance(obs_db, section_id, body.week_no, body.records, str(apid or user.id))
+    n = repo.record_attendance(
+        obs_db, section_id, body.week_no, body.records, str(user.id)
+    )
     return {"section_id": section_id, "week_no": body.week_no, "recorded": n}
 
 

@@ -151,6 +151,21 @@
 		return Math.max(1, Math.ceil(days / 7));
 	}
 
+	function normalizeAttendanceUiStatus(
+		raw: string | undefined | null
+	): 'present' | 'absent' | 'excused' {
+		const s = String(raw ?? '')
+			.trim()
+			.toLowerCase();
+		if (s === 'absent' || s === 'yok') return 'absent';
+		if (s === 'excused' || s === 'mazeret') return 'excused';
+		return 'present';
+	}
+
+	function attendanceWeekStorageKey(sectionId: string) {
+		return `obs-attendance-week:${sectionId}`;
+	}
+
 	function sortTermsNewestFirst(ts: DouTerm[]): DouTerm[] {
 		return [...ts].sort((a, b) => {
 			const ta = new Date(a.starts_at || 0).getTime();
@@ -438,7 +453,14 @@
 				recalcAllLetters();
 			}
 			if (apiKey === 'attendance-entry' && selectedSection) {
-				weekTouched = false; // şube değişince varsayılan "mevcut hafta" seçilsin
+				const wkKey = attendanceWeekStorageKey(selectedSection);
+				const savedWeek = browser ? sessionStorage.getItem(wkKey) : null;
+				if (savedWeek != null && /^[1-9][0-9]*$/.test(savedWeek)) {
+					weekTouched = true;
+					weekNoUi = savedWeek;
+				} else {
+					weekTouched = false;
+				}
 				const r = await Promise.allSettled([getDouSectionStudents(token, selectedSection)]);
 				if (r[0].status === 'fulfilled') {
 					sectionStudents =
@@ -921,8 +943,12 @@
 		}));
 		try {
 			await putDouSectionAttendance(token, selectedSection, week, records);
+			if (browser) {
+				sessionStorage.setItem(attendanceWeekStorageKey(selectedSection), String(week));
+			}
 			attendanceSaved = true;
 			setTimeout(() => (attendanceSaved = false), 3000);
+			await loadAttendanceWeek();
 		} catch (e: unknown) {
 			attendanceErr = e instanceof Error ? e.message : 'Yoklama kaydedilemedi.';
 		} finally {
@@ -941,7 +967,7 @@
 			const r = await getDouSectionAttendance(token, selectedSection, week);
 			const map: Record<string, 'present' | 'absent' | 'excused'> = {};
 			for (const rec of r.records ?? []) {
-				map[rec.enrollment_id] = rec.status;
+				map[rec.enrollment_id] = normalizeAttendanceUiStatus(rec.status);
 			}
 			// Listedeki öğrenciler için set et; kayıt yoksa default present
 			for (const s of sectionStudents) {
@@ -1486,6 +1512,9 @@
 						bind:value={weekNoUi}
 						on:change={async () => {
 							weekTouched = true;
+							if (browser && selectedSection) {
+								sessionStorage.setItem(attendanceWeekStorageKey(selectedSection), weekNoUi);
+							}
 							await loadAttendanceWeek();
 						}}
 						class="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm outline-none dark:border-white/10 dark:bg-white/5"

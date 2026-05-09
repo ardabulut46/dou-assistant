@@ -29,6 +29,18 @@ def _fmt_date(d: Any) -> Optional[str]:
     return str(d)
 
 
+def _normalize_attendance_status(raw: Any) -> str:
+    """UI ve DB uyumu: absent/present/excused (küçük harf İngilizce)."""
+    s = str(raw or "").strip().lower()
+    if s in ("absent", "yok", "a"):
+        return "absent"
+    if s in ("excused", "mazeret", "x"):
+        return "excused"
+    if s in ("present", "var", "p", ""):
+        return "present"
+    return "present"
+
+
 def _fmt_time(t: Any) -> str:
     if t is None:
         return ""
@@ -2333,7 +2345,7 @@ def record_attendance(
 ) -> int:
     for rec in records:
         eid = rec.get("enrollment_id")
-        st = rec.get("status") or "present"
+        st = _normalize_attendance_status(rec.get("status"))
         row = db.execute(
             text(
                 "SELECT student_id FROM obs_course_enrollments WHERE id = :eid AND course_section_id = :sid"
@@ -2399,7 +2411,7 @@ def section_attendance_week(
     return [
         {
             "enrollment_id": str(r.get("enrollment_id")),
-            "status": r.get("status") or "present",
+            "status": _normalize_attendance_status(r.get("status")),
         }
         for r in rows
     ]
