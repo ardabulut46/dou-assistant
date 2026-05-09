@@ -4,25 +4,6 @@ import ftfy
 import sys
 import json
 
-from azure.identity import DefaultAzureCredential
-from langchain_community.document_loaders import (
-    AzureAIDocumentIntelligenceLoader,
-    BSHTMLLoader,
-    CSVLoader,
-    Docx2txtLoader,
-    OutlookMessageLoader,
-    PyPDFLoader,
-    TextLoader,
-    UnstructuredEPubLoader,
-    UnstructuredExcelLoader,
-    UnstructuredODTLoader,
-    UnstructuredPowerPointLoader,
-    UnstructuredRSTLoader,
-    UnstructuredXMLLoader,
-    YoutubeLoader,
-)
-from langchain_core.documents import Document
-
 from open_webui.retrieval.loaders.external_document import ExternalDocumentLoader
 
 from open_webui.retrieval.loaders.mistral import MistralLoader
@@ -100,7 +81,9 @@ class TikaLoader:
 
         self.extract_images = extract_images
 
-    def load(self) -> list[Document]:
+    def load(self) -> list:
+        from langchain_core.documents import Document
+
         with open(self.file_path, "rb") as f:
             data = f.read()
 
@@ -142,7 +125,7 @@ class DoclingLoader:
 
         self.params = params or {}
 
-    def load(self) -> list[Document]:
+    def load(self) -> list:
         with open(self.file_path, "rb") as f:
             headers = {}
             if self.api_key:
@@ -192,7 +175,9 @@ class Loader:
 
     def load(
         self, filename: str, file_content_type: str, file_path: str
-    ) -> list[Document]:
+    ) -> list:
+        from langchain_core.documents import Document
+
         loader = self._get_loader(filename, file_content_type, file_path)
         docs = loader.load()
 
@@ -212,6 +197,21 @@ class Loader:
         )
 
     def _get_loader(self, filename: str, file_content_type: str, file_path: str):
+        from langchain_community.document_loaders import (
+            BSHTMLLoader,
+            CSVLoader,
+            Docx2txtLoader,
+            OutlookMessageLoader,
+            PyPDFLoader,
+            TextLoader,
+            UnstructuredEPubLoader,
+            UnstructuredExcelLoader,
+            UnstructuredODTLoader,
+            UnstructuredPowerPointLoader,
+            UnstructuredRSTLoader,
+            UnstructuredXMLLoader,
+        )
+
         file_ext = filename.split(".")[-1].lower()
 
         if (
@@ -318,6 +318,8 @@ class Loader:
             )
         ):
             if self.kwargs.get("DOCUMENT_INTELLIGENCE_KEY") != "":
+                from langchain_community.document_loaders import AzureAIDocumentIntelligenceLoader
+
                 loader = AzureAIDocumentIntelligenceLoader(
                     file_path=file_path,
                     api_endpoint=self.kwargs.get("DOCUMENT_INTELLIGENCE_ENDPOINT"),
@@ -325,6 +327,9 @@ class Loader:
                     api_model=self.kwargs.get("DOCUMENT_INTELLIGENCE_MODEL"),
                 )
             else:
+                from azure.identity import DefaultAzureCredential
+                from langchain_community.document_loaders import AzureAIDocumentIntelligenceLoader
+
                 loader = AzureAIDocumentIntelligenceLoader(
                     file_path=file_path,
                     api_endpoint=self.kwargs.get("DOCUMENT_INTELLIGENCE_ENDPOINT"),

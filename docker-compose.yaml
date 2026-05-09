@@ -9,9 +9,25 @@ services:
       - open-webui:/app/backend/data
     ports:
       - ${OPEN_WEBUI_PORT-3002}:8080
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+          cpus: '2.5'
     environment:
       - 'WEBUI_SECRET_KEY='
       - DATABASE_URL
+      # ---- Performance tuning for slim deployment ----
+      - UVICORN_WORKERS=1
+      - THREAD_POOL_SIZE=4
+      - ENABLE_OLLAMA_API=false
+      - ENABLE_IMAGE_GENERATION=false
+      - ENABLE_CODE_EXECUTION=false
+      - ENABLE_OTEL=false
+      - ENABLE_RAG_HYBRID_SEARCH=false
+      - ENABLE_WEBSOCKET_SUPPORT=true
+      - RAG_EMBEDDING_ENGINE=openai
+      - AUDIO_STT_ENGINE=openai
     extra_hosts:
       - host.docker.internal:host-gateway
     restart: unless-stopped
