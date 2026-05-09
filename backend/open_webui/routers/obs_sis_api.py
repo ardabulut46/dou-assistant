@@ -28,6 +28,42 @@ from open_webui.utils.auth import get_password_hash, get_verified_user
 
 log = logging.getLogger(__name__)
 
+
+def _parse_grade_upsert_return(raw: Any) -> tuple[int, Optional[str]]:
+    """
+    upsert_grades geçmişte yalnızca int döndü; şimdi (n, err) tuple.
+    İki atama (n, err = tek_int) patlamasını kesin olarak önlemek için tek yerden normalize et.
+    """
+    if isinstance(raw, tuple):
+        if not raw:
+            return 0, None
+        err_part = raw[1] if len(raw) > 1 else None
+        try:
+            return int(raw[0]), (
+                err_part
+                if err_part is None or isinstance(err_part, str)
+                else str(err_part)
+            )
+        except (TypeError, ValueError):
+            return 0, None
+    if isinstance(raw, list):
+        if not raw:
+            return 0, None
+        err_part = raw[1] if len(raw) > 1 else None
+        try:
+            return int(raw[0]), (
+                err_part
+                if err_part is None or isinstance(err_part, str)
+                else str(err_part)
+            )
+        except (TypeError, ValueError):
+            return 0, None
+    try:
+        return int(raw), None
+    except (TypeError, ValueError):
+        return 0, None
+
+
 public_router = APIRouter(tags=["dou-obs-public"])
 student_router = APIRouter(tags=["dou-obs-student"])
 academic_user_router = APIRouter(tags=["dou-obs-academic"])
@@ -947,7 +983,25 @@ async def academic_put_grades(
 ):
     if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
         raise HTTPException(status_code=403, detail="Bu şube size ait değil")
-    n, err = repo.upsert_grades(obs_db, section_id, body.grades)
+    try:
+        # repo.upsert_grades dönüşünü doğrudan "n, err = ..." ile ayırma (eski int dönüş TypeError veriyordu).
+        n, err = _parse_grade_upsert_return(
+            repo.upsert_grades(obs_db, section_id, body.grades)
+        )
+    except Exception as e:
+        log.exception(
+            "upsert_grades başarısız section_id=%s user=%s",
+            section_id,
+            getattr(user, "id", None),
+        )
+        # Tarayıcıda / network tab'da gerçek DB-SQL mesajını görmek için (kısaltılmış)
+        hint = str(e).strip().replace("\n", " ")
+        if len(hint) > 280:
+            hint = hint[:277] + "..."
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Not kaydı yazılamadı: {hint}",
+        )
     if err == "finalized":
         raise HTTPException(status_code=409, detail="Kesinleşmiş not güncellenemez")
     return {"section_id": section_id, "updated": n}
@@ -981,7 +1035,19 @@ async def academic_finalize_grades(
 ):
     if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
         raise HTTPException(status_code=403, detail="Bu şube size ait değil")
-    repo.finalize_section_grades(obs_db, section_id)
+    # finalized_by FK → Open WebUI "user" tablosu (obs akademik profil UUID’si değil).
+    try:
+        repo.finalize_section_grades(obs_db, section_id, str(user.id))
+    except Exception:
+        log.exception(
+            "finalize_section_grades başarısız section_id=%s user=%s",
+            section_id,
+            getattr(user, "id", None),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Notlar kesinleştirilemedi (sunucu / veritabanı). Yönetici konsoluna bakın.",
+        )
     return {"section_id": section_id, "finalized": True}
 
 

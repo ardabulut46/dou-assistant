@@ -47,6 +47,11 @@ async function authFetch<T>(path: string, token: string | null, options?: Reques
 		} else {
 			msg = `HTTP ${res.status}: ${res.statusText}`;
 		}
+		// detail boş / proxy HTML ise ham gövdeden ipucu (debug)
+		if (!msg.trim() || msg === `HTTP ${res.status}: ${res.statusText}`) {
+			const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 500);
+			if (snippet) msg = `${msg} — ${snippet}`;
+		}
 		throw new Error(msg);
 	}
 

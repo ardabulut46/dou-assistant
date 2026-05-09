@@ -628,6 +628,11 @@
 			// Backend tarafında hesaplanan harf notu / finalize bilgisi ekrana yansısın
 			await loadPage();
 		} catch (e: unknown) {
+			console.error('[NOT kaydet] PUT /grades hatası', {
+				section_id: selectedSection,
+				message: e instanceof Error ? e.message : String(e),
+				err: e
+			});
 			gradeErr = e instanceof Error ? e.message : 'Notlar kaydedilemedi.';
 		} finally {
 			gradeSaving = false;
@@ -654,6 +659,9 @@
 		const token = localStorage.token ?? null;
 		gradeErr = null;
 		try {
+			console.log('[NOT kesinleştir] POST /grades/finalize', {
+				section_id: selectedSection
+			});
 			await finalizeDouSectionGrades(token, selectedSection);
 			gradeSaved = true;
 			setTimeout(() => {
@@ -661,6 +669,11 @@
 			}, 3500);
 			await loadPage();
 		} catch (e: unknown) {
+			console.error('[NOT kesinleştir] sunucu hatası', {
+				section_id: selectedSection,
+				message: e instanceof Error ? e.message : String(e),
+				err: e
+			});
 			gradeErr = e instanceof Error ? e.message : 'Notlar kesinleştirilemedi.';
 		}
 	}

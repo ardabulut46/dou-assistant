@@ -2121,13 +2121,17 @@ def upsert_grades(
                 and not str(item.get("letter_grade") or "").strip()
             ):
                 if mid is not None and fin is not None:
-                    score = (float(mid) * w_mid + float(fin) * w_fin) / 100.0
-                    computed_lg = _letter_from_score(score)
+                    try:
+                        score = (float(mid) * w_mid + float(fin) * w_fin) / 100.0
+                        computed_lg = _letter_from_score(score)
+                    except (TypeError, ValueError):
+                        computed_lg = None
 
+            # Not: SQLite 3.39+ "final" ayrılmış kelime → tırnaksız UPDATE sözdizimi hatası.
+            # PostgreSQL'de de "final"/"midterm" sütun adları için çift tırnak güvenli.
             set_parts = [
-                "midterm = COALESCE(:m, midterm)",
-                "final = COALESCE(:f, final)",
-                "updated_at = NOW()",
+                '"midterm" = COALESCE(:m, "midterm")',
+                '"final" = COALESCE(:f, "final")',
             ]
             params: dict[str, Any] = {"eid": eid, "m": mid, "f": fin}
             if computed_lg is not None:
@@ -2156,8 +2160,11 @@ def upsert_grades(
                 and not str(item.get("letter_grade") or "").strip()
             ):
                 if mid is not None and fin is not None:
-                    score2 = (float(mid) * w_mid + float(fin) * w_fin) / 100.0
-                    lg_insert = _letter_from_score(score2)
+                    try:
+                        score2 = (float(mid) * w_mid + float(fin) * w_fin) / 100.0
+                        lg_insert = _letter_from_score(score2)
+                    except (TypeError, ValueError):
+                        lg_insert = None
             elif "letter_grade" in item:
                 lv2 = item.get("letter_grade")
                 if lv2 is not None and str(lv2).strip():
@@ -2165,22 +2172,22 @@ def upsert_grades(
             if lg_insert is not None:
                 db.execute(
                     text("""
-                    INSERT INTO obs_grade_entries (id, enrollment_id, midterm, final, letter_grade, is_finalized, is_published, created_at, updated_at)
-                    VALUES (:gid, :eid, :m, :f, :lg, false, false, NOW(), NOW())
+                    INSERT INTO obs_grade_entries (id, enrollment_id, "midterm", "final", letter_grade, is_finalized, is_published, created_at, updated_at)
+                    VALUES (:gid, :eid, :m, :f, :lg, false, false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     """),
                     {"gid": gid, "eid": eid, "m": mid, "f": fin, "lg": lg_insert},
                 )
             else:
                 db.execute(
                     text("""
-                    INSERT INTO obs_grade_entries (id, enrollment_id, midterm, final, is_finalized, is_published, created_at, updated_at)
-                    VALUES (:gid, :eid, :m, :f, false, false, NOW(), NOW())
+                    INSERT INTO obs_grade_entries (id, enrollment_id, "midterm", "final", is_finalized, is_published, created_at, updated_at)
+                    VALUES (:gid, :eid, :m, :f, false, false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     """),
                     {"gid": gid, "eid": eid, "m": mid, "f": fin},
                 )
         n += 1
     db.commit()
-    return n
+    return n, None
 
 
 def delete_grade_entry(
@@ -2209,14 +2216,43 @@ def delete_grade_entry(
     return True, ""
 
 
-def finalize_section_grades(db: Session, section_id: str) -> None:
+def finalize_section_grades(
+    db: Session,
+    section_id: str,
+    finalized_by_user_id: Optional[str] = None,
+) -> None:
+    """
+    Şubedeki aktif kayıtlı öğrencilerin not satırlarını kesinleştirir.
+
+    finalized_by: obs_grade_entries.finalized_by FK genelde Open WebUI `user.id` ile eşleşir
+    (obs akademik profil UUID’si değil).
+
+    Not: PostgreSQL `UPDATE ... FROM` ve SQLite uyumu için `WHERE enrollment_id IN (SELECT ...)`
+    kullanılır. `NOW()` yerine `CURRENT_TIMESTAMP` (SQLite + PostgreSQL).
+    """
+    set_fb = ""
+    params: dict[str, Any] = {"sid": section_id}
+    if finalized_by_user_id:
+        set_fb = ", finalized_by = :fb"
+        params["fb"] = finalized_by_user_id
+
     db.execute(
-        text("""
-        UPDATE obs_grade_entries g SET is_finalized = true, finalized_at = NOW()
-        FROM obs_course_enrollments ce
-        WHERE g.enrollment_id = ce.id AND ce.course_section_id = :sid
-        """),
-        {"sid": section_id},
+        text(
+            f"""
+            UPDATE obs_grade_entries
+            SET is_finalized = true,
+                finalized_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+                {set_fb}
+            WHERE enrollment_id IN (
+                SELECT ce.id
+                FROM obs_course_enrollments ce
+                WHERE ce.course_section_id = :sid
+                  AND ce.status = 'active'
+            )
+            """
+        ),
+        params,
     )
     db.commit()
 
