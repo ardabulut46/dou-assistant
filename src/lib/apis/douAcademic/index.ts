@@ -25,12 +25,18 @@ async function authFetch<T>(path: string, token: string | null, options?: Reques
 	const text = await res.text();
 
 	let data: unknown;
-	try {
-		data = JSON.parse(text);
-	} catch {
-		// HTML veya boş yanıt döndü (örn. 404 sayfası, sunucu yok)
+	const trimmed = text.trim();
+	if (!trimmed) {
 		if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-		throw new Error(`Sunucu JSON döndürmedi (${res.status}). Endpoint: ${path}`);
+		// Boş gövde + 200: bazı proxy veya hatalı ara katmanlar — `{}` varsay
+		data = {};
+	} else {
+		try {
+			data = JSON.parse(trimmed);
+		} catch {
+			if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+			throw new Error(`Sunucu JSON döndürmedi (${res.status}). Endpoint: ${path}`);
+		}
 	}
 
 	if (!res.ok) {
@@ -275,10 +281,21 @@ export type DouSection = {
 	final_weight_percent?: number;
 };
 
+export type DouClassroomOption = {
+	id: string;
+	/** Seçenek değeri (kod veya yalnızca ad) */
+	code: string;
+	/** Görünen metin (kapasite / bina ekli) */
+	label?: string;
+	capacity?: number | null;
+};
+
 export type DouAcademicSectionsResponse = {
 	academic_user_id: string;
 	term_id_filter: string | null;
 	sections: DouSection[];
+	/** `include_classrooms=true` ile (sınav tanımlama derslik dropdown) */
+	classrooms?: DouClassroomOption[];
 	_mock?: boolean;
 };
 
@@ -524,8 +541,15 @@ export const getDouStudentAnnouncements = (token: string | null) =>
 // Akademisyen
 // ---------------------------------------------------------------------------
 
-export const getDouAcademicSections = (token: string | null, termId?: string) => {
-	const q = termId ? `?term_id=${encodeURIComponent(termId)}` : '';
+export const getDouAcademicSections = (
+	token: string | null,
+	termId?: string,
+	opts?: { includeClassrooms?: boolean }
+) => {
+	const params = new URLSearchParams();
+	if (termId) params.set('term_id', termId);
+	if (opts?.includeClassrooms) params.set('include_classrooms', 'true');
+	const q = params.toString() ? `?${params.toString()}` : '';
 	return authFetch<DouAcademicSectionsResponse>(`/academic/me/sections${q}`, token);
 };
 
@@ -1318,6 +1342,9 @@ export type AcademicExam = {
 	classroom: string;
 	weight_percent: number;
 };
+
+export const getDouAcademicClassrooms = (token: string | null) =>
+	authFetch<{ classrooms: DouClassroomOption[] }>('/academic/me/classrooms', token);
 
 export const getDouSectionGrades = (token: string | null, sectionId: string) =>
 	authFetch<{

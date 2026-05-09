@@ -1611,7 +1611,9 @@
 									<td class="px-4 py-3 font-medium">{ex.exam_date}</td>
 									<td class="px-4 py-3 text-slate-500">{ex.exam_time}</td>
 									<td class="px-4 py-3 text-xs text-slate-500">{ex.classroom}</td>
-									<td class="px-4 py-3 text-center font-semibold">%{ex.weight_percent}</td>
+									<td class="px-4 py-3 text-center font-semibold"
+										>%{ex.weight_percent ?? 0}</td
+									>
 								</tr>
 							{:else}
 								<tr

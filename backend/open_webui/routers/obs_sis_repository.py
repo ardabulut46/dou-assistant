@@ -1839,7 +1839,8 @@ def section_exams(db: Session, section_id: str) -> list[dict[str, Any]]:
     rows = (
         db.execute(
             text("""
-        SELECT id, course_section_id, exam_type, exam_date, exam_time, weight_percent, cr.code AS classroom_code
+        SELECT ex.id, ex.course_section_id, ex.exam_type, ex.exam_date, ex.exam_time,
+               ex.weight_percent, cr.code AS classroom_code
         FROM obs_exams ex
         LEFT JOIN obs_classrooms cr ON ex.classroom_id = cr.id
         WHERE ex.course_section_id = :sid
@@ -1873,18 +1874,11 @@ def insert_exam(
     weight: float,
 ) -> dict[str, Any]:
     eid = str(uuid.uuid4())
-    cr_id = None
-    if classroom:
-        row = db.execute(
-            text("SELECT id FROM obs_classrooms WHERE code = :c LIMIT 1"),
-            {"c": classroom},
-        ).first()
-        if row:
-            cr_id = str(row[0])
+    cr_id = resolve_classroom_id_by_label(db, classroom)
     db.execute(
         text("""
         INSERT INTO obs_exams (id, course_section_id, exam_type, exam_date, exam_time, classroom_id, weight_percent, is_published, created_at)
-        VALUES (:id, :csid, :et, :ed, :etm, :crid, :wp, false, NOW())
+        VALUES (:id, :csid, :et, :ed, :etm, :crid, :wp, false, CURRENT_TIMESTAMP)
         """),
         {
             "id": eid,
@@ -1979,14 +1973,9 @@ def update_section_exam(
         pi += 1
     if "classroom" in patch:
         classroom_raw = patch.get("classroom")
-        cr_id = None
-        if classroom_raw:
-            row = db.execute(
-                text("SELECT id FROM obs_classrooms WHERE code = :c LIMIT 1"),
-                {"c": str(classroom_raw).strip()},
-            ).first()
-            if row:
-                cr_id = str(row[0])
+        cr_id = resolve_classroom_id_by_label(
+            db, str(classroom_raw).strip() if classroom_raw else None
+        )
         set_parts.append(f"classroom_id = :p{pi}")
         bind[f"p{pi}"] = cr_id
         pi += 1
@@ -4308,6 +4297,72 @@ def list_classrooms_raw(db: Session) -> list[dict[str, Any]]:
         d["id"] = _str_id(d.get("id"))
         out.append(d)
     return out
+
+
+def list_classrooms_dropdown(db: Session) -> list[dict[str, Any]]:
+    """
+    Sınav formu select: code doluysa kod, değilse name ile anahtar.
+    Boş satırlar atlanır; sıralama görünen ada göre.
+    """
+    rows = (
+        db.execute(
+            text(
+                "SELECT id, code, name, building, capacity FROM obs_classrooms"
+            )
+        )
+        .mappings()
+        .all()
+    )
+    packed: list[tuple[str, dict[str, Any]]] = []
+    for r in rows:
+        code = (r.get("code") or "").strip()
+        name = (r.get("name") or "").strip()
+        key = code or name
+        if not key:
+            continue
+        cap = r.get("capacity")
+        cap_i = int(cap) if cap is not None else None
+        bl = (r.get("building") or "").strip()
+        label = key
+        if cap_i is not None:
+            label = f"{key} · {cap_i} kişi"
+        if bl:
+            label = f"{label} · {bl}"
+        packed.append(
+            (
+                key.lower(),
+                {
+                    "id": _str_id(r["id"]),
+                    "code": key,
+                    "label": label,
+                    "capacity": cap_i,
+                },
+            )
+        )
+    packed.sort(key=lambda x: x[0])
+    return [p[1] for p in packed]
+
+
+def resolve_classroom_id_by_label(db: Session, label: Optional[str]) -> Optional[str]:
+    """Dropdown veya serbest metin: önce code, sonra name ile obs_classrooms eşlemesi."""
+    if not label:
+        return None
+    s = str(label).strip()
+    if not s:
+        return None
+    row = db.execute(
+        text("SELECT id FROM obs_classrooms WHERE TRIM(code) = :c LIMIT 1"),
+        {"c": s},
+    ).first()
+    if row:
+        return str(row[0])
+    row = db.execute(
+        text("SELECT id FROM obs_classrooms WHERE TRIM(name) = :n LIMIT 1"),
+        {"n": s},
+    ).first()
+    if row:
+        return str(row[0])
+    return None
 
 
 def list_sections_raw(db: Session, term_id: Optional[str]) -> list[dict[str, Any]]:

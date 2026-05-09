@@ -846,15 +846,42 @@ async def student_credit_transfer_post(user=Depends(get_verified_user)):
 @academic_user_router.get("/me/sections")
 async def academic_me_sections(
     term_id: Optional[str] = Query(None),
+    include_classrooms: bool = Query(False),
     user=Depends(get_verified_user),
     obs_db: Session = Depends(get_obs_session),
 ):
     sections = repo.academic_sections(obs_db, user.id, term_id)
-    return {
+    out: dict[str, Any] = {
         "academic_user_id": user.id,
         "term_id_filter": term_id,
         "sections": sections,
     }
+    if include_classrooms:
+        out["classrooms"] = repo.list_classrooms_dropdown(obs_db)
+    return out
+
+
+def _academic_classrooms_payload(obs_db: Session) -> dict[str, Any]:
+    """Dropdown: code veya name dolu tüm derslikler; label ile görünen metin."""
+    return {"classrooms": repo.list_classrooms_dropdown(obs_db)}
+
+
+@academic_user_router.get("/classrooms")
+async def academic_list_classrooms(
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    """Sınav tanımlamada derslik seçimi (obs_classrooms)."""
+    return _academic_classrooms_payload(obs_db)
+
+
+@academic_user_router.get("/me/classrooms")
+async def academic_list_classrooms_me(
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    """`/me/sections` ile aynı çatı — proxy/cache uyumu için ikinci yol."""
+    return _academic_classrooms_payload(obs_db)
 
 
 @academic_user_router.get("/me/sections/{section_id}/students")

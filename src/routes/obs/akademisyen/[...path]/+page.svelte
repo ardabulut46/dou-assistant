@@ -16,6 +16,7 @@
 		putDouSectionGradeWeights,
 		unfinalizeDouSectionGrade,
 		getDouSectionExams,
+		getDouAcademicClassrooms,
 		createDouSectionExam,
 		updateDouSectionExam,
 		deleteDouSectionExam,
@@ -45,6 +46,7 @@
 		type AcademicGradeRow,
 		type AcademicStudent,
 		type AcademicExam,
+		type DouClassroomOption,
 		type DouMessage
 	} from '$lib/apis/douAcademic';
 
@@ -85,9 +87,15 @@
 	let selectedSectionsTermId = '';
 	/** Not girişi: seçili akademik dönem (ilk açılışta aktif dönem); şube listesi buna göre filtrelenir. */
 	let selectedGradesTermId = '';
+	/** Sınav tanımlama: seçili akademik dönem (ilk açılışta aktif dönem); şube listesi buna göre filtrelenir. */
+	let selectedExamsTermId = '';
 	let selectedSection = '';
 	$: selectedSectionMeta =
 		sections.find((s) => String(s.id) === String(selectedSection)) ?? null;
+	$: examDefineTermRow =
+		selectedSectionMeta && terms.length
+			? terms.find((t) => t.id === selectedSectionMeta.term_id)
+			: undefined;
 	let sectionStudents: AcademicStudent[] = [];
 	let gradeRows: AcademicGradeRow[] = [];
 	let gradeEdits: Record<string, { midterm?: number; final?: number; letter_grade?: string }> = {};
@@ -97,6 +105,8 @@
 	let gradeWeights = { midterm_weight_percent: 40, final_weight_percent: 60 };
 	let weightsSaving = false;
 	let exams: AcademicExam[] = [];
+	let examClassrooms: DouClassroomOption[] = [];
+	let examClassroomsErr: string | null = null;
 	let advisees: unknown[] = [];
 	let adviseeDetailUserId: string | null = null;
 	let adviseeEnrollments: DouEnrollment[] = [];
@@ -157,6 +167,41 @@
 	}
 
 	$: termsSortedForSections = sortTermsNewestFirst(terms);
+
+	/** Sınav sayfası optgroup: aktif işaretli dönem(ler) */
+	$: examsTermsActive = termsSortedForSections.filter((t) => t.is_active);
+	/** Aktif olmayan dönemler (yeniden eskiye) */
+	$: examsTermsOther = termsSortedForSections.filter((t) => !t.is_active);
+
+	function formatSectionExamChoice(s: DouSection): string {
+		const secLetter = (s.section_code || '').trim() || String.fromCharCode(64 + (s.section_no || 1));
+		const termLbl = (() => {
+			const tid = s.term_id;
+			if (!tid) return '';
+			const te = terms.find((x) => x.id === tid);
+			return te ? formatTermDropdownLabel(te) : '';
+		})();
+		const code = (s.course_code || '').trim();
+		const name = (s.course_name || '').trim();
+		const head = `[Şube ${secLetter}] ${code} — ${name}`;
+		const tail: string[] = [];
+		if (termLbl) tail.push(termLbl);
+		const when = [s.day_of_week, s.start_time].filter(Boolean).join(' ');
+		if (when) tail.push(when);
+		const ec = s.enrollment_count;
+		if (ec != null && Number.isFinite(ec)) tail.push(`${ec} öğrenci`);
+		return tail.length ? `${head} · ${tail.join(' · ')}` : head;
+	}
+
+	function examTypeLabel(t: string): string {
+		const m: Record<string, string> = {
+			midterm: 'Vize',
+			final: 'Final',
+			makeup: 'Bütünleme',
+			project: 'Proje'
+		};
+		return m[t] ?? t;
+	}
 
 	function pickTermRange(term: {
 		starts_at?: string;
@@ -239,6 +284,24 @@
 	let examErr: string | null = null;
 	let approvalErr: string | null = null;
 
+	/** obs_classrooms boş olsa bile tanımlı sınav satırlarındaki derslik metinlerini seçenek olarak birleştir */
+	function mergeDouClassroomsWithExamStrings(
+		base: DouClassroomOption[],
+		examsList: AcademicExam[]
+	): DouClassroomOption[] {
+		const byCode = new Map<string, DouClassroomOption>();
+		for (const c of base) {
+			const k = (c.code ?? '').trim();
+			if (k) byCode.set(k, c);
+		}
+		for (const ex of examsList) {
+			const code = (ex.classroom ?? '').trim();
+			if (!code || byCode.has(code)) continue;
+			byCode.set(code, { id: '', code, label: code });
+		}
+		return [...byCode.values()].sort((a, b) => a.code.localeCompare(b.code, 'tr'));
+	}
+
 	async function loadPage() {
 		if (!browser || !apiKey) return;
 		loading = true;
@@ -251,8 +314,8 @@
 		}
 
 		try {
-			// Dönem listesi: Şubelerim / Not girişi filtresi + yoklama haftası için
-			if (!terms.length || apiKey === 'sections' || apiKey === 'grades-entry') {
+			// Dönem listesi: Şubelerim / Not girişi / Sınav tanımlama filtresi + yoklama haftası için
+			if (!terms.length || apiKey === 'sections' || apiKey === 'grades-entry' || apiKey === 'exam-define') {
 				const tr = await Promise.allSettled([getDouTerms(token)]);
 				if (tr[0].status === 'fulfilled') {
 					terms = (tr[0].value as DouTerm[]) ?? [];
@@ -275,19 +338,46 @@
 				}
 			}
 
+			if (apiKey === 'exam-define') {
+				if (!selectedExamsTermId && terms.length) {
+					const sorted = sortTermsNewestFirst(terms);
+					selectedExamsTermId =
+						sorted.find((t) => t.is_active)?.id ?? sorted[0]?.id ?? '';
+				}
+			}
+
 			const sectionsTermArg =
 				apiKey === 'sections'
 					? selectedSectionsTermId || undefined
 					: apiKey === 'grades-entry'
 						? selectedGradesTermId || undefined
-						: undefined;
-			const secRes = await Promise.allSettled([getDouAcademicSections(token, sectionsTermArg)]);
+						: apiKey === 'exam-define'
+							? selectedExamsTermId || undefined
+							: undefined;
+			/** Sunucu include_classrooms ile yanıt verdiyse /me/classrooms yedeğine gerek yok (proxy/HTML kırığından kaçın) */
+			let sectionsPayloadHadClassrooms = false;
+			const secRes = await Promise.allSettled([
+				getDouAcademicSections(token, sectionsTermArg, {
+					includeClassrooms: apiKey === 'exam-define'
+				})
+			]);
 			if (secRes[0].status === 'fulfilled') {
-				sections = secRes[0].value.sections ?? [];
+				const pack = secRes[0].value;
+				sections = pack.sections ?? [];
+				if (apiKey === 'exam-define') {
+					sectionsPayloadHadClassrooms = Object.prototype.hasOwnProperty.call(pack, 'classrooms');
+					examClassrooms = pack.classrooms ?? [];
+					if (pack.classrooms?.length) examClassroomsErr = null;
+				}
 			} else {
 				sections = [];
+				if (apiKey === 'exam-define') examClassrooms = [];
 			}
 			if (apiKey === 'grades-entry' && selectedSection) {
+				const sectionIds = new Set(sections.map((s) => s.id));
+				if (!sectionIds.has(selectedSection)) selectedSection = '';
+			}
+			if (apiKey === 'exam-define' && selectedSection) {
 				const sectionIds = new Set(sections.map((s) => s.id));
 				if (!sectionIds.has(selectedSection)) selectedSection = '';
 			}
@@ -362,14 +452,34 @@
 				// İlk açılışta seçili haftanın mevcut kayıtlarını yükle
 				await loadAttendanceWeek();
 			}
-			if (apiKey === 'exam-define' && selectedSection) {
+			if (apiKey === 'exam-define') {
 				editingExamId = '';
-				const r = await Promise.allSettled([getDouSectionExams(token, selectedSection)]);
-				if (r[0].status === 'fulfilled') {
-					exams = r[0].value.exams ?? [];
+				if (!examClassrooms.length && !sectionsPayloadHadClassrooms) {
+					examClassroomsErr = null;
+					const cr = await Promise.allSettled([getDouAcademicClassrooms(token)]);
+					if (cr[0].status === 'fulfilled') {
+						examClassrooms = cr[0].value.classrooms ?? [];
+					} else {
+						examClassrooms = [];
+						const reason = cr[0].reason;
+						examClassroomsErr =
+							reason instanceof Error
+								? reason.message
+								: 'Derslik listesi yüklenemedi (sunucu veya oturum).';
+					}
+				} else if (sectionsPayloadHadClassrooms) {
+					examClassroomsErr = null;
+				}
+				if (selectedSection) {
+					const er = await Promise.allSettled([
+						getDouSectionExams(token, selectedSection)
+					]);
+					exams = er[0].status === 'fulfilled' ? (er[0].value.exams ?? []) : [];
 				} else {
 					exams = [];
 				}
+				examClassrooms = mergeDouClassroomsWithExamStrings(examClassrooms, exams);
+				if (examClassrooms.length) examClassroomsErr = null;
 			}
 			if (apiKey === 'advisees') {
 				const r = await Promise.allSettled([
@@ -581,6 +691,9 @@
 		}
 		if (toPath === '/obs/akademisyen/not-girisi' && fromPath !== toPath) {
 			selectedGradesTermId = '';
+		}
+		if (toPath === '/obs/akademisyen/sinav-tanimlama' && fromPath !== toPath) {
+			selectedExamsTermId = '';
 		}
 		void loadPage();
 	});
@@ -846,8 +959,17 @@
 		examErr = null;
 		const token = localStorage.token ?? null;
 		try {
-			const newExam = await createDouSectionExam(token, selectedSection, { ...examForm });
-			exams = [...exams, newExam];
+			await createDouSectionExam(token, selectedSection, {
+				exam_type: examForm.exam_type,
+				exam_date: examForm.exam_date,
+				exam_time: examForm.exam_time,
+				weight_percent: Number(examForm.weight_percent),
+				...(examForm.classroom?.trim()
+					? { classroom: examForm.classroom.trim() }
+					: {})
+			});
+			const sync = await getDouSectionExams(token, selectedSection);
+			exams = sync.exams ?? [];
 			examSaved = true;
 			examForm = {
 				exam_type: 'midterm',
@@ -882,7 +1004,7 @@
 			exam_date: (ex.exam_date || '').slice(0, 10),
 			exam_time: examTimeForInput(ex.exam_time || ''),
 			classroom: ex.classroom ?? '',
-			weight_percent: ex.weight_percent
+			weight_percent: Number(ex.weight_percent ?? 40)
 		};
 	}
 
@@ -901,8 +1023,8 @@
 				exam_type: examEditForm.exam_type,
 				exam_date: examEditForm.exam_date,
 				exam_time: examEditForm.exam_time,
-				classroom: examEditForm.classroom || null,
-				weight_percent: examEditForm.weight_percent
+				classroom: examEditForm.classroom?.trim() ? examEditForm.classroom.trim() : null,
+				weight_percent: Number(examEditForm.weight_percent)
 			});
 			exams = exams.map((e) => (e.id === updated.id ? updated : e));
 			editingExamId = '';
@@ -1427,23 +1549,94 @@
 			<!-- SINAV TANIMLAMA                                              -->
 			<!-- ============================================================ -->
 		{:else if apiKey === 'exam-define'}
-			<div class="flex items-center gap-3">
-				<span class="text-xs font-semibold text-slate-500">Şube:</span>
-				<select
-					bind:value={selectedSection}
-					on:change={() => loadPage()}
-					class="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm outline-none dark:border-white/10 dark:bg-white/5"
-				>
-					{#each sections as s}
-						<option value={s.id}>{s.course_code} — {s.course_name}</option>
-					{/each}
-				</select>
+			<div class="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+				<label class="block min-w-[min(100%,14rem)]">
+					<span class="mb-1 block text-xs font-semibold text-slate-500 dark:text-slate-400"
+						>Akademik dönem</span
+					>
+					<select
+						bind:value={selectedExamsTermId}
+						on:change={() => loadPage()}
+						class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+					>
+						{#if examsTermsActive.length}
+							<optgroup label="Aktif dönem">
+								{#each examsTermsActive as t}
+									<option value={t.id}>{formatTermDropdownLabel(t)}</option>
+								{/each}
+							</optgroup>
+						{/if}
+						{#if examsTermsOther.length}
+							<optgroup
+								label={examsTermsActive.length ? 'Diğer dönemler' : 'Akademik dönemler'}
+							>
+								{#each examsTermsOther as t}
+									<option value={t.id}>{formatTermDropdownLabel(t)}</option>
+								{/each}
+							</optgroup>
+						{/if}
+					</select>
+				</label>
+				<label class="block min-w-[min(100%,22rem)] flex-1">
+					<span class="mb-1 block text-xs font-semibold text-slate-500 dark:text-slate-400"
+						>Ders / şube</span
+					>
+					<select
+						bind:value={selectedSection}
+						on:change={() => loadPage()}
+						class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+					>
+						{#each sections as s}
+							<option value={s.id}>{formatSectionExamChoice(s)}</option>
+						{/each}
+					</select>
+				</label>
 			</div>
+			{#if selectedSectionMeta}
+				<div
+					class="rounded-lg border border-sky-200/80 bg-sky-50/80 px-4 py-3 text-sm dark:border-sky-900/40 dark:bg-sky-950/25"
+				>
+					<div class="font-bold text-slate-800 dark:text-slate-100">
+						{selectedSectionMeta.course_code}
+						<span class="font-semibold text-slate-600 dark:text-slate-300"> — </span>
+						{selectedSectionMeta.course_name}
+					</div>
+					<div class="mt-1 text-xs text-slate-600 dark:text-slate-400">
+						Şube {selectedSectionMeta.section_code ?? '—'}
+						{#if examDefineTermRow}
+							<span class="text-slate-400"> · </span>
+							{formatTermDropdownLabel(examDefineTermRow)}
+						{/if}
+						{#if selectedSectionMeta.day_of_week || selectedSectionMeta.start_time}
+							<span class="text-slate-400"> · </span>
+							{selectedSectionMeta.day_of_week}
+							{selectedSectionMeta.start_time}{#if selectedSectionMeta.end_time}
+								–{selectedSectionMeta.end_time}{/if}
+						{/if}
+					</div>
+				</div>
+			{/if}
+			{#if !sections.length}
+				<div
+					class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-100"
+				>
+					Bu dönem için atanmış şubeniz yok veya liste boş. Dönem seçimini veya OBS şube
+					atamalarını kontrol edin.
+				</div>
+			{/if}
 			{#if examErr}
 				<div
 					class="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300"
 				>
 					{examErr}
+				</div>
+			{/if}
+			{#if examClassroomsErr}
+				<div
+					class="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
+				>
+					<strong>Derslik listesi:</strong>
+					{examClassroomsErr}
 				</div>
 			{/if}
 
@@ -1452,7 +1645,17 @@
 				<div
 					class="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
 				>
-					<div class="px-5 py-3 text-xs font-bold text-slate-400">MEVCUT SINAVLAR</div>
+					<div class="border-b border-black/5 px-5 py-3 dark:border-white/10">
+						<div class="text-xs font-bold uppercase tracking-wide text-slate-400">
+							Tanımlı sınavlar
+						</div>
+						{#if selectedSectionMeta}
+							<div class="mt-1 text-sm font-semibold text-slate-700 dark:text-slate-200">
+								{selectedSectionMeta.course_code} — {selectedSectionMeta.course_name}
+								<span class="font-normal text-slate-500"> ({exams.length})</span>
+							</div>
+						{/if}
+					</div>
 					{#each exams as ex}
 						<div
 							class="border-t border-black/5 px-5 py-3 text-sm dark:border-white/10 {editingExamId === ex.id
@@ -1492,13 +1695,22 @@
 											class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
 										/>
 									</label>
-									<label class="block">
+									<label class="block sm:col-span-2 lg:col-span-3">
 										<div class="mb-1 text-xs font-semibold text-slate-500">Derslik</div>
-										<input
+										<select
 											bind:value={examEditForm.classroom}
-											placeholder="Boş = atanmamış"
 											class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
-										/>
+										>
+											<option value="">Derslik seçilmedi</option>
+											{#if examEditForm.classroom && !examClassrooms.some((c) => c.code === examEditForm.classroom)}
+												<option value={examEditForm.classroom}
+													>{examEditForm.classroom} (kayıtta)</option
+												>
+											{/if}
+											{#each examClassrooms as cr}
+												<option value={cr.code}>{cr.label ?? cr.code}</option>
+											{/each}
+										</select>
 									</label>
 									<label class="block">
 										<div class="mb-1 text-xs font-semibold text-slate-500">Ağırlık %</div>
@@ -1507,6 +1719,7 @@
 											bind:value={examEditForm.weight_percent}
 											min="0"
 											max="100"
+											step="0.5"
 											class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
 										/>
 									</label>
@@ -1536,17 +1749,19 @@
 											class="rounded-full px-2 py-0.5 text-xs font-medium
 											{ex.exam_type === 'midterm'
 												? 'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300'
-												: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'}"
-										>
-											{ex.exam_type === 'midterm'
-												? 'Vize'
 												: ex.exam_type === 'final'
-													? 'Final'
-													: ex.exam_type}
+													? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
+													: ex.exam_type === 'makeup'
+														? 'bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300'
+														: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200'}"
+										>
+											{examTypeLabel(ex.exam_type)}
 										</span>
 										<span>{ex.exam_date} {ex.exam_time}</span>
 										<span class="text-xs text-slate-400">{ex.classroom || '—'}</span>
-										<span class="text-xs font-semibold text-slate-500">%{ex.weight_percent}</span>
+										<span class="text-xs font-semibold text-slate-500"
+											>%{Number(ex.weight_percent ?? 0)}</span
+										>
 									</div>
 									<div class="flex items-center gap-2">
 										<button
@@ -1571,11 +1786,26 @@
 						</div>
 					{/each}
 				</div>
+			{:else if sections.length && selectedSection}
+				<div
+					class="rounded-xl border border-dashed border-slate-200 bg-slate-50/80 px-5 py-8 text-center text-sm text-slate-500 dark:border-white/15 dark:bg-white/5 dark:text-slate-400"
+				>
+					<p class="font-medium text-slate-600 dark:text-slate-300">
+						Bu şube için henüz sınav kaydı yok.
+					</p>
+					<p class="mt-2 text-xs">
+						Aşağıdaki formdan sınav ekleyebilir; sonra listeden <strong>Düzenle</strong> veya
+						<strong>Sil</strong> ile güncelleyebilirsiniz.
+					</p>
+				</div>
 			{/if}
 
 			<!-- Yeni sınav formu -->
 			<div
-				class="rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5"
+				class="rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5 {!sections.length ||
+				!selectedSection
+					? 'opacity-60'
+					: ''}"
 			>
 				<div class="mb-4 font-semibold">Yeni Sınav Tanımla</div>
 				{#if examSaved}
@@ -1614,13 +1844,17 @@
 							class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
 						/>
 					</label>
-					<label class="block">
+					<label class="block sm:col-span-2">
 						<div class="mb-1 text-xs font-semibold text-slate-500">Derslik</div>
-						<input
+						<select
 							bind:value={examForm.classroom}
-							placeholder="A-101"
 							class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
-						/>
+						>
+							<option value="">Derslik seçilmedi</option>
+							{#each examClassrooms as cr}
+								<option value={cr.code}>{cr.label ?? cr.code}</option>
+							{/each}
+						</select>
 					</label>
 					<label class="block">
 						<div class="mb-1 text-xs font-semibold text-slate-500">Ağırlık %</div>
@@ -1629,13 +1863,14 @@
 							bind:value={examForm.weight_percent}
 							min="0"
 							max="100"
+							step="0.5"
 							class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
 						/>
 					</label>
 				</div>
 				<button
 					on:click={createExam}
-					disabled={examSaving}
+					disabled={examSaving || !sections.length || !selectedSection}
 					type="button"
 					class="mt-4 rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-400 disabled:opacity-50 transition-colors"
 				>
