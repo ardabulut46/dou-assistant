@@ -1761,7 +1761,8 @@ def section_students(db: Session, section_id: str) -> tuple[Optional[dict], list
     rows = (
         db.execute(
             text(f"""
-        SELECT ce.id AS enrollment_id, ce.status, sp.student_number, u.name, sp.gpa
+        SELECT ce.id AS enrollment_id, ce.status, sp.student_number, u.name, sp.gpa,
+               sp.user_id AS student_user_id
         FROM obs_course_enrollments ce
         JOIN obs_student_profiles sp ON ce.student_id = sp.id
         LEFT JOIN {USER_TBL} u ON u.id = sp.user_id
@@ -1776,6 +1777,7 @@ def section_students(db: Session, section_id: str) -> tuple[Optional[dict], list
         {
             "student_no": r.get("student_number") or "",
             "name": r.get("name") or "",
+            "student_user_id": r.get("student_user_id") or "",
             "enrollment_id": _str_id(r["enrollment_id"]),
             "enrollment_status": r.get("status") or "",
             "gpa": float(r["gpa"]) if r.get("gpa") is not None else 0.0,

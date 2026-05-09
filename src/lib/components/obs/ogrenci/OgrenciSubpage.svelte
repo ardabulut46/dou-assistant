@@ -349,6 +349,14 @@
 		}
 	}
 
+	/** Danışmanın WebUI kullanıcı kimliği — POST /messages için zorunlu. */
+	async function resolveAdvisorReceiverUserId(token: string): Promise<string | null> {
+		if (advisor?.advisor?.academic_user_id) return advisor.advisor.academic_user_id;
+		const r = await getDouStudentAdvisor(token).catch(() => null);
+		advisor = r;
+		return r?.advisor?.academic_user_id ?? null;
+	}
+
 	// Svelte 5: $: loadPage(...) + apiKey bağımlılığı döngü / kilitlenmeye yol açabiliyor; sadece navigasyon sonrası yükle.
 	afterNavigate(async () => {
 		await tick();
@@ -454,14 +462,18 @@
 			const dersListesi = draftEnrollments
 				.map((e) => `• ${e.course_code} — ${e.course_name} (${e.akts} AKTS)`)
 				.join('\n');
-			await sendDouMessageApi(token, {
-				receiver_name: 'Danışmanım',
-				receiver_type: 'akademisyen',
-				subject: 'Ders Kayıt — Danışman onayı',
-				body: `Sayın Danışmanım,\n\nDers kayıt listemi onayınıza gönderdim:\n\n${dersListesi}\n\nToplamda ${draftAkts} AKTS. Saygılarımla`
-			}).catch(() => {
-				/* mesaj isteğe bağlı */
-			});
+			const advisorRid = await resolveAdvisorReceiverUserId(token);
+			if (advisorRid) {
+				await sendDouMessageApi(token, {
+					receiver_user_id: advisorRid,
+					receiver_name: 'Danışmanım',
+					receiver_type: 'akademisyen',
+					subject: 'Ders Kayıt — Danışman onayı',
+					body: `Sayın Danışmanım,\n\nDers kayıt listemi onayınıza gönderdim:\n\n${dersListesi}\n\nToplamda ${draftAkts} AKTS. Saygılarımla`
+				}).catch(() => {
+					/* mesaj isteğe bağlı */
+				});
+			}
 			const courseNames = draftEnrollments.map((e) => e.course_code).join(', ');
 			enrollSuccess = `${draftEnrollments.length} ders (${courseNames}) danışman onayına gönderildi; liste kilitlendi.`;
 			await loadPage();
@@ -532,12 +544,16 @@
 				.filter(Boolean)
 				.map((e) => `• − ${e!.course_code}`)
 				.join('\n');
-			await sendDouMessageApi(token, {
-				receiver_name: 'Danışmanım',
-				receiver_type: 'akademisyen',
-				subject: 'Ders ekle/bırak — onay',
-				body: `Sayın Danışmanım,\n\nEkle/bırak paketimi onayınıza gönderdim.\n\n${adds || '(yeni ders yok)'}\n\n${drops || '(bırakma yok)'}\n\nSaygılarımla`
-			}).catch(() => {});
+			const advisorRid2 = await resolveAdvisorReceiverUserId(token);
+			if (advisorRid2) {
+				await sendDouMessageApi(token, {
+					receiver_user_id: advisorRid2,
+					receiver_name: 'Danışmanım',
+					receiver_type: 'akademisyen',
+					subject: 'Ders ekle/bırak — onay',
+					body: `Sayın Danışmanım,\n\nEkle/bırak paketimi onayınıza gönderdim.\n\n${adds || '(yeni ders yok)'}\n\n${drops || '(bırakma yok)'}\n\nSaygılarımla`
+				}).catch(() => {});
+			}
 			dropSuccess =
 				'Paket danışman onayına gönderildi; yeni dersler ve bırakma işaretleri kilitlendi.';
 			markedDrop = new Set();
@@ -572,7 +588,17 @@
 		composeError = null;
 		const token = localStorage.token ?? null;
 		try {
+			if (!token) {
+				composeError = 'Giriş yapmanız gerekiyor.';
+				return;
+			}
+			const rid = await resolveAdvisorReceiverUserId(token);
+			if (!rid) {
+				composeError = 'Danışman kaydı bulunamadı; mesaj gönderilemiyor.';
+				return;
+			}
 			await sendDouMessageApi(token, {
+				receiver_user_id: rid,
 				receiver_name: composeForm.receiver_name,
 				receiver_type: composeForm.receiver_type,
 				subject: composeForm.subject,

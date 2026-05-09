@@ -1287,6 +1287,8 @@ export const sendDouMessageApi = (
 export type AcademicStudent = {
 	student_no: string;
 	name: string;
+	/** Şube öğrencisi mesaj / seçim için WebUI kullanıcı kimliği */
+	student_user_id?: string;
 	enrollment_id: string;
 	enrollment_status: string;
 	gpa: number;

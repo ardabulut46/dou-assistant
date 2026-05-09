@@ -30,6 +30,8 @@
 		getDouTerms,
 		getDouInbox,
 		getDouSent,
+		sendDouMessageApi,
+		markDouMessageRead,
 		createDouAcademicAnnouncement,
 		getDouAcademicAnnouncements,
 		updateDouAcademicAnnouncement,
@@ -98,6 +100,20 @@
 	let approvals: DouApprovalRequest[] = [];
 	let inboxMsgs: DouMessage[] = [];
 	let sentMsgs: DouMessage[] = [];
+	/** Mesaj yaz — danışmanlık listesi */
+	let msgAdvisees: { student_user_id: string; student_no: string; name: string }[] = [];
+	let showAcademicCompose = false;
+	/** Gelen kutusundan cevap: alıcı sabit */
+	let academicComposeReplyTo: { userId: string; displayName: string } | null = null;
+	let academicComposeRecipientMode: 'advisee' | 'section' = 'advisee';
+	let academicComposeAdviseeId = '';
+	let academicComposeSectionId = '';
+	let academicComposeSectionStudents: AcademicStudent[] = [];
+	let academicComposeSectionStudentUid = '';
+	let academicComposeSubject = '';
+	let academicComposeBody = '';
+	let academicComposeSending = false;
+	let academicComposeErr: string | null = null;
 	let weekNoUi = '1';
 	let attendanceStatus: Record<string, 'present' | 'absent' | 'excused'> = {};
 	let weekCount = 14;
@@ -310,18 +326,132 @@
 				if (r[0].status === 'fulfilled') myAnnouncements = r[0].value.announcements ?? [];
 				else myAnnouncements = [];
 			}
-			if (apiKey === 'inbox') {
-				const r = await Promise.allSettled([getDouInbox(token)]);
-				if (r[0].status === 'fulfilled') inboxMsgs = r[0].value.messages ?? [];
-			}
-			if (apiKey === 'sent') {
-				const r = await Promise.allSettled([getDouSent(token)]);
-				if (r[0].status === 'fulfilled') sentMsgs = r[0].value.messages ?? [];
+			if (apiKey === 'inbox' || apiKey === 'sent') {
+				const msgFetch = apiKey === 'inbox' ? getDouInbox(token) : getDouSent(token);
+				const r = await Promise.allSettled([msgFetch, getDouAcademicAdvisees(token)]);
+				if (r[0].status === 'fulfilled') {
+					if (apiKey === 'inbox') inboxMsgs = r[0].value.messages ?? [];
+					else sentMsgs = r[0].value.messages ?? [];
+				}
+				if (r[1].status === 'fulfilled') {
+					const raw = r[1].value.advisees ?? [];
+					msgAdvisees = raw
+						.map((a: Record<string, unknown>) => ({
+							student_user_id: String(a.student_user_id ?? ''),
+							student_no: String(a.student_no ?? ''),
+							name: String(a.name ?? '')
+						}))
+						.filter((a) => a.student_user_id);
+				} else {
+					msgAdvisees = [];
+				}
 			}
 		} catch (e: unknown) {
 			loadErr = e instanceof Error ? e.message : 'API hatası.';
 		} finally {
 			loading = false;
+		}
+	}
+
+	function resetAcademicCompose() {
+		academicComposeReplyTo = null;
+		academicComposeRecipientMode = 'advisee';
+		academicComposeAdviseeId = '';
+		academicComposeSectionId = '';
+		academicComposeSectionStudents = [];
+		academicComposeSectionStudentUid = '';
+		academicComposeSubject = '';
+		academicComposeBody = '';
+		academicComposeErr = null;
+	}
+
+	function openAcademicNewMessage() {
+		resetAcademicCompose();
+		showAcademicCompose = true;
+	}
+
+	async function openAcademicReply(m: DouMessage) {
+		const sid = m.sender_user_id;
+		if (!sid) {
+			academicComposeErr = 'Gönderen kimliği eksik; cevap verilemiyor.';
+			return;
+		}
+		resetAcademicCompose();
+		academicComposeReplyTo = {
+			userId: sid,
+			displayName: m.sender_name?.trim() || 'Öğrenci'
+		};
+		academicComposeSubject = (m.subject || '').startsWith('Re:')
+			? m.subject
+			: `Re: ${m.subject || '(konu yok)'}`;
+		academicComposeBody = '';
+		showAcademicCompose = true;
+		const token = localStorage.token ?? null;
+		if (token) void markDouMessageRead(token, m.id).catch(() => {});
+	}
+
+	async function onAcademicComposeSectionChange() {
+		academicComposeSectionStudents = [];
+		academicComposeSectionStudentUid = '';
+		if (!browser || !academicComposeSectionId) return;
+		const token = localStorage.token ?? null;
+		if (!token) return;
+		try {
+			const r = await getDouSectionStudents(token, academicComposeSectionId);
+			academicComposeSectionStudents =
+				(r as unknown as { students?: AcademicStudent[] }).students ?? [];
+		} catch {
+			academicComposeSectionStudents = [];
+		}
+	}
+
+	async function sendAcademicMessage() {
+		academicComposeSending = true;
+		academicComposeErr = null;
+		const token = localStorage.token ?? null;
+		try {
+			if (!token) {
+				academicComposeErr = 'Giriş yapmanız gerekiyor.';
+				return;
+			}
+			let receiverId = '';
+			let receiverName = '';
+			if (academicComposeReplyTo) {
+				receiverId = academicComposeReplyTo.userId;
+				receiverName = academicComposeReplyTo.displayName;
+			} else if (academicComposeRecipientMode === 'advisee') {
+				receiverId = academicComposeAdviseeId;
+				const adv = msgAdvisees.find((a) => a.student_user_id === receiverId);
+				receiverName = adv ? `${adv.name} (${adv.student_no})` : '';
+			} else {
+				receiverId = academicComposeSectionStudentUid;
+				const st = academicComposeSectionStudents.find(
+					(s) => (s.student_user_id || '') === receiverId
+				);
+				receiverName = st ? `${st.name} (${st.student_no})` : '';
+			}
+			if (!receiverId) {
+				academicComposeErr = 'Alıcı seçin (danışmanlık öğrencisi veya şube).';
+				return;
+			}
+			if (!academicComposeSubject.trim() || !academicComposeBody.trim()) {
+				academicComposeErr = 'Konu ve mesaj gerekli.';
+				return;
+			}
+			await sendDouMessageApi(token, {
+				receiver_user_id: receiverId,
+				receiver_name: receiverName || 'Öğrenci',
+				receiver_type: 'ogrenci',
+				subject: academicComposeSubject.trim(),
+				body: academicComposeBody.trim()
+			});
+			showAcademicCompose = false;
+			resetAcademicCompose();
+			await loadPage();
+		} catch (e: unknown) {
+			academicComposeErr = e instanceof Error ? e.message : 'Gönderilemedi.';
+		} finally {
+			academicComposeSending = false;
 		}
 	}
 
@@ -1812,12 +1942,38 @@
 				apiKey === 'inbox'
 					? inboxMsgs.filter((m) => m.status !== 'deleted')
 					: sentMsgs.filter((m) => m.status !== 'deleted')}
+			<div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+				<span class="text-xs text-slate-400">{msgs.length} mesaj</span>
+				<button
+					type="button"
+					on:click={openAcademicNewMessage}
+					class="flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-sky-400"
+				>
+					✏ Yeni Mesaj
+				</button>
+			</div>
+			<p class="mb-4 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+				Danışmanlık öğrencilerinize veya ders verdiğiniz şubedeki öğrenciye yazabilirsiniz. Gelen
+				mesajlarda <span class="font-medium text-slate-600 dark:text-slate-300">Cevapla</span> ile
+				gönderene dönün.
+			</p>
 			<div class="space-y-2">
 				{#each msgs as m}
 					<div
 						class="rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5"
 					>
-						<div class="font-semibold text-sm">{m.subject}</div>
+						<div class="flex items-start justify-between gap-3">
+							<div class="min-w-0 font-semibold text-sm">{m.subject}</div>
+							{#if apiKey === 'inbox' && m.sender_user_id}
+								<button
+									type="button"
+									on:click={() => openAcademicReply(m)}
+									class="shrink-0 rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700 hover:bg-sky-100 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300 dark:hover:bg-sky-900/30"
+								>
+									Cevapla
+								</button>
+							{/if}
+						</div>
 						<div class="mt-1 text-xs text-slate-400">
 							{apiKey === 'inbox'
 								? (m.sender_name ?? m.sender_type)
@@ -1833,6 +1989,170 @@
 					</div>
 				{/each}
 			</div>
+
+			{#if showAcademicCompose}
+				<div
+					class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+				>
+					<div
+						class="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-black/10 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-slate-900"
+					>
+						<div class="mb-5 flex items-center justify-between">
+							<div class="font-bold text-slate-800 dark:text-slate-100">
+								{academicComposeReplyTo ? 'Cevap yaz' : 'Yeni Mesaj'}
+							</div>
+							<button
+								type="button"
+								on:click={() => {
+									showAcademicCompose = false;
+									resetAcademicCompose();
+								}}
+								class="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">✕</button
+							>
+						</div>
+						{#if academicComposeErr}
+							<div
+								class="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300"
+							>
+								{academicComposeErr}
+							</div>
+						{/if}
+						<div class="space-y-3">
+							{#if academicComposeReplyTo}
+								<div class="rounded-xl border border-sky-200 bg-sky-50/80 px-3.5 py-2.5 text-sm dark:border-sky-900/50 dark:bg-sky-950/20">
+									<div class="text-xs font-semibold text-slate-500">Alıcı</div>
+									<div class="font-medium text-slate-800 dark:text-slate-100">
+										{academicComposeReplyTo.displayName}
+									</div>
+								</div>
+							{:else}
+								<div class="flex gap-2 rounded-xl border border-black/10 p-1 dark:border-white/10">
+									<button
+										type="button"
+										on:click={() => {
+											academicComposeRecipientMode = 'advisee';
+											academicComposeSectionStudentUid = '';
+										}}
+										class="flex-1 rounded-lg py-2 text-xs font-semibold transition-colors {academicComposeRecipientMode ===
+										'advisee'
+											? 'bg-sky-500 text-white'
+											: 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/10'}"
+									>
+										Danışmanlık
+									</button>
+									<button
+										type="button"
+										on:click={() => {
+											academicComposeRecipientMode = 'section';
+											academicComposeAdviseeId = '';
+										}}
+										class="flex-1 rounded-lg py-2 text-xs font-semibold transition-colors {academicComposeRecipientMode ===
+										'section'
+											? 'bg-sky-500 text-white'
+											: 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/10'}"
+									>
+										Şube öğrencisi
+									</button>
+								</div>
+								{#if academicComposeRecipientMode === 'advisee'}
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Öğrenci</div>
+										<select
+											bind:value={academicComposeAdviseeId}
+											class="w-full rounded-xl border border-black/10 bg-white px-3.5 py-2.5 text-sm outline-none focus:ring-2 focus:ring-sky-400/30 dark:border-white/10 dark:bg-slate-800"
+										>
+											<option value="">Seçin…</option>
+											{#each msgAdvisees as a}
+												<option value={a.student_user_id}>
+													{a.name}
+													{a.student_no ? ` (${a.student_no})` : ''}
+												</option>
+											{/each}
+										</select>
+										{#if !msgAdvisees.length}
+											<p class="mt-1 text-xs text-amber-600 dark:text-amber-400">
+												Danışmanlık öğrencisi yok; şube sekmesinden veya gelen mesajdan cevap
+												verin.
+											</p>
+										{/if}
+									</label>
+								{:else}
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Şube</div>
+										<select
+											bind:value={academicComposeSectionId}
+											on:change={onAcademicComposeSectionChange}
+											class="w-full rounded-xl border border-black/10 bg-white px-3.5 py-2.5 text-sm outline-none focus:ring-2 focus:ring-sky-400/30 dark:border-white/10 dark:bg-slate-800"
+										>
+											<option value="">Şube seçin…</option>
+											{#each sections as sec}
+												<option value={sec.id}>
+													{sec.course_code}
+													{sec.course_name ? ` — ${sec.course_name}` : ''} ({sec.section_code})
+												</option>
+											{/each}
+										</select>
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Öğrenci</div>
+										<select
+											bind:value={academicComposeSectionStudentUid}
+											disabled={!academicComposeSectionId || !academicComposeSectionStudents.length}
+											class="w-full rounded-xl border border-black/10 bg-white px-3.5 py-2.5 text-sm outline-none focus:ring-2 focus:ring-sky-400/30 disabled:opacity-50 dark:border-white/10 dark:bg-slate-800"
+										>
+											<option value="">Öğrenci seçin…</option>
+											{#each academicComposeSectionStudents.filter((s) => s.student_user_id) as st}
+												<option value={st.student_user_id}>
+													{st.name}{st.student_no ? ` (${st.student_no})` : ''}
+												</option>
+											{/each}
+										</select>
+									</label>
+								{/if}
+							{/if}
+							<label class="block">
+								<div class="mb-1 text-xs font-semibold text-slate-500">Konu</div>
+								<input
+									bind:value={academicComposeSubject}
+									placeholder="Konu"
+									class="w-full rounded-xl border border-black/10 bg-white px-3.5 py-2.5 text-sm outline-none focus:ring-2 focus:ring-sky-400/30 dark:border-white/10 dark:bg-slate-800"
+								/>
+							</label>
+							<label class="block">
+								<div class="mb-1 text-xs font-semibold text-slate-500">Mesaj</div>
+								<textarea
+									bind:value={academicComposeBody}
+									rows="6"
+									placeholder="Mesajınız…"
+									class="w-full resize-none rounded-xl border border-black/10 bg-white px-3.5 py-2.5 text-sm outline-none focus:ring-2 focus:ring-sky-400/30 dark:border-white/10 dark:bg-slate-800"
+								></textarea>
+							</label>
+							<div class="flex gap-2 pt-1">
+								<button
+									type="button"
+									on:click={sendAcademicMessage}
+									disabled={academicComposeSending ||
+										!academicComposeSubject.trim() ||
+										!academicComposeBody.trim()}
+									class="flex-1 rounded-xl bg-sky-500 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-sky-400 disabled:opacity-50"
+								>
+									{academicComposeSending ? 'Gönderiliyor…' : 'Gönder'}
+								</button>
+								<button
+									type="button"
+									on:click={() => {
+										showAcademicCompose = false;
+										resetAcademicCompose();
+									}}
+									class="rounded-xl border border-black/10 px-4 py-2.5 text-sm transition-colors hover:bg-slate-50 dark:border-white/10 dark:hover:bg-white/5"
+								>
+									İptal
+								</button>
+							</div>
+						</div>
+					</div>
+				</div>
+			{/if}
 
 			<!-- ============================================================ -->
 			<!-- ŞİFRE DEĞİŞTİR                                               -->
