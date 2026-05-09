@@ -38,6 +38,7 @@
 		deleteDouAcademicAnnouncement,
 		type AcademicAnnouncementBody,
 		type DouSection,
+		type DouTerm,
 		type DouAnnouncement,
 		type DouApprovalRequest,
 		type DouEnrollment,
@@ -79,7 +80,11 @@
 	let loadErr: string | null = null;
 
 	let sections: DouSection[] = [];
-	let terms: { id: string; starts_at?: string; ends_at?: string; start_date?: string; end_date?: string }[] = [];
+	let terms: DouTerm[] = [];
+	/** Şubelerim: seçili akademik dönem (ilk açılışta aktif dönem). */
+	let selectedSectionsTermId = '';
+	/** Not girişi: seçili akademik dönem (ilk açılışta aktif dönem); şube listesi buna göre filtrelenir. */
+	let selectedGradesTermId = '';
 	let selectedSection = '';
 	$: selectedSectionMeta = sections.find((s) => s.id === selectedSection) ?? null;
 	let sectionStudents: AcademicStudent[] = [];
@@ -134,6 +139,23 @@
 		const days = Math.floor(ms / (1000 * 60 * 60 * 24)) + 1;
 		return Math.max(1, Math.ceil(days / 7));
 	}
+
+	function sortTermsNewestFirst(ts: DouTerm[]): DouTerm[] {
+		return [...ts].sort((a, b) => {
+			const ta = new Date(a.starts_at || 0).getTime();
+			const tb = new Date(b.starts_at || 0).getTime();
+			return tb - ta;
+		});
+	}
+
+	function formatTermDropdownLabel(t: DouTerm): string {
+		const name = (t.name ?? '').trim();
+		if (name) return name;
+		const bits = [t.academic_year, t.season].filter(Boolean);
+		return bits.length ? bits.join(' ') : t.id;
+	}
+
+	$: termsSortedForSections = sortTermsNewestFirst(terms);
 
 	function pickTermRange(term: {
 		starts_at?: string;
@@ -228,18 +250,47 @@
 		}
 
 		try {
-			const secRes = await Promise.allSettled([getDouAcademicSections(token)]);
+			// Dönem listesi: Şubelerim / Not girişi filtresi + yoklama haftası için
+			if (!terms.length || apiKey === 'sections' || apiKey === 'grades-entry') {
+				const tr = await Promise.allSettled([getDouTerms(token)]);
+				if (tr[0].status === 'fulfilled') {
+					terms = (tr[0].value as DouTerm[]) ?? [];
+				}
+			}
+
+			if (apiKey === 'sections') {
+				if (!selectedSectionsTermId && terms.length) {
+					const sorted = sortTermsNewestFirst(terms);
+					selectedSectionsTermId =
+						sorted.find((t) => t.is_active)?.id ?? sorted[0]?.id ?? '';
+				}
+			}
+
+			if (apiKey === 'grades-entry') {
+				if (!selectedGradesTermId && terms.length) {
+					const sorted = sortTermsNewestFirst(terms);
+					selectedGradesTermId =
+						sorted.find((t) => t.is_active)?.id ?? sorted[0]?.id ?? '';
+				}
+			}
+
+			const sectionsTermArg =
+				apiKey === 'sections'
+					? selectedSectionsTermId || undefined
+					: apiKey === 'grades-entry'
+						? selectedGradesTermId || undefined
+						: undefined;
+			const secRes = await Promise.allSettled([getDouAcademicSections(token, sectionsTermArg)]);
 			if (secRes[0].status === 'fulfilled') {
 				sections = secRes[0].value.sections ?? [];
 			} else {
 				sections = [];
 			}
-			if (!selectedSection && sections.length) selectedSection = sections[0].id;
-			// Dönem bilgisi: hafta hesaplamak için lazım (yoklama ekranı başta olmak üzere).
-			if (!terms.length) {
-				const tr = await Promise.allSettled([getDouTerms(token)]);
-				if (tr[0].status === 'fulfilled') terms = (tr[0].value as unknown as typeof terms) ?? [];
+			if (apiKey === 'grades-entry' && selectedSection) {
+				const sectionIds = new Set(sections.map((s) => s.id));
+				if (!sectionIds.has(selectedSection)) selectedSection = '';
 			}
+			if (!selectedSection && sections.length) selectedSection = sections[0].id;
 
 			if (apiKey === 'grades-entry') {
 				if (selectedSection) {
@@ -500,9 +551,18 @@
 		}
 	}
 
-	afterNavigate(async () => {
+	afterNavigate(async (navigation) => {
 		await tick();
 		if (!browser) return;
+		const toPath =
+			(navigation.to?.url.pathname || '').replace(/\/+$/, '') || '/obs/akademisyen';
+		const fromPath = (navigation.from?.url.pathname || '').replace(/\/+$/, '') || '';
+		if (toPath === '/obs/akademisyen/subelerim' && fromPath !== toPath) {
+			selectedSectionsTermId = '';
+		}
+		if (toPath === '/obs/akademisyen/not-girisi' && fromPath !== toPath) {
+			selectedGradesTermId = '';
+		}
 		void loadPage();
 	});
 
@@ -959,6 +1019,19 @@
 			<!-- ŞUBELERİM                                                    -->
 			<!-- ============================================================ -->
 		{:else if apiKey === 'sections'}
+			<div class="flex flex-wrap items-center gap-3">
+				<span class="text-xs font-semibold text-slate-500">Akademik dönem:</span>
+				<select
+					bind:value={selectedSectionsTermId}
+					on:change={() => loadPage()}
+					class="min-w-[14rem] rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+				>
+					{#each termsSortedForSections as t}
+						<option value={t.id}>{formatTermDropdownLabel(t)}</option>
+					{/each}
+				</select>
+			</div>
+
 			<div
 				class="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
 			>
@@ -994,11 +1067,21 @@
 			<!-- ============================================================ -->
 		{:else if apiKey === 'grades-entry'}
 			<div class="flex flex-wrap items-center gap-3">
+				<span class="text-xs font-semibold text-slate-500">Akademik dönem:</span>
+				<select
+					bind:value={selectedGradesTermId}
+					on:change={() => loadPage()}
+					class="min-w-[14rem] rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+				>
+					{#each termsSortedForSections as t}
+						<option value={t.id}>{formatTermDropdownLabel(t)}</option>
+					{/each}
+				</select>
 				<span class="text-xs font-semibold text-slate-500">Şube:</span>
 				<select
 					bind:value={selectedSection}
 					on:change={() => loadPage()}
-					class="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+					class="min-w-[12rem] rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm outline-none dark:border-white/10 dark:bg-white/5"
 				>
 					{#each sections as s}
 						<option value={s.id}>{s.course_code} — {s.course_name}</option>
