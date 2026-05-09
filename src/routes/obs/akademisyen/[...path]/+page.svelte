@@ -958,6 +958,23 @@
 		examSaving = true;
 		examErr = null;
 		const token = localStorage.token ?? null;
+		if (!token || !selectedSection) {
+			examErr = !token ? 'Oturum bulunamadı; yeniden giriş yapın.' : 'Önce bir şube seçin.';
+			examSaving = false;
+			return;
+		}
+		const dateTrim = (examForm.exam_date ?? '').trim();
+		if (!dateTrim) {
+			examErr = 'Sınav tarihi zorunludur. Lütfen takvimden bir tarih seçin.';
+			examSaving = false;
+			return;
+		}
+		const w = Number(examForm.weight_percent);
+		if (!Number.isFinite(w) || w <= 0 || w > 100) {
+			examErr = 'Ağırlık yüzdesi 1 ile 100 arasında bir sayı olmalıdır.';
+			examSaving = false;
+			return;
+		}
 		try {
 			await createDouSectionExam(token, selectedSection, {
 				exam_type: examForm.exam_type,
@@ -1624,13 +1641,6 @@
 					atamalarını kontrol edin.
 				</div>
 			{/if}
-			{#if examErr}
-				<div
-					class="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300"
-				>
-					{examErr}
-				</div>
-			{/if}
 			{#if examClassroomsErr}
 				<div
 					class="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
@@ -1666,6 +1676,14 @@
 								<div class="mb-3 text-xs font-bold text-sky-600 dark:text-sky-400">
 									Sınavı düzenle
 								</div>
+								{#if examErr}
+									<div
+										class="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300"
+										role="alert"
+									>
+										{examErr}
+									</div>
+								{/if}
 								<div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
 									<label class="block">
 										<div class="mb-1 text-xs font-semibold text-slate-500">Sınav Türü</div>
@@ -1868,11 +1886,19 @@
 						/>
 					</label>
 				</div>
+				{#if examErr && !editingExamId}
+					<div
+						class="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-950/40 dark:text-red-300"
+						role="alert"
+					>
+						{examErr}
+					</div>
+				{/if}
 				<button
 					on:click={createExam}
 					disabled={examSaving || !sections.length || !selectedSection}
 					type="button"
-					class="mt-4 rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-400 disabled:opacity-50 transition-colors"
+					class="{examErr && !editingExamId ? 'mt-3' : 'mt-4'} rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-400 disabled:opacity-50 transition-colors"
 				>
 					{examSaving ? 'Ekleniyor…' : 'Sınav Ekle'}
 				</button>

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import re
 import uuid
 from typing import Any, Optional
 
@@ -909,6 +910,99 @@ async def academic_section_exams(
     return {"section_id": section_id, "exams": repo.section_exams(obs_db, section_id)}
 
 
+def _normalize_exam_date_for_db(raw: Optional[str]) -> str:
+    """PostgreSQL date için yyyy-mm-dd üret; boş/geçersizde 400."""
+    s = (raw or "").strip()
+    if not s:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Sınav tarihi zorunludur. Lütfen takvimden bir tarih seçin.",
+        )
+    if len(s) >= 10 and s[4] == "-" and s[7] == "-":
+        try:
+            datetime.date.fromisoformat(s[:10])
+            return s[:10]
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Sınav tarihi geçersiz. Lütfen geçerli bir gün seçin.",
+            )
+    m = re.match(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$", s)
+    if m:
+        d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        try:
+            return datetime.date(y, mo, d).isoformat()
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Sınav tarihi geçersiz (gün veya ay hatalı).",
+            )
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Sınav tarihi anlaşılamadı. Takvimden seçin veya yyyy-aa-gg (ör. 2026-04-13) girin.",
+    )
+
+
+def _normalize_exam_time_for_db(raw: Optional[str]) -> str:
+    """PostgreSQL time için HH:MM:SS."""
+    s = (raw or "").strip()
+    if not s:
+        return "09:00:00"
+    m = re.match(r"^(\d{1,2}):(\d{2})(?::(\d{2}))?$", s)
+    if not m:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Sınav saati geçersiz. Örnek: 09:00 veya 14:30.",
+        )
+    h, mi, sec = int(m.group(1)), int(m.group(2)), int(m.group(3) or 0)
+    if h > 23 or mi > 59 or sec > 59:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Sınav saati geçersiz (saat 0–23, dakika ve saniye 0–59).",
+        )
+    return f"{h:02d}:{mi:02d}:{sec:02d}"
+
+
+def _validate_exam_weight(wp: float) -> float:
+    try:
+        x = float(wp)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ağırlık yüzdesi sayı olmalıdır.",
+        )
+    if x <= 0 or x > 100:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ağırlık yüzdesi 0'dan büyük ve en fazla 100 olmalıdır.",
+        )
+    return x
+
+
+def _normalize_exam_patch_dates(patch: dict[str, Any]) -> dict[str, Any]:
+    """PUT gövdesindeki tarih/saat/ağırlığı güvenli biçime çevir."""
+    out = dict(patch)
+    if "exam_date" in out:
+        ed = out.get("exam_date")
+        if ed is None:
+            pass
+        elif str(ed).strip() == "":
+            out["exam_date"] = ""
+        else:
+            out["exam_date"] = _normalize_exam_date_for_db(str(ed))
+    if "exam_time" in out:
+        et = out.get("exam_time")
+        if et is None:
+            pass
+        elif str(et).strip() == "":
+            out["exam_time"] = "09:00:00"
+        else:
+            out["exam_time"] = _normalize_exam_time_for_db(str(et))
+    if "weight_percent" in out and out.get("weight_percent") is not None:
+        out["weight_percent"] = _validate_exam_weight(float(out["weight_percent"]))
+    return out
+
+
 class ExamCreate(BaseModel):
     exam_type: str = "midterm"
     exam_date: str
@@ -928,15 +1022,27 @@ async def academic_create_exam(
 ):
     if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
         raise HTTPException(status_code=403, detail="Bu şube size ait değil")
-    return repo.insert_exam(
-        obs_db,
-        section_id,
-        body.exam_type,
-        body.exam_date,
-        body.exam_time,
-        body.classroom,
-        body.weight_percent,
-    )
+    exam_date_iso = _normalize_exam_date_for_db(body.exam_date)
+    exam_time_norm = _normalize_exam_time_for_db(body.exam_time)
+    weight = _validate_exam_weight(body.weight_percent)
+    etype = (body.exam_type or "midterm").strip() or "midterm"
+    try:
+        return repo.insert_exam(
+            obs_db,
+            section_id,
+            etype,
+            exam_date_iso,
+            exam_time_norm,
+            body.classroom,
+            weight,
+        )
+    except SQLAlchemyError:
+        obs_db.rollback()
+        log.warning("insert_exam SQLAlchemyError", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Sınav kaydedilemedi. Tarih ve saati kontrol edin; zorunlu alanları doldurun.",
+        ) from None
 
 
 class ExamUpdate(BaseModel):
@@ -960,7 +1066,16 @@ async def academic_update_exam(
     patch = {k: v for k, v in body.model_dump(exclude_unset=True).items()}
     if not patch:
         raise HTTPException(status_code=400, detail="Güncellenecek alan yok.")
-    row = repo.update_section_exam(obs_db, section_id, exam_id, patch)
+    patch = _normalize_exam_patch_dates(patch)
+    try:
+        row = repo.update_section_exam(obs_db, section_id, exam_id, patch)
+    except SQLAlchemyError:
+        obs_db.rollback()
+        log.warning("update_section_exam SQLAlchemyError", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Sınav güncellenemedi. Tarih ve saat biçimini kontrol edin.",
+        ) from None
     if not row:
         raise HTTPException(status_code=404, detail="Sınav bulunamadı")
     return row
