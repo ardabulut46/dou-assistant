@@ -89,6 +89,8 @@
 	let selectedGradesTermId = '';
 	/** Sınav tanımlama: seçili akademik dönem (ilk açılışta aktif dönem); şube listesi buna göre filtrelenir. */
 	let selectedExamsTermId = '';
+	/** Yoklama girişi: seçili akademik dönem (ilk açılışta aktif dönem); şube listesi buna göre filtrelenir. */
+	let selectedAttendanceTermId = '';
 	let selectedSection = '';
 	$: selectedSectionMeta =
 		sections.find((s) => String(s.id) === String(selectedSection)) ?? null;
@@ -329,8 +331,14 @@
 		}
 
 		try {
-			// Dönem listesi: Şubelerim / Not girişi / Sınav tanımlama filtresi + yoklama haftası için
-			if (!terms.length || apiKey === 'sections' || apiKey === 'grades-entry' || apiKey === 'exam-define') {
+			// Dönem listesi: Şubelerim / Not girişi / Sınav tanımlama / Yoklama girişi filtresi + yoklama haftası için
+			if (
+				!terms.length ||
+				apiKey === 'sections' ||
+				apiKey === 'grades-entry' ||
+				apiKey === 'exam-define' ||
+				apiKey === 'attendance-entry'
+			) {
 				const tr = await Promise.allSettled([getDouTerms(token)]);
 				if (tr[0].status === 'fulfilled') {
 					terms = (tr[0].value as DouTerm[]) ?? [];
@@ -361,6 +369,14 @@
 				}
 			}
 
+			if (apiKey === 'attendance-entry') {
+				if (!selectedAttendanceTermId && terms.length) {
+					const sorted = sortTermsNewestFirst(terms);
+					selectedAttendanceTermId =
+						sorted.find((t) => t.is_active)?.id ?? sorted[0]?.id ?? '';
+				}
+			}
+
 			const sectionsTermArg =
 				apiKey === 'sections'
 					? selectedSectionsTermId || undefined
@@ -368,7 +384,9 @@
 						? selectedGradesTermId || undefined
 						: apiKey === 'exam-define'
 							? selectedExamsTermId || undefined
-							: undefined;
+							: apiKey === 'attendance-entry'
+								? selectedAttendanceTermId || undefined
+								: undefined;
 			/** Sunucu include_classrooms ile yanıt verdiyse /me/classrooms yedeğine gerek yok (proxy/HTML kırığından kaçın) */
 			let sectionsPayloadHadClassrooms = false;
 			const secRes = await Promise.allSettled([
@@ -393,6 +411,10 @@
 				if (!sectionIds.has(selectedSection)) selectedSection = '';
 			}
 			if (apiKey === 'exam-define' && selectedSection) {
+				const sectionIds = new Set(sections.map((s) => s.id));
+				if (!sectionIds.has(selectedSection)) selectedSection = '';
+			}
+			if (apiKey === 'attendance-entry' && selectedSection) {
 				const sectionIds = new Set(sections.map((s) => s.id));
 				if (!sectionIds.has(selectedSection)) selectedSection = '';
 			}
@@ -452,27 +474,33 @@
 				// İlk yüklemede de otomatik harf notunu hesapla
 				recalcAllLetters();
 			}
-			if (apiKey === 'attendance-entry' && selectedSection) {
-				const wkKey = attendanceWeekStorageKey(selectedSection);
-				const savedWeek = browser ? sessionStorage.getItem(wkKey) : null;
-				if (savedWeek != null && /^[1-9][0-9]*$/.test(savedWeek)) {
-					weekTouched = true;
-					weekNoUi = savedWeek;
+			if (apiKey === 'attendance-entry') {
+				if (selectedSection) {
+					const wkKey = attendanceWeekStorageKey(selectedSection);
+					const savedWeek = browser ? sessionStorage.getItem(wkKey) : null;
+					if (savedWeek != null && /^[1-9][0-9]*$/.test(savedWeek)) {
+						weekTouched = true;
+						weekNoUi = savedWeek;
+					} else {
+						weekTouched = false;
+					}
+					const r = await Promise.allSettled([getDouSectionStudents(token, selectedSection)]);
+					if (r[0].status === 'fulfilled') {
+						sectionStudents =
+							(r[0].value as unknown as { students: AcademicStudent[] }).students ?? [];
+					} else {
+						sectionStudents = [];
+					}
+					sectionStudents.forEach((s) => {
+						attendanceStatus[s.enrollment_id] = attendanceStatus[s.enrollment_id] ?? 'present';
+					});
+					// İlk açılışta seçili haftanın mevcut kayıtlarını yükle
+					await loadAttendanceWeek();
 				} else {
-					weekTouched = false;
-				}
-				const r = await Promise.allSettled([getDouSectionStudents(token, selectedSection)]);
-				if (r[0].status === 'fulfilled') {
-					sectionStudents =
-						(r[0].value as unknown as { students: AcademicStudent[] }).students ?? [];
-				} else {
+					// Dönem değişti ve bu dönemde şube yok → eski liste kalmasın
 					sectionStudents = [];
+					attendanceStatus = {};
 				}
-				sectionStudents.forEach((s) => {
-					attendanceStatus[s.enrollment_id] = attendanceStatus[s.enrollment_id] ?? 'present';
-				});
-				// İlk açılışta seçili haftanın mevcut kayıtlarını yükle
-				await loadAttendanceWeek();
 			}
 			if (apiKey === 'exam-define') {
 				editingExamId = '';
@@ -716,6 +744,12 @@
 		}
 		if (toPath === '/obs/akademisyen/sinav-tanimlama' && fromPath !== toPath) {
 			selectedExamsTermId = '';
+		}
+		if (toPath === '/obs/akademisyen/yoklama-girisi' && fromPath !== toPath) {
+			selectedAttendanceTermId = '';
+			selectedSection = '';
+			sectionStudents = [];
+			attendanceStatus = {};
 		}
 		void loadPage();
 	});
@@ -1493,16 +1527,42 @@
 			<!-- YOKLAMA GİRİŞİ                                               -->
 			<!-- ============================================================ -->
 		{:else if apiKey === 'attendance-entry'}
-			<div class="flex items-center gap-4">
+			<div class="flex flex-wrap items-center gap-4">
+				<div class="flex items-center gap-2">
+					<span class="text-xs font-semibold text-slate-500">Akademik dönem:</span>
+					<select
+						bind:value={selectedAttendanceTermId}
+						on:change={() => {
+							// Dönem değişti → şubeyi sıfırla, liste yeniden yüklensin
+							selectedSection = '';
+							sectionStudents = [];
+							attendanceStatus = {};
+							void loadPage();
+						}}
+						class="min-w-[12rem] rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+					>
+						{#each termsSortedForSections as t}
+							<option value={t.id}>
+								{formatTermDropdownLabel(t)}{t.is_active ? ' (aktif)' : ''}
+							</option>
+						{/each}
+					</select>
+				</div>
 				<div class="flex items-center gap-2">
 					<span class="text-xs font-semibold text-slate-500">Şube:</span>
 					<select
 						bind:value={selectedSection}
 						on:change={() => loadPage()}
-						class="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+						disabled={!sections.length}
+						class="min-w-[10rem] rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm outline-none disabled:opacity-50 dark:border-white/10 dark:bg-white/5"
 					>
+						{#if !sections.length}
+							<option value="">Bu dönemde şube yok</option>
+						{/if}
 						{#each sections as s}
-							<option value={s.id}>{s.course_code}</option>
+							<option value={s.id}>
+								{s.course_code}{s.section_no ? ` (Şube ${s.section_no})` : ''}
+							</option>
 						{/each}
 					</select>
 				</div>
@@ -1517,7 +1577,8 @@
 							}
 							await loadAttendanceWeek();
 						}}
-						class="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+						disabled={!selectedSection}
+						class="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm outline-none disabled:opacity-50 dark:border-white/10 dark:bg-white/5"
 					>
 						{#each Array.from({ length: weekCount }, (_, i) => i + 1) as w}
 							<option value={String(w)}>{w}. hafta</option>
@@ -1528,6 +1589,20 @@
 					{/if}
 				</div>
 			</div>
+			{#if selectedSectionMeta}
+				<div class="text-xs text-slate-500">
+					<strong class="text-slate-700 dark:text-slate-200"
+						>{selectedSectionMeta.course_code}</strong
+					>
+					— {selectedSectionMeta.course_name}
+					{#if selectedSectionMeta.section_no}
+						· Şube {selectedSectionMeta.section_no}
+					{/if}
+					{#if selectedSectionMeta.day_of_week}
+						· {selectedSectionMeta.day_of_week} {selectedSectionMeta.start_time}
+					{/if}
+				</div>
+			{/if}
 			{#if attendanceSaved}
 				<div
 					class="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"

@@ -43,6 +43,28 @@ def _normalize_attendance_status(raw: Any) -> str:
     return "present"
 
 
+# Yoklama haftası geçerli bir tamsayı olmalı; UI 1..14 (telafili dönemde 30'a kadar) gönderir.
+# Üst sınırı liberal tutuyoruz; alt sınırın altını / negatifi / yazıyı kesin reddediyoruz.
+ATTENDANCE_MAX_WEEK_NO = 30
+
+
+def validate_attendance_week_no(week_no: Any) -> int:
+    """`week_no` tamsayı ve 1..ATTENDANCE_MAX_WEEK_NO aralığında olmalı.
+
+    `record_attendance` bunu çağırır; geçersizse `ValueError` fırlatır ve API katmanı
+    bunu HTTP 400'e çevirir. Tanımlı değilse `NameError` ile HTTP 500 oluşur.
+    """
+    try:
+        n = int(week_no)
+    except (TypeError, ValueError) as ex:
+        raise ValueError("Hafta numarası tamsayı olmalı.") from ex
+    if n < 1 or n > ATTENDANCE_MAX_WEEK_NO:
+        raise ValueError(
+            f"Hafta numarası 1 ile {ATTENDANCE_MAX_WEEK_NO} arasında olmalı."
+        )
+    return n
+
+
 def _fmt_time(t: Any) -> str:
     if t is None:
         return ""

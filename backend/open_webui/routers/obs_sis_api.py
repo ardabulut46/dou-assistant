@@ -1323,7 +1323,12 @@ async def academic_put_attendance(
         raise HTTPException(status_code=403, detail="Bu şube size ait değil")
     # recorded_by → PostgreSQL FK `user.id` (Open WebUI kullanıcısı).
     # obs_academic_profiles.id ile karıştırma — FK ihlali ve HTTP 500 oluşur.
-    n = repo.record_attendance(obs_db, section_id, week_no, body.records, str(user.id))
+    try:
+        n = repo.record_attendance(
+            obs_db, section_id, week_no, body.records, str(user.id)
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
     return {"section_id": section_id, "week_no": week_no, "recorded": n}
 
 
@@ -1336,9 +1341,12 @@ async def academic_put_attendance_legacy(
 ):
     if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
         raise HTTPException(status_code=403, detail="Bu şube size ait değil")
-    n = repo.record_attendance(
-        obs_db, section_id, body.week_no, body.records, str(user.id)
-    )
+    try:
+        n = repo.record_attendance(
+            obs_db, section_id, body.week_no, body.records, str(user.id)
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
     return {"section_id": section_id, "week_no": body.week_no, "recorded": n}
 
 
