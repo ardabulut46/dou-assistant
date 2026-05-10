@@ -3448,20 +3448,44 @@ def upsert_draft_enrollments(
                     [],
                     f"AKTS üst sınırı ({akts_max}) aşılır (mevcut yük: {load + queued}, eklenecek: {new_akts}).",
                 )
-        eid = str(uuid.uuid4())
-        db.execute(
-            text("""
-            INSERT INTO obs_course_enrollments
-            (id, student_id, course_section_id, status, enrollment_reason, advisor_approved)
-            VALUES (:id, :spid, :csid, 'draft', :reason, false)
-            """),
-            {
-                "id": eid,
-                "spid": spid,
-                "csid": sid,
-                "reason": mode,
-            },
+        # Exact section kontrolü: varolan kayda göre davran
+        existing_row = (
+            db.execute(
+                text("""
+                SELECT id, status FROM obs_course_enrollments
+                WHERE student_id = :spid AND course_section_id = :csid
+                LIMIT 1
+                """),
+                {"spid": spid, "csid": sid},
+            )
+            .mappings()
+            .first()
         )
+        if existing_row:
+            existing_status = str(existing_row.get("status") or "")
+            if existing_status != "dropped":
+                continue  # active/pending/draft/pending_drop → zaten kayıtlı, atla
+            # dropped → yeniden ekle: UPDATE
+            eid = str(existing_row["id"])
+            db.execute(
+                text("""
+                UPDATE obs_course_enrollments
+                SET status = 'draft', enrollment_reason = :reason,
+                    advisor_approved = false, dropped_at = NULL
+                WHERE id = :eid
+                """),
+                {"eid": eid, "reason": mode},
+            )
+        else:
+            eid = str(uuid.uuid4())
+            db.execute(
+                text("""
+                INSERT INTO obs_course_enrollments
+                (id, student_id, course_section_id, status, enrollment_reason, advisor_approved)
+                VALUES (:id, :spid, :csid, 'draft', :reason, false)
+                """),
+                {"id": eid, "spid": spid, "csid": sid, "reason": mode},
+            )
         row = (
             db.execute(
                 text("""
