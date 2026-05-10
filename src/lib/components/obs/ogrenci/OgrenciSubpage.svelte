@@ -180,6 +180,15 @@
 	let dropError: string | null = null;
 	let addDropTermLabel = '—';
 
+	// Kayıt Penceresi Kontrolü
+	$: activeTerm = terms.find((t) => t.is_active) ?? terms[terms.length - 1];
+	$: isWindowOpen = (() => {
+		if (!activeTerm) return true; // Henüz yüklenmediyse gösterme
+		if (apiKey === 'ders-kayit') return activeTerm.registration_open;
+		if (apiKey === 'ders-ekle') return activeTerm.add_drop_open;
+		return true;
+	})();
+
 	// Belge talebi
 	let docForm = {
 		requesting_institution: '',
@@ -277,6 +286,7 @@
 					availableCourses = [];
 				}
 				if (termsRes.status === 'fulfilled') {
+					terms = termsRes.value;
 					const tl = termsRes.value;
 					const at = tl.find((t) => t.is_active) ?? tl[tl.length - 1];
 					addDropTermLabel = at?.name ?? '—';
@@ -307,6 +317,7 @@
 					availableCourses = [];
 				}
 				if (termsRes.status === 'fulfilled') {
+					terms = termsRes.value;
 					const tl = termsRes.value;
 					const at = tl.find((t) => t.is_active) ?? tl[tl.length - 1];
 					enrollmentTermLabel = at?.name ?? '—';
@@ -481,6 +492,14 @@
 
 	async function finalizeEnrollment() {
 		if (!draftEnrollments.length) return;
+		
+		const minAkts = registrationLimits?.akts_min ?? 30;
+		if (enrollmentScheduledAkts < minAkts) {
+			enrollError = `Danışman onayına göndermek için en az ${minAkts} AKTS seçmelisiniz (Mevcut: ${enrollmentScheduledAkts}).`;
+			setTimeout(() => (enrollError = null), 5000);
+			return;
+		}
+
 		enrollSubmitting = true;
 		enrollSuccess = null;
 		enrollError = null;
@@ -722,6 +741,50 @@
 				<p class="mt-0.5 text-[11px] text-slate-400">{activePath}</p>
 			</div>
 		</div>
+
+		<!-- ——— Tarih Kapalı Overlay ——— -->
+		{#if (apiKey === 'ders-kayit' || apiKey === 'ders-ekle') && !isWindowOpen && !loading}
+			<div class="relative overflow-hidden rounded-2xl border border-amber-200 bg-white p-12 text-center shadow-lg dark:border-amber-900/40 dark:bg-slate-900">
+				<div class="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(245,158,11,0.05),transparent)]"></div>
+				
+				<div class="relative z-10">
+					<div class="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-amber-100 text-4xl dark:bg-amber-900/30">
+						🗓️
+					</div>
+					
+					<h2 class="text-2xl font-black text-slate-800 dark:text-slate-100">
+						{apiKey === 'ders-kayit' ? 'Ders Kayıt' : 'Ders Ekle-Bırak'} Penceresi Kapalı
+					</h2>
+					
+					<p class="mx-auto mt-4 max-w-md text-slate-600 dark:text-slate-400">
+						Mevcut dönem (<span class="font-bold text-slate-800 dark:text-slate-200">{activeTerm?.name}</span>) 
+						için işlem süreci henüz başlamadı veya sona erdi.
+					</p>
+
+					<div class="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
+						<div class="rounded-xl border border-black/5 bg-slate-50 p-4 dark:border-white/5 dark:bg-white/5">
+							<div class="text-[10px] font-bold uppercase tracking-widest text-slate-400">Başlangıç</div>
+							<div class="mt-1 font-bold text-slate-700 dark:text-slate-200">
+								{apiKey === 'ders-kayit' ? activeTerm?.registration_start : activeTerm?.add_drop_start}
+							</div>
+						</div>
+						<div class="rounded-xl border border-black/5 bg-slate-50 p-4 dark:border-white/5 dark:bg-white/5">
+							<div class="text-[10px] font-bold uppercase tracking-widest text-slate-400">Bitiş</div>
+							<div class="mt-1 font-bold text-slate-700 dark:text-slate-200">
+								{apiKey === 'ders-kayit' ? activeTerm?.registration_end : activeTerm?.add_drop_end}
+							</div>
+						</div>
+					</div>
+
+					<button 
+						on:click={() => window.history.back()}
+						class="mt-10 rounded-xl bg-slate-800 px-8 py-3 text-sm font-bold text-white hover:bg-slate-700 transition-all dark:bg-sky-600 dark:hover:bg-sky-500"
+					>
+						Geri Dön
+					</button>
+				</div>
+			</div>
+		{/if}
 
 		<!-- ——— Yükleniyor / Hata ——— -->
 		{#if loading}
@@ -1153,93 +1216,103 @@
 				</div>
 			{/if}
 
-			{#if enrollments.some((e) => e.status === 'active')}
+			<!-- ── SEÇİLEN / TASLAK DERSLER TABLOSU ── -->
+			{#if enrollments.some((e) => ['active', 'pending', 'draft'].includes(e.status))}
 				<div
-					class="mt-3 rounded-xl border border-emerald-100 bg-emerald-50/80 px-5 py-3 text-sm text-emerald-900 dark:border-emerald-900/30 dark:bg-emerald-950/20 dark:text-emerald-200"
+					class="mt-3 overflow-hidden rounded-xl border border-sky-200 bg-white shadow-sm dark:border-sky-900/30 dark:bg-sky-950/10"
 				>
-					<span class="font-semibold">Kesinleşen dersler ({enrollments.filter((e) => e.status === 'active').length}):</span>
-					<span class="text-emerald-800 dark:text-emerald-300">
-						{enrollments
-							.filter((e) => e.status === 'active')
-							.map((e) => e.course_code)
-							.join(', ')}</span
-					>
+					<div class="bg-sky-50/80 px-5 py-2.5 border-b border-sky-100 dark:bg-sky-900/20 dark:border-sky-900/30 flex items-center justify-between">
+						<span class="text-sm font-bold text-sky-900 dark:text-sky-100">Seçtiğiniz Dersler</span>
+						<div class="flex items-center gap-3">
+							<span class="text-[11px] font-semibold text-sky-700 dark:text-sky-400">
+								{enrollments.filter((e) => ['active', 'pending', 'draft'].includes(e.status)).length} Ders
+							</span>
+							<span class="rounded-full bg-sky-200 px-2 py-0.5 text-[10px] font-black text-sky-800">
+								{enrollmentScheduledAkts} AKTS
+							</span>
+						</div>
+					</div>
+					<div class="overflow-x-auto">
+						<table class="w-full text-[13px]">
+							<thead class="bg-sky-50/30 text-[11px] font-bold text-sky-600 dark:text-sky-400 uppercase tracking-wider">
+								<tr>
+									<th class="px-4 py-2 text-left">Kod</th>
+									<th class="px-4 py-2 text-left">Ders Adı</th>
+									<th class="px-4 py-2 text-center">AKTS</th>
+									<th class="px-4 py-2 text-center">Durum</th>
+									<th class="px-4 py-2 text-left">Öğr. Elemanı</th>
+									<th class="px-4 py-2 text-right"></th>
+								</tr>
+							</thead>
+							<tbody class="divide-y divide-sky-50 dark:divide-sky-900/20">
+								{#each enrollments.filter((e) => ['active', 'pending', 'draft'].includes(e.status)) as e}
+									<tr class="hover:bg-sky-50/20 transition-colors">
+										<td class="px-4 py-2.5 font-mono font-bold text-sky-700 dark:text-sky-300">{e.course_code}</td>
+										<td class="px-4 py-2.5 font-medium text-slate-700 dark:text-slate-200">{e.course_name}</td>
+										<td class="px-4 py-2.5 text-center font-bold">{e.akts}</td>
+										<td class="px-4 py-2.5 text-center">
+											{#if e.status === 'active'}
+												<span class="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">KAYITLI</span>
+											{:else if e.status === 'pending'}
+												<span class="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">ONAY BEKLİYOR</span>
+											{:else}
+												<span class="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-bold text-sky-700 dark:bg-sky-900/40 dark:text-sky-300">TASLAK</span>
+											{/if}
+										</td>
+										<td class="px-4 py-2.5 text-slate-500 dark:text-slate-400 text-xs">{e.instructor_name ?? '—'}</td>
+										<td class="px-4 py-2.5 text-right">
+											{#if e.status === 'draft' && !hasPendingRegistration}
+												<button 
+													on:click={() => removeDraftEnrollmentRow(e.id)}
+													class="text-red-500 hover:text-red-700 p-1"
+													title="Dersi sepetten çıkar"
+												>
+													<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+												</button>
+											{/if}
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
 				</div>
 			{/if}
 
 			<!-- Sepet / Gönder -->
-			{#if draftEnrollments.length}
-				<div
-					class="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/80 px-5 py-4 dark:border-emerald-900/40 dark:bg-emerald-950/20"
-				>
-					<div class="mb-3 flex items-center justify-between">
-						<span class="font-semibold text-emerald-800 dark:text-emerald-200"
-							>Taslak kayıt listesi ({draftEnrollments.length} ders · {draftAkts} AKTS)</span
-						>
-						<button
-							on:click={clearAllDraftEnrollments}
-							disabled={hasPendingRegistration}
-							type="button"
-							class="text-xs text-emerald-600 hover:text-emerald-800 dark:text-emerald-400 disabled:opacity-40"
-							>Temizle</button
-						>
-					</div>
-					<div class="mb-3 space-y-1.5">
-						{#each draftEnrollments as e}
-							<div
-								class="flex items-center justify-between rounded-lg bg-white/70 px-3 py-2 dark:bg-white/5"
-							>
-								<span class="font-mono text-xs font-semibold text-slate-500 mr-2"
-									>{e.course_code}</span
-								>
-								<span class="flex-1 text-sm font-medium">{e.course_name}</span>
-								<span class="mx-3 text-xs text-slate-400">{e.akts} AKTS</span>
-								<button
-									on:click={() => removeDraftEnrollmentRow(e.id)}
-									disabled={hasPendingRegistration}
-									type="button"
-									class="text-red-400 hover:text-red-600 text-sm disabled:opacity-40">✕</button
-								>
-							</div>
-						{/each}
-					</div>
-					{#if enrollSuccess}
-						<div
-							class="mb-3 rounded-lg bg-emerald-100 px-3 py-2 text-sm text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200"
-						>
-							{enrollSuccess}
-						</div>
-					{/if}
-					{#if enrollError}
-						<div
-							class="mb-3 rounded-lg bg-red-100 px-3 py-2 text-sm text-red-700 dark:bg-red-900/40 dark:text-red-200"
-						>
-							{enrollError}
-						</div>
-					{/if}
-					<button
-						on:click={finalizeEnrollment}
-						disabled={enrollSubmitting || hasPendingRegistration}
-						type="button"
-						class="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-2.5 text-sm font-bold text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+			<div class="mt-3">
+				{#if enrollSuccess}
+					<div
+						class="mb-3 rounded-lg bg-emerald-100 px-3 py-2 text-sm text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200"
 					>
-						{#if enrollSubmitting}
-							<div
-								class="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"
-							></div>
-						{/if}
-						{enrollSubmitting
-							? 'Gönderiliyor…'
-							: 'Danışman onayına gönder'}
-					</button>
-				</div>
-			{:else if enrollSuccess}
-				<div
-					class="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm text-emerald-800 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:text-emerald-200"
+						{enrollSuccess}
+					</div>
+				{/if}
+				{#if enrollError}
+					<div
+						class="mb-3 rounded-lg bg-red-100 px-3 py-2 text-sm text-red-700 dark:bg-red-900/40 dark:text-red-200"
+					>
+						{enrollError}
+					</div>
+				{/if}
+				<button
+					on:click={finalizeEnrollment}
+					disabled={enrollSubmitting || hasPendingRegistration}
+					type="button"
+					class="flex w-full items-center justify-center gap-2 rounded-xl bg-sky-600 py-2.5 text-sm font-bold text-white hover:bg-sky-500 disabled:opacity-50 transition-colors"
 				>
-					{enrollSuccess}
-				</div>
-			{/if}
+					{#if enrollSubmitting}
+						<div
+							class="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"
+						></div>
+					{/if}
+					{enrollSubmitting
+						? 'Gönderiliyor…'
+						: enrollmentScheduledAkts < (registrationLimits?.akts_min ?? 30)
+							? `Min. ${(registrationLimits?.akts_min ?? 30)} AKTS gerekli`
+							: 'Danışman onayına gönder'}
+				</button>
+			</div>
 
 			<!-- Açılan dersler tablosu -->
 			<div

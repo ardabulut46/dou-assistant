@@ -655,9 +655,8 @@ def schedule_conflict_message_for_section(
     extra_section_ids: Optional[list[str]] = None,
 ) -> Optional[str]:
     """Öğrencinin aynı dönemdeki programı + eklenen şubeler ile yeni şube çakışıyorsa mesaj."""
-    new_sid = _str_id(new_section_id)
-    if not new_sid:
-        return None
+    # Ders çakışma kontrolü devre dışı bırakıldı (kullanıcı talebi)
+    return None
     new_slot = section_schedule_slot(db, new_sid)
     if not new_slot or not new_slot.get("start") or not new_slot.get("end"):
         return None
@@ -3401,6 +3400,7 @@ def upsert_draft_enrollments(
         tid = _str_id(meta["term_id"])
         ok, reason = _term_window_allowed(db, tid, mode)
         if not ok:
+            print(f"DEBUG: Pencere kapalı! Reason: {reason}")
             return [], reason
         dup = db.execute(
             text("""
@@ -3416,6 +3416,7 @@ def upsert_draft_enrollments(
             },
         ).first()
         if dup:
+            print(f"DEBUG: Duplicate course found for CID: {meta['course_id']}")
             continue
         batch_sids = [str(x["section_id"]) for x in out if x.get("section_id")]
         if mode != "add_drop":
@@ -3427,6 +3428,7 @@ def upsert_draft_enrollments(
         taken = int(meta.get("taken") or 0)
         cap = int(meta.get("capacity") or 0)
         if cap and taken >= cap:
+            print(f"DEBUG: Kontenjan dolu! Taken: {taken}, Cap: {cap}")
             return [], "Kontenjan dolu."
         new_akts = int(meta.get("course_akts") or 0)
         queued = sum(int(x.get("akts") or 0) for x in out)
@@ -3585,22 +3587,33 @@ def submit_schedule_to_advisor(
             """),
             {"spid": spid, "tid": term_id},
         )
-        batch_note = BATCH_TERM_NOTE_PREFIX + (term_id or "")
+        # Yeni ders listesini not içeriği için hazırla
+        enr_rows = db.execute(
+            text("""
+                SELECT c.course_code, c.course_name, c.akts
+                FROM obs_course_enrollments ce
+                JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+                JOIN obs_courses c ON cs.course_id = c.id
+                WHERE ce.student_id = :spid AND cs.term_id = :tid
+                  AND ce.status = 'pending'
+            """),
+            {"spid": spid, "tid": term_id},
+        ).fetchall()
+        
+        course_list_str = "\n".join([f"• {r[0]} - {r[1]} ({r[2]} AKTS)" for r in enr_rows])
+        batch_note = f"Ders Kayıt (Danışman Onayı)\n\nSeçilen Dersler:\n{course_list_str}"
     else:
+        # --- EKLE-BIRAK MANTIĞINI GERİ YÜKLE ---
         drop_terms: set[str] = set()
         for eid in eids_drop:
-            drow = (
-                db.execute(
-                    text("""
-                    SELECT cs.term_id FROM obs_course_enrollments ce
-                    JOIN obs_course_sections cs ON ce.course_section_id = cs.id
-                    WHERE ce.id = :eid AND ce.student_id = :spid AND ce.status = 'active'
-                    """),
-                    {"eid": eid, "spid": spid},
-                )
-                .mappings()
-                .first()
-            )
+            drow = db.execute(
+                text("""
+                SELECT cs.term_id FROM obs_course_enrollments ce
+                JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+                WHERE ce.id = :eid AND ce.student_id = :spid AND ce.status = 'active'
+                """),
+                {"eid": eid, "spid": spid},
+            ).mappings().first()
             if not drow:
                 return None, "Bırakılacak kayıtlardan biri geçersiz veya aktif değil."
             ok_drop, deny_reason = enrollment_drop_allowed(db, spid, eid)
@@ -3633,19 +3646,23 @@ def submit_schedule_to_advisor(
             term_id = dt
         if not term_id:
             return None, "Sepette ders veya bırakılacak kayıt yok."
+
+        # Kayıt penceresi kontrolü
         ok, reason = _term_window_allowed(db, term_id, "add_drop")
         if not ok:
             return None, reason
+
+        # AKTS Sınırı Kontrolü
         proj = add_drop_projected_load_before_submit(db, spid, term_id, eids_drop)
         ok_ak, msg_ak = validate_add_drop_akts_bounds(db, spid, term_id, proj)
         if not ok_ak:
             return None, msg_ak
+
+        # İşlemleri Gerçekleştir (Bırakma)
         if eids_drop:
-            if not all(isinstance(x, str) and x for x in eids_drop):
-                return None, "Geçersiz bırakma listesi."
             bind = {f"e{i}": eids_drop[i] for i in range(len(eids_drop))}
             in_ph = ", ".join(f":e{i}" for i in range(len(eids_drop)))
-            res_drop = db.execute(
+            db.execute(
                 text(f"""
                 UPDATE obs_course_enrollments ce SET status = 'pending_drop'
                 FROM obs_course_sections cs
@@ -3655,9 +3672,8 @@ def submit_schedule_to_advisor(
                 """),
                 {"spid": spid, "tid": term_id, **bind},
             )
-            if res_drop.rowcount != len(eids_drop):
-                db.rollback()
-                return None, "Bırakılacak kayıtlar güncellenemedi."
+
+        # İşlemleri Gerçekleştir (Ekleme)
         db.execute(
             text("""
                 UPDATE obs_course_enrollments ce SET status = 'pending'
@@ -3668,17 +3684,50 @@ def submit_schedule_to_advisor(
             """),
             {"spid": spid, "tid": term_id},
         )
-        batch_note = BATCH_ADDDROP_TERM_NOTE_PREFIX + (term_id or "")
+
+        # --- Onay notunu oluştur ---
+        added_rows = db.execute(
+            text("""
+                SELECT c.course_code, c.course_name, c.akts
+                FROM obs_course_enrollments ce
+                JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+                JOIN obs_courses c ON cs.course_id = c.id
+                WHERE ce.student_id = :spid AND cs.term_id = :tid
+                  AND ce.status = 'pending' AND ce.enrollment_reason = 'add_drop'
+            """),
+            {"spid": spid, "tid": term_id},
+        ).fetchall()
+        
+        dropped_rows = db.execute(
+            text("""
+                SELECT c.course_code, c.course_name
+                FROM obs_course_enrollments ce
+                JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+                JOIN obs_courses c ON cs.course_id = c.id
+                WHERE ce.student_id = :spid AND cs.term_id = :tid
+                  AND ce.status = 'pending_drop'
+            """),
+            {"spid": spid, "tid": term_id},
+        ).fetchall()
+        
+        added_str = "\n".join([f"• [EKLE] {r[0]} - {r[1]} ({r[2]} AKTS)" for r in added_rows]) if added_rows else "(Yeni ders eklenmedi)"
+        dropped_str = "\n".join([f"• [BIRAK] {r[0]} - {r[1]}" for r in dropped_rows]) if dropped_rows else "(Ders bırakılmadı)"
+        batch_note = f"Ders Ekle/Bırak Talebi\n\nDeğişiklikler:\n{added_str}\n{dropped_str}"
 
     db.execute(
         text("""
-            UPDATE obs_approval_requests SET status = 'cancelled', resolved_at = NOW()
+            DELETE FROM obs_approval_requests
             WHERE student_id = :spid AND request_type = 'schedule_batch' AND status = 'pending'
         """),
         {"spid": spid},
     )
+    
+    # Teknik izleme notu (arka planda çalışması için gizli formatta sona ekle)
+    tracking_prefix = BATCH_ADDDROP_TERM_NOTE_PREFIX if flow == "add_drop" else BATCH_TERM_NOTE_PREFIX
+    batch_note += f"\n\n---\nSistem Notu: {tracking_prefix}{term_id}"
+
     if note and str(note).strip():
-        batch_note = batch_note + "\n" + str(note).strip()
+        batch_note = batch_note + "\n\nÖğrenci Notu: " + str(note).strip()
     rid = str(uuid.uuid4())
     db.execute(
         text("""
