@@ -995,7 +995,7 @@ def _normalize_exam_date_for_db(raw: Optional[str]) -> str:
             )
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
-        detail="Sınav tarihi anlaşılamadı. Takvimden seçin veya yyyy-aa-gg (ör. 2026-04-13) girin.",
+        detail="Sınav tarihi anlaşılamadı. Takvimden seçin veya yyyy-mm-dd (ör. 2026-04-13) girin.",
     )
 
 
