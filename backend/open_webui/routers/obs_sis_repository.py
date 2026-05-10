@@ -2899,29 +2899,6 @@ def _term_window_allowed(db: Session, term_id: str, mode: str) -> tuple[bool, st
         ade_d = ade.date() if isinstance(ade, datetime) else ade
         if today > ade_d:
             return False, "Ekle/bırak süresi sona erdi."
-    ok_dl, msg_dl = _add_drop_calendar_deadline_ok(db, term_id)
-    if not ok_dl:
-        return False, msg_dl
-    return True, ""
-
-
-def _add_drop_calendar_deadline_ok(db: Session, term_id: str) -> tuple[bool, str]:
-    row = (
-        db.execute(
-            text(
-                "SELECT add_drop_deadline FROM obs_registration_settings WHERE term_id = :tid LIMIT 1"
-            ),
-            {"tid": term_id},
-        )
-        .mappings()
-        .first()
-    )
-    if not row or row.get("add_drop_deadline") is None:
-        return True, ""
-    dl = row["add_drop_deadline"]
-    dl_d = dl.date() if isinstance(dl, datetime) else dl
-    if dl_d and date.today() > dl_d:
-        return False, "Ekle/bırak için belirlenen son tarih geçti."
     return True, ""
 
 
@@ -4157,27 +4134,12 @@ def upsert_registration_settings(
     if m.get("gpa_threshold") is not None and m.get("min_gpa_for_high_akts") in (None, ""):
         m["min_gpa_for_high_akts"] = m["gpa_threshold"]
 
-    def fmt_date_val(v: Any) -> Any:
-        if v is None:
-            return None
-        if hasattr(v, "isoformat"):
-            return v.isoformat()[:10]
-        s = str(v).strip()
-        return s if s else None
-
     akts_limit_default = int(m.get("akts_limit_default") or 30)
     akts_limit_high = int(m.get("akts_limit_high") or 36)
     akts_limit_top = int(m.get("akts_limit_top") or 45)
     akts_limit_prep = int(m.get("akts_limit_prep") or 25)
     min_gpa = float(m.get("min_gpa_for_high_akts") or 2.50)
     min_gpa_top = float(m.get("min_gpa_for_top_akts") or 3.50)
-    registration_open = m.get("registration_open")
-    if registration_open is None:
-        registration_open = True
-    add_dd_raw = m.get("add_drop_deadline_days")
-    add_dd_i = int(add_dd_raw) if add_dd_raw is not None else None
-    enrollment_deadline = fmt_date_val(m.get("enrollment_deadline"))
-    add_drop_deadline = fmt_date_val(m.get("add_drop_deadline"))
 
     existing = db.execute(
         text("SELECT id FROM obs_registration_settings WHERE term_id = :tid LIMIT 1"),
@@ -4191,10 +4153,6 @@ def upsert_registration_settings(
         "alp": akts_limit_prep,
         "mg": min_gpa,
         "mgtop": min_gpa_top,
-        "ro": bool(registration_open),
-        "addd": add_dd_i,
-        "ed": enrollment_deadline,
-        "ad": add_drop_deadline,
     }
     if existing:
         db.execute(
@@ -4205,11 +4163,7 @@ def upsert_registration_settings(
                     akts_limit_top = :altop,
                     akts_limit_prep = :alp,
                     min_gpa_for_high_akts = :mg,
-                    min_gpa_for_top_akts = :mgtop,
-                    registration_open = :ro,
-                    add_drop_deadline_days = :addd,
-                    enrollment_deadline = CAST(:ed AS date),
-                    add_drop_deadline = CAST(:ad AS date)
+                    min_gpa_for_top_akts = :mgtop
                 WHERE term_id = :tid
                 """),
             params,
@@ -4220,11 +4174,9 @@ def upsert_registration_settings(
             text("""
                 INSERT INTO obs_registration_settings
                     (id, term_id, akts_limit_default, akts_limit_high, akts_limit_top, akts_limit_prep,
-                     min_gpa_for_high_akts, min_gpa_for_top_akts, registration_open, add_drop_deadline_days,
-                     enrollment_deadline, add_drop_deadline)
+                     min_gpa_for_high_akts, min_gpa_for_top_akts)
                 VALUES
-                    (:id, :tid, :ald, :alh, :altop, :alp, :mg, :mgtop, :ro, :addd,
-                     CAST(:ed AS date), CAST(:ad AS date))
+                    (:id, :tid, :ald, :alh, :altop, :alp, :mg, :mgtop)
                 """),
             {**params, "id": rid},
         )

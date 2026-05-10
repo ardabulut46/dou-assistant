@@ -2419,10 +2419,6 @@ class RegistrationSettingsUpdate(BaseModel):
     akts_limit_prep: Optional[int] = None
     min_gpa_for_high_akts: Optional[float] = None
     min_gpa_for_top_akts: Optional[float] = None
-    registration_open: Optional[bool] = None
-    add_drop_deadline_days: Optional[int] = None
-    enrollment_deadline: Optional[str] = None
-    add_drop_deadline: Optional[str] = None
     max_akts: Optional[int] = None
     bonus_akts: Optional[int] = None
     gpa_threshold: Optional[float] = None

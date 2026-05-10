@@ -786,10 +786,6 @@ export const postDouAdminRegistrationSettings = (
 		akts_limit_prep?: number;
 		min_gpa_for_high_akts?: number;
 		min_gpa_for_top_akts?: number;
-		registration_open?: boolean;
-		add_drop_deadline_days?: number;
-		enrollment_deadline?: string;
-		add_drop_deadline?: string;
 		max_akts?: number;
 		bonus_akts?: number;
 		gpa_threshold?: number;

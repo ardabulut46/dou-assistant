@@ -211,6 +211,17 @@
 	// departments / terms / courses / classrooms
 	let departments: DouDepartment[] = [];
 	let terms: DouTerm[] = [];
+
+	/** Dönem Yönetimi listesi: önce aktif dönem, sonra diğerleri (bitişe göre yeniden → eskiye). */
+	function compareTermsForAdminList(a: DouTerm, b: DouTerm): number {
+		const aActive = a.is_active === true;
+		const bActive = b.is_active === true;
+		if (aActive !== bActive) return aActive ? -1 : 1;
+		const endKey = (x: DouTerm) => (x.ends_at || x.starts_at || '').slice(0, 10);
+		return endKey(b).localeCompare(endKey(a));
+	}
+	$: termsSortedForAdmin = [...terms].sort(compareTermsForAdminList);
+
 	let courses: DouCourse[] = [];
 	let classrooms: DouClassroom[] = [];
 	let docRequests: unknown[] = [];
@@ -229,18 +240,13 @@
 		akts_limit_top: 45,
 		akts_limit_prep: 25,
 		min_gpa_for_high_akts: 2.5,
-		min_gpa_for_top_akts: 3.5,
-		registration_open: true,
-		add_drop_deadline_days: 14,
-		enrollment_deadline: '',
-		add_drop_deadline: ''
+		min_gpa_for_top_akts: 3.5
 	};
 	let regSaved = false;
 	let regRulesTermId = '';
-	let showTermCalModal = false;
-	let termCalSaved = false;
-	let termCalSaving = false;
-	let termCalForm = {
+	/** Dönem Yönetimi: obs_terms kayıt / ekle-bırak pencereleri (tek kaynak) */
+	let termWindowsEditId = '';
+	let termWindowsForm = {
 		registration_open: true,
 		registration_start: '',
 		registration_end: '',
@@ -248,6 +254,9 @@
 		add_drop_start: '',
 		add_drop_end: ''
 	};
+	let termWindowsSaving = false;
+	let termWindowsMsg: string | null = null;
+	let termWindowsErr: string | null = null;
 	let calendarEvents: DouCalendarEvent[] = [];
 	let calendarTermId = '';
 
@@ -287,13 +296,6 @@
 		if (row.min_gpa_for_top_akts != null)
 			regRules.min_gpa_for_top_akts = Number(row.min_gpa_for_top_akts);
 		if (row.akts_limit_prep != null) regRules.akts_limit_prep = Number(row.akts_limit_prep);
-		if (row.registration_open != null) regRules.registration_open = Boolean(row.registration_open);
-		if (row.add_drop_deadline_days != null)
-			regRules.add_drop_deadline_days = Number(row.add_drop_deadline_days);
-		if (row.enrollment_deadline != null)
-			regRules.enrollment_deadline = String(row.enrollment_deadline).slice(0, 10);
-		if (row.add_drop_deadline != null)
-			regRules.add_drop_deadline = String(row.add_drop_deadline).slice(0, 10);
 	}
 
 	// Generic create forms
@@ -742,41 +744,52 @@
 		}
 	}
 
-	function syncTermCalFromSelected() {
-		const tm = terms.find((t) => t.id === regRulesTermId);
-		if (!tm) return;
-		termCalForm = {
+	function openTermWindows(tm: DouTerm) {
+		termWindowsEditId = tm.id;
+		termWindowsErr = null;
+		termWindowsMsg = null;
+		termWindowsForm = {
 			registration_open: tm.registration_open !== false,
-			registration_start: tm.registration_start ?? '',
-			registration_end: tm.registration_end ?? '',
+			registration_start: calDateInput(tm.registration_start ?? ''),
+			registration_end: calDateInput(tm.registration_end ?? ''),
 			add_drop_open: tm.add_drop_open === true,
-			add_drop_start: tm.add_drop_start ?? '',
-			add_drop_end: tm.add_drop_end ?? ''
+			add_drop_start: calDateInput(tm.add_drop_start ?? ''),
+			add_drop_end: calDateInput(tm.add_drop_end ?? '')
 		};
 	}
 
-	async function saveTermCalWindows() {
-		termCalSaving = true;
-		termCalSaved = false;
-		loadErr = null;
+	function closeTermWindows() {
+		termWindowsEditId = '';
+		termWindowsErr = null;
+	}
+
+	async function saveTermWindowsPanel() {
+		termWindowsSaving = true;
+		termWindowsErr = null;
+		termWindowsMsg = null;
 		const token = localStorage.token ?? null;
-		if (!token || !regRulesTermId) {
-			termCalSaving = false;
+		if (!token || !termWindowsEditId) {
+			termWindowsSaving = false;
 			return;
 		}
 		try {
-			await patchDouAdminTermRegistrationWindows(token, regRulesTermId, { ...termCalForm });
-			const tr = await getDouTerms(token);
-			terms = tr;
-			termCalSaved = true;
-			showTermCalModal = false;
+			await patchDouAdminTermRegistrationWindows(token, termWindowsEditId, {
+				registration_open: termWindowsForm.registration_open,
+				registration_start: termWindowsForm.registration_start || undefined,
+				registration_end: termWindowsForm.registration_end || undefined,
+				add_drop_open: termWindowsForm.add_drop_open,
+				add_drop_start: termWindowsForm.add_drop_start || undefined,
+				add_drop_end: termWindowsForm.add_drop_end || undefined
+			});
+			terms = await getDouTerms(token);
+			termWindowsMsg = 'Kayıt pencereleri güncellendi (obs_terms).';
 			setTimeout(() => {
-				termCalSaved = false;
+				termWindowsMsg = null;
 			}, 3500);
 		} catch (e: unknown) {
-			loadErr = e instanceof Error ? e.message : 'Takvim kaydedilemedi.';
+			termWindowsErr = e instanceof Error ? e.message : 'Kaydedilemedi.';
 		} finally {
-			termCalSaving = false;
+			termWindowsSaving = false;
 		}
 	}
 
@@ -855,11 +868,7 @@
 					akts_limit_top: regRules.akts_limit_top,
 					akts_limit_prep: regRules.akts_limit_prep,
 					min_gpa_for_high_akts: regRules.min_gpa_for_high_akts,
-					min_gpa_for_top_akts: regRules.min_gpa_for_top_akts,
-					registration_open: regRules.registration_open,
-					add_drop_deadline_days: regRules.add_drop_deadline_days,
-					enrollment_deadline: regRules.enrollment_deadline || null,
-					add_drop_deadline: regRules.add_drop_deadline || null
+					min_gpa_for_top_akts: regRules.min_gpa_for_top_akts
 				},
 				regRulesTermId || undefined
 			);
@@ -2331,6 +2340,21 @@
 				</div>
 			</div>
 		{:else if apiKey === 'terms'}
+			<div class="space-y-4">
+				{#if termWindowsMsg}
+					<div
+						class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-800 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-200"
+					>
+						{termWindowsMsg}
+					</div>
+				{/if}
+				<div
+					class="rounded-lg border border-sky-200 bg-sky-50/80 px-4 py-3 text-xs text-sky-900 dark:border-sky-900/40 dark:bg-sky-950/30 dark:text-sky-200"
+				>
+					<strong>Ders kayıt</strong> ve <strong>ekle-bırak</strong> pencereleri yalnızca buradan yönetilir
+					(<code class="rounded bg-white/60 px-1 dark:bg-black/30">obs_terms</code>). Kayıt Kuralları sayfası
+					yalnızca AKTS/GNO limitlerini içerir.
+				</div>
 			<div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
 				<div
 					class="col-span-2 overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
@@ -2343,45 +2367,159 @@
 						<div class="col-span-2">Bitiş</div>
 						<div class="col-span-4 text-right">İşlem</div>
 					</div>
-					{#each terms as t}
-						<div
-							class="grid grid-cols-12 items-center border-t border-black/5 px-5 py-3 text-sm dark:border-white/10"
-						>
-							<div class="col-span-4 font-medium">
-								{t.name}
-								{#if t.is_active}<span
-										class="ml-2 rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
-										>Aktif</span
-									>{/if}
+					{#each termsSortedForAdmin as t}
+						<div class="border-t border-black/5 dark:border-white/10">
+							<div
+								class="grid grid-cols-12 items-center px-5 py-3 text-sm"
+							>
+								<div class="col-span-4">
+									<div class="font-medium">
+										{t.name}
+										{#if t.is_active}<span
+												class="ml-2 rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
+												>Aktif</span
+											>{/if}
+									</div>
+									<div class="mt-1 flex flex-wrap gap-1">
+										<span
+											class="rounded px-1.5 py-0.5 text-[10px] font-semibold {t.registration_open !== false
+												? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200'
+												: 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300'}"
+											>Kayıt: {t.registration_open !== false ? 'açık' : 'kapalı'}</span
+										>
+										<span
+											class="rounded px-1.5 py-0.5 text-[10px] font-semibold {t.add_drop_open === true
+												? 'bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200'
+												: 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300'}"
+											>E/B: {t.add_drop_open === true ? 'açık' : 'kapalı'}</span
+										>
+									</div>
+								</div>
+								<div class="col-span-2 text-xs text-slate-400">{t.starts_at}</div>
+								<div class="col-span-2 text-xs text-slate-400">{t.ends_at}</div>
+								<div class="col-span-4 flex flex-wrap justify-end gap-1">
+									<button
+										type="button"
+										on:click={() =>
+											termWindowsEditId === t.id ? closeTermWindows() : openTermWindows(t)}
+										class="rounded-lg border border-violet-200 px-2 py-1 text-xs font-semibold text-violet-700 hover:bg-violet-50 dark:border-violet-900/40 dark:text-violet-300 dark:hover:bg-violet-950/40"
+									>
+										{termWindowsEditId === t.id ? 'Pencereleri gizle' : 'Kayıt pencereleri'}
+									</button>
+									<button
+										type="button"
+										on:click={() => {
+											editingTermId = t.id;
+											termForm = {
+												name: t.name,
+												academic_year: t.academic_year ?? '2025-2026',
+												season: t.season ?? 'spring',
+												starts_at: t.starts_at ?? '',
+												ends_at: t.ends_at ?? '',
+												is_active: !!t.is_active
+											};
+										}}
+										class="rounded-lg border border-sky-200 px-2 py-1 text-xs font-semibold text-sky-600 hover:bg-sky-50 dark:border-sky-900/40 dark:text-sky-400"
+									>
+										Düzenle
+									</button>
+									<button
+										type="button"
+										on:click={() => removeCatalogItem('term', t.id)}
+										class="rounded-lg border border-red-200 px-2 py-1 text-xs font-semibold text-red-600 hover:bg-red-50 dark:border-red-900/40 dark:text-red-400"
+									>
+										Sil
+									</button>
+								</div>
 							</div>
-							<div class="col-span-2 text-xs text-slate-400">{t.starts_at}</div>
-							<div class="col-span-2 text-xs text-slate-400">{t.ends_at}</div>
-							<div class="col-span-4 flex justify-end gap-1">
-								<button
-									type="button"
-									on:click={() => {
-										editingTermId = t.id;
-										termForm = {
-											name: t.name,
-											academic_year: t.academic_year ?? '2025-2026',
-											season: t.season ?? 'spring',
-											starts_at: t.starts_at ?? '',
-											ends_at: t.ends_at ?? '',
-											is_active: !!t.is_active
-										};
-									}}
-									class="rounded-lg border border-sky-200 px-2 py-1 text-xs font-semibold text-sky-600 hover:bg-sky-50 dark:border-sky-900/40 dark:text-sky-400"
+							{#if termWindowsEditId === t.id}
+								<div
+									class="border-t border-violet-100 bg-violet-50/40 px-5 py-4 dark:border-violet-900/30 dark:bg-violet-950/20"
 								>
-									Düzenle
-								</button>
-								<button
-									type="button"
-									on:click={() => removeCatalogItem('term', t.id)}
-									class="rounded-lg border border-red-200 px-2 py-1 text-xs font-semibold text-red-600 hover:bg-red-50 dark:border-red-900/40 dark:text-red-400"
-								>
-									Sil
-								</button>
-							</div>
+									{#if termWindowsErr}
+										<div
+											class="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300"
+										>
+											{termWindowsErr}
+										</div>
+									{/if}
+									<p class="mb-3 text-xs text-slate-600 dark:text-slate-400">
+										<code>registration_*</code> = ders kayıt; <code>add_drop_*</code> = ekle-bırak.
+										Öğrenci akışı bu alanlara göre kısıtlanır.
+									</p>
+									<div class="grid gap-4 sm:grid-cols-2">
+										<div class="space-y-3 rounded-lg border border-black/10 bg-white p-3 dark:border-white/10 dark:bg-white/5">
+											<div class="text-xs font-bold text-slate-500">Ders kayıt</div>
+											<label class="flex items-center gap-2 text-sm">
+												<input
+													type="checkbox"
+													bind:checked={termWindowsForm.registration_open}
+													class="accent-sky-500"
+												/>
+												Açık
+											</label>
+											<label class="block text-xs">
+												<span class="font-semibold text-slate-600">Başlangıç</span>
+												<input
+													type="date"
+													bind:value={termWindowsForm.registration_start}
+													class="mt-1 w-full rounded-lg border border-black/10 px-2 py-1.5 text-sm dark:border-white/10 dark:bg-white/5"
+												/>
+											</label>
+											<label class="block text-xs">
+												<span class="font-semibold text-slate-600">Bitiş</span>
+												<input
+													type="date"
+													bind:value={termWindowsForm.registration_end}
+													class="mt-1 w-full rounded-lg border border-black/10 px-2 py-1.5 text-sm dark:border-white/10 dark:bg-white/5"
+												/>
+											</label>
+										</div>
+										<div class="space-y-3 rounded-lg border border-black/10 bg-white p-3 dark:border-white/10 dark:bg-white/5">
+											<div class="text-xs font-bold text-slate-500">Ekle / bırak</div>
+											<label class="flex items-center gap-2 text-sm">
+												<input
+													type="checkbox"
+													bind:checked={termWindowsForm.add_drop_open}
+													class="accent-violet-500"
+												/>
+												Açık
+											</label>
+											<label class="block text-xs">
+												<span class="font-semibold text-slate-600">Başlangıç</span>
+												<input
+													type="date"
+													bind:value={termWindowsForm.add_drop_start}
+													class="mt-1 w-full rounded-lg border border-black/10 px-2 py-1.5 text-sm dark:border-white/10 dark:bg-white/5"
+												/>
+											</label>
+											<label class="block text-xs">
+												<span class="font-semibold text-slate-600">Bitiş</span>
+												<input
+													type="date"
+													bind:value={termWindowsForm.add_drop_end}
+													class="mt-1 w-full rounded-lg border border-black/10 px-2 py-1.5 text-sm dark:border-white/10 dark:bg-white/5"
+												/>
+											</label>
+										</div>
+									</div>
+									<div class="mt-4 flex gap-2">
+										<button
+											type="button"
+											on:click={() => closeTermWindows()}
+											class="flex-1 rounded-lg border border-black/10 py-2 text-sm font-semibold dark:border-white/10"
+											>İptal</button
+										>
+										<button
+											type="button"
+											disabled={termWindowsSaving}
+											on:click={() => void saveTermWindowsPanel()}
+											class="flex-1 rounded-lg bg-violet-600 py-2 text-sm font-bold text-white hover:bg-violet-500 disabled:opacity-50"
+											>{termWindowsSaving ? 'Kaydediliyor…' : 'Kaydet'}</button
+										>
+									</div>
+								</div>
+							{/if}
 						</div>
 					{:else}<div class="px-5 py-8 text-center text-sm text-slate-400">Dönem yok.</div>{/each}
 				</div>
@@ -2430,6 +2568,7 @@
 						</div>
 					</div>
 				</div>
+			</div>
 			</div>
 		{:else if apiKey === 'courses'}
 			<div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -3376,28 +3515,10 @@
 			<!-- KAYIT KURALLARI                                               -->
 			<!-- ============================================================ -->
 		{:else if apiKey === 'reg-rules'}
-			<div class="space-y-4">
-			{#if termCalSaved}
-				<div
-					class="mx-auto max-w-lg rounded-lg bg-emerald-50 px-4 py-2 text-center text-sm text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200"
-				>
-					Dönem takvimi güncellendi (obs_terms kayıt / ekle-bırak alanları).
-				</div>
-			{/if}
 			<div
 				class="mx-auto max-w-lg rounded-xl border border-black/10 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-white/5"
 			>
 				<div class="mb-5 font-bold">Kayıt Kuralları</div>
-				<button
-					type="button"
-					on:click={() => {
-						syncTermCalFromSelected();
-						showTermCalModal = true;
-					}}
-					class="mb-4 w-full rounded-lg border border-violet-200 bg-violet-50 py-2.5 text-sm font-semibold text-violet-900 hover:bg-violet-100 dark:border-violet-900/50 dark:bg-violet-950/40 dark:text-violet-100 dark:hover:bg-violet-900/30"
-				>
-					Ders kayıt / ekle-bırak tarihleri — obs_terms
-				</button>
 				{#if terms.length}
 					<label class="mb-4 block">
 						<div class="mb-1 text-xs font-semibold text-slate-500">Dönem</div>
@@ -3429,7 +3550,7 @@
 						Kaydedildi.
 					</div>{/if}
 				<div class="space-y-4">
-					{#each [['AKTS Limiti (varsayılan)', 'akts_limit_default', 'number'], ['AKTS Limiti (orta GNO)', 'akts_limit_high', 'number'], ['AKTS Limiti (üst GNO / tavan)', 'akts_limit_top', 'number'], ['AKTS Limiti (hazırlık)', 'akts_limit_prep', 'number'], ['Orta kademe için min. GNO', 'min_gpa_for_high_akts', 'number'], ['Üst kademe için min. GNO', 'min_gpa_for_top_akts', 'number'], ['Ekle/Bırak süresi (gün)', 'add_drop_deadline_days', 'number']] as [lbl, field, type]}
+					{#each [['AKTS Limiti (varsayılan)', 'akts_limit_default', 'number'], ['AKTS Limiti (orta GNO)', 'akts_limit_high', 'number'], ['AKTS Limiti (üst GNO / tavan)', 'akts_limit_top', 'number'], ['AKTS Limiti (hazırlık)', 'akts_limit_prep', 'number'], ['Orta kademe için min. GNO', 'min_gpa_for_high_akts', 'number'], ['Üst kademe için min. GNO', 'min_gpa_for_top_akts', 'number']] as [lbl, field, type]}
 						<label class="block">
 							<div class="mb-1 text-xs font-semibold text-slate-500">{lbl}</div>
 							<input
@@ -3440,34 +3561,6 @@
 							/>
 						</label>
 					{/each}
-					<label class="block">
-						<div class="mb-1 text-xs font-semibold text-slate-500">
-							Ders kayıt son tarihi (obs_registration_settings.enrollment_deadline)
-						</div>
-						<input
-							type="date"
-							bind:value={regRules.enrollment_deadline}
-							class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-400/40 dark:border-white/10 dark:bg-white/5"
-						/>
-					</label>
-					<label class="block">
-						<div class="mb-1 text-xs font-semibold text-slate-500">
-							Ekle/bırak son tarihi (add_drop_deadline)
-						</div>
-						<input
-							type="date"
-							bind:value={regRules.add_drop_deadline}
-							class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-400/40 dark:border-white/10 dark:bg-white/5"
-						/>
-					</label>
-					<label class="flex items-center gap-3">
-						<input
-							type="checkbox"
-							bind:checked={regRules.registration_open}
-							class="accent-sky-500"
-						/>
-						<span class="text-sm font-medium">Ders kaydı açık</span>
-					</label>
 					<button
 						on:click={saveRegRules}
 						type="button"
@@ -3476,86 +3569,6 @@
 						Kaydet
 					</button>
 				</div>
-			</div>
-
-			{#if showTermCalModal}
-				<div
-					class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
-					role="dialog"
-					aria-modal="true"
-				>
-					<div
-						class="max-h-[92vh] w-full max-w-md overflow-y-auto rounded-2xl border border-black/10 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-slate-900"
-					>
-						<h2 class="mb-1 text-base font-bold text-slate-800 dark:text-slate-100">
-							Dönem: {terms.find((t) => t.id === regRulesTermId)?.name ?? '—'}
-						</h2>
-						<p class="mb-4 text-xs text-slate-500">
-							<strong>obs_terms</strong>: registration_* = normal ders kayıt penceresi; add_drop_* =
-							ekle-bırak. Öğrenci taslak ekleme / gönderim bu tarihlere göre kısıtlanır.
-						</p>
-						<div class="space-y-3 border-b border-black/5 pb-4 dark:border-white/10">
-							<label class="flex items-center gap-2 text-sm font-medium">
-								<input type="checkbox" bind:checked={termCalForm.registration_open} class="accent-sky-500" />
-								Ders kayıt açık (registration_open)
-							</label>
-							<label class="block text-xs">
-								<span class="font-semibold text-slate-600 dark:text-slate-400">Başlangıç</span>
-								<input
-									type="date"
-									bind:value={termCalForm.registration_start}
-									class="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 text-sm dark:border-white/10 dark:bg-white/5"
-								/>
-							</label>
-							<label class="block text-xs">
-								<span class="font-semibold text-slate-600 dark:text-slate-400">Bitiş</span>
-								<input
-									type="date"
-									bind:value={termCalForm.registration_end}
-									class="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 text-sm dark:border-white/10 dark:bg-white/5"
-								/>
-							</label>
-						</div>
-						<div class="mt-4 space-y-3">
-							<label class="flex items-center gap-2 text-sm font-medium">
-								<input type="checkbox" bind:checked={termCalForm.add_drop_open} class="accent-sky-500" />
-								Ekle/bırak açık (add_drop_open)
-							</label>
-							<label class="block text-xs">
-								<span class="font-semibold text-slate-600 dark:text-slate-400">Ekle/bırak başlangıç</span>
-								<input
-									type="date"
-									bind:value={termCalForm.add_drop_start}
-									class="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 text-sm dark:border-white/10 dark:bg-white/5"
-								/>
-							</label>
-							<label class="block text-xs">
-								<span class="font-semibold text-slate-600 dark:text-slate-400">Ekle/bırak bitiş</span>
-								<input
-									type="date"
-									bind:value={termCalForm.add_drop_end}
-									class="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 text-sm dark:border-white/10 dark:bg-white/5"
-								/>
-							</label>
-						</div>
-						<div class="mt-6 flex gap-2">
-							<button
-								type="button"
-								on:click={() => (showTermCalModal = false)}
-								class="flex-1 rounded-lg border border-black/10 py-2 text-sm font-semibold dark:border-white/10"
-								>İptal</button
-							>
-							<button
-								type="button"
-								disabled={termCalSaving}
-								on:click={saveTermCalWindows}
-								class="flex-1 rounded-lg bg-violet-600 py-2 text-sm font-bold text-white hover:bg-violet-500 disabled:opacity-50"
-								>{termCalSaving ? 'Kaydediliyor…' : 'Kaydet'}</button
-							>
-						</div>
-					</div>
-				</div>
-			{/if}
 			</div>
 		{:else if apiKey === 'doc-process'}
 			<div
