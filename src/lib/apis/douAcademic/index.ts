@@ -340,6 +340,8 @@ export type DouAnnouncement = {
 	audience_type: string;
 	department_id?: string | null;
 	course_section_id?: string | null;
+	/** Belirli öğrenci hedefi (backend `student_number` / `student_no`) */
+	student_no?: string | null;
 	is_active: boolean;
 	published_at?: string | null;
 	created_at?: string | null;
@@ -819,6 +821,7 @@ export type AnnouncementUpdatePayload = Partial<{
 	audience_type: string;
 	department_id: string | null;
 	course_section_id: string | null;
+	student_no: string | null;
 	is_active: boolean;
 }>;
 

@@ -65,6 +65,147 @@ def validate_attendance_week_no(week_no: Any) -> int:
     return n
 
 
+# --- Duyurular (obs_announcements): UUID / CHECK / opsiyonel student kolonu ---
+
+ANNOUNCEMENT_VARCHAR_MAX = 255
+
+_obs_ann_student_col_cache: dict[int, Optional[str]] = {}
+
+
+def obs_announcements_target_student_column(db: Session) -> Optional[str]:
+    """PostgreSQL/SQLite şemasında varsa `student_number` veya `student_no` kolon adı."""
+    bind = db.get_bind()
+    bid = id(bind)
+    if bid in _obs_ann_student_col_cache:
+        return _obs_ann_student_col_cache[bid]
+    names: set[str] = set()
+    try:
+        if bind.dialect.name == "sqlite":
+            rows = db.execute(text("PRAGMA table_info(obs_announcements)")).fetchall()
+            names = {str(r[1]) for r in rows}
+        else:
+            rows = db.execute(
+                text(
+                    """
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_schema = ANY (current_schemas(false))
+                      AND table_name = 'obs_announcements'
+                      AND column_name IN ('student_number', 'student_no')
+                    """
+                )
+            ).fetchall()
+            names = {str(r[0]) for r in rows}
+            # information_schema bazı kurulumlarda boş dönebilir; pg_catalog yedeği.
+            if not names and bind.dialect.name == "postgresql":
+                rows2 = db.execute(
+                    text(
+                        """
+                        SELECT a.attname::text
+                        FROM pg_attribute a
+                        JOIN pg_class c ON c.oid = a.attrelid
+                        JOIN pg_namespace n ON n.oid = c.relnamespace
+                        WHERE c.relname = 'obs_announcements'
+                          AND n.nspname = ANY (current_schemas(true))
+                          AND a.attnum > 0
+                          AND NOT a.attisdropped
+                          AND a.attname IN ('student_number', 'student_no')
+                        """
+                    )
+                ).fetchall()
+                names = {str(r[0]) for r in rows2}
+    except Exception:
+        # Geçici hata veya izin: None önbelleğe yazma; sonraki istekte yeniden dene.
+        return None
+    if "student_number" in names:
+        col = "student_number"
+    elif "student_no" in names:
+        col = "student_no"
+    else:
+        col = None
+    _obs_ann_student_col_cache[bid] = col
+    return col
+
+
+def clamp_announcement_varchar(s: str, max_len: int = ANNOUNCEMENT_VARCHAR_MAX) -> str:
+    t = (s or "").strip()
+    return t[:max_len] if max_len > 0 else t
+
+
+def optional_uuid_param(val: Any, field_label: str) -> Optional[str]:
+    """Boş veya None -> None; doluysa geçerli UUID string döner."""
+    if val is None:
+        return None
+    s = str(val).strip()
+    if not s:
+        return None
+    try:
+        uuid.UUID(s)
+    except ValueError as ex:
+        raise ValueError(f"{field_label} geçerli bir UUID olmalıdır.") from ex
+    return s
+
+
+def academic_department_id_for_user(db: Session, webui_user_id: str) -> Optional[str]:
+    row = (
+        db.execute(
+            text(
+                "SELECT department_id FROM obs_academic_profiles WHERE user_id = :u LIMIT 1"
+            ),
+            {"u": webui_user_id},
+        )
+        .mappings()
+        .first()
+    )
+    if not row or row.get("department_id") is None:
+        return None
+    return str(row["department_id"])
+
+
+def resolve_academic_announcement_targets(
+    db: Session,
+    creator_user_id: str,
+    audience_type: str,
+    department_id: Optional[str],
+    course_section_id: Optional[str],
+    student_no: Optional[str],
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """
+    (department_id, course_section_id, student_number_value)
+    CHECK kısıtları ve FK'lar için akademisyen tarafında normalize edilmiş hedefler.
+    """
+    at = (audience_type or "section").strip().lower()
+    if at not in ("section", "advisees", "student", "all"):
+        raise ValueError("Geçersiz hedef kitle (audience_type).")
+
+    dept_body = optional_uuid_param(department_id, "Bölüm kimliği")
+    csid = optional_uuid_param(course_section_id, "Şube kimliği")
+    sn = (student_no or "").strip() or None
+
+    if at == "all":
+        return None, None, None
+    if at == "section":
+        if not csid:
+            raise ValueError("Şube seçmelisiniz.")
+        return None, csid, None
+    if at in ("advisees", "student"):
+        ensure_academic_profile_for_user(db, creator_user_id)
+        did = dept_body or academic_department_id_for_user(db, creator_user_id)
+        if not did:
+            raise ValueError(
+                "Akademik profilinizde bölüm tanımlı değil; danışmanlık veya öğrenci hedefli duyuru oluşturulamıyor."
+            )
+        if at == "advisees":
+            return did, None, None
+        if not sn:
+            raise ValueError("Öğrenci numarası zorunludur.")
+        if not obs_announcements_target_student_column(db):
+            raise ValueError(
+                "Bu veritabanı şeması öğrenci hedefli duyuruyu desteklemiyor (student_number / student_no sütunu yok)."
+            )
+        return did, None, sn
+    raise ValueError("Geçersiz hedef kitle.")
+
+
 def _fmt_time(t: Any) -> str:
     if t is None:
         return ""
@@ -891,10 +1032,89 @@ def term_calendar(db: Session, term_id: str) -> list[dict[str, Any]]:
 
 
 def list_student_feed_announcements(
-    db: Session, department_id: Optional[str]
+    db: Session, student_user_id: str
 ) -> list[dict[str, Any]]:
-    if department_id:
-        q = f"""
+    """Öğrenci paneli: `all`, bölüm duyurusu, kayıtlı şube (`section`), danışmanlık (`advisees`),
+    numaraya özel (`student` — tabloda hedef kolonu varsa)."""
+    spid = resolve_student_profile_id(db, student_user_id)
+    if not spid:
+        return []
+    pr = (
+        db.execute(
+            text(
+                "SELECT department_id FROM obs_student_profiles WHERE id = :id LIMIT 1"
+            ),
+            {"id": spid},
+        )
+        .mappings()
+        .first()
+    )
+    did = _str_id(pr.get("department_id")) if pr and pr.get("department_id") else None
+
+    sn_col = obs_announcements_target_student_column(db)
+    student_clause = ""
+    if sn_col:
+        student_clause = f"""
+            OR (
+                a.audience_type = 'student'
+                AND a.{sn_col} IS NOT NULL
+                AND trim(cast(a.{sn_col} AS text)) <> ''
+                AND EXISTS (
+                    SELECT 1 FROM obs_student_profiles sp
+                    WHERE sp.id = :spid
+                      AND trim(cast(sp.student_number AS text)) = trim(cast(a.{sn_col} AS text))
+                )
+            )
+        """
+
+    dept_clause = ""
+    advisees_clause = ""
+    if did:
+        dept_clause = """
+            OR (
+                a.audience_type = 'department'
+                AND cast(a.department_id AS text) = cast(:did AS text)
+            )
+        """
+        advisees_clause = """
+            OR (
+                a.audience_type = 'advisees'
+                AND cast(a.department_id AS text) = cast(:did AS text)
+                AND EXISTS (
+                    SELECT 1 FROM obs_student_advisors sa
+                    JOIN obs_academic_profiles ap ON sa.advisor_id = ap.id
+                    WHERE sa.student_id = :spid
+                      AND ap.user_id = a.created_by_user_id
+                )
+            )
+        """
+    else:
+        # Profilde bölüm yoksa bile danışmanı tarafından yayınlanan advisees duyuruları gösterilir.
+        advisees_clause = """
+            OR (
+                a.audience_type = 'advisees'
+                AND EXISTS (
+                    SELECT 1 FROM obs_student_advisors sa
+                    JOIN obs_academic_profiles ap ON sa.advisor_id = ap.id
+                    WHERE sa.student_id = :spid
+                      AND ap.user_id = a.created_by_user_id
+                )
+            )
+        """
+
+    section_clause = """
+            OR (
+                a.audience_type = 'section'
+                AND EXISTS (
+                    SELECT 1 FROM obs_course_enrollments ce
+                    WHERE ce.course_section_id = a.course_section_id
+                      AND ce.student_id = :spid
+                      AND ce.status = 'active'
+                )
+            )
+    """
+
+    q = f"""
             SELECT a.id, a.title, a.content, a.audience_type, a.department_id, a.is_active, a.published_at,
                    a.created_by_user_id, u.name AS creator_name
             FROM obs_announcements a
@@ -902,21 +1122,17 @@ def list_student_feed_announcements(
             WHERE a.is_active = true
               AND (
                 a.audience_type = 'all'
-                OR (a.audience_type = 'department' AND a.department_id::text = :did)
+                {dept_clause}
+                {advisees_clause}
+                {section_clause}
+                {student_clause}
               )
             ORDER BY a.published_at DESC NULLS LAST
             """
-        rows = db.execute(text(q), {"did": department_id}).mappings().all()
-    else:
-        q = f"""
-            SELECT a.id, a.title, a.content, a.audience_type, a.department_id, a.is_active, a.published_at,
-                   a.created_by_user_id, u.name AS creator_name
-            FROM obs_announcements a
-            LEFT JOIN {USER_TBL} u ON u.id = a.created_by_user_id
-            WHERE a.is_active = true AND a.audience_type = 'all'
-            ORDER BY a.published_at DESC NULLS LAST
-            """
-        rows = db.execute(text(q)).mappings().all()
+    params: dict[str, Any] = {"spid": spid}
+    if did:
+        params["did"] = did
+    rows = db.execute(text(q), params).mappings().all()
     return [
         {
             "id": _str_id(r["id"]),
@@ -2473,6 +2689,7 @@ def section_attendance_week(
     Şube + hafta için mevcut yoklamayı döndürür.
     UI tarafı enrollment_id üzerinden çalıştığı için ar kayıtlarını ce.id ile map'ler.
     """
+    validate_attendance_week_no(week_no)
     rows = (
         db.execute(
             text(
@@ -3619,6 +3836,19 @@ def resolve_approval(
     return res.rowcount > 0
 
 
+def _announcement_target_student_select_sql(db: Session) -> str:
+    col = obs_announcements_target_student_column(db)
+    bind = db.get_bind()
+    null_sql = (
+        "CAST(NULL AS TEXT) AS target_student_no"
+        if bind.dialect.name == "sqlite"
+        else "CAST(NULL AS VARCHAR) AS target_student_no"
+    )
+    if not col:
+        return null_sql
+    return f"a.{col} AS target_student_no"
+
+
 def insert_announcement(
     db: Session,
     created_by: str,
@@ -3627,25 +3857,47 @@ def insert_announcement(
     audience_type: str,
     department_id: Optional[str],
     course_section_id: Optional[str],
+    student_number: Optional[str] = None,
 ) -> str:
     aid = str(uuid.uuid4())
-    db.execute(
-        text("""
+    title = clamp_announcement_varchar(title)
+    content = clamp_announcement_varchar(content)
+    at_norm = (audience_type or "").strip().lower()
+    did_n = optional_uuid_param(department_id, "Bölüm kimliği")
+    csid_n = optional_uuid_param(course_section_id, "Şube kimliği")
+    snv: Optional[str] = None
+    if student_number is not None:
+        s = str(student_number).strip()
+        snv = s[:64] if s else None
+    sn_col = obs_announcements_target_student_column(db)
+    params: dict[str, Any] = {
+        "id": aid,
+        "cb": created_by,
+        "t": title,
+        "c": content,
+        "at": at_norm,
+        "did": did_n,
+        "csid": csid_n,
+    }
+    if sn_col:
+        q = f"""
+        INSERT INTO obs_announcements
+        (id, created_by_user_id, title, content, audience_type, department_id, course_section_id, {sn_col}, is_active, published_at, created_at)
+        VALUES (:id, :cb, :t, :c, :at, :did, :csid, :snv, true, NOW(), NOW())
+        """
+        params["snv"] = snv
+    else:
+        q = """
         INSERT INTO obs_announcements
         (id, created_by_user_id, title, content, audience_type, department_id, course_section_id, is_active, published_at, created_at)
         VALUES (:id, :cb, :t, :c, :at, :did, :csid, true, NOW(), NOW())
-        """),
-        {
-            "id": aid,
-            "cb": created_by,
-            "t": title,
-            "c": content,
-            "at": audience_type,
-            "did": department_id,
-            "csid": course_section_id,
-        },
-    )
-    db.commit()
+        """
+    try:
+        db.execute(text(q), params)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return aid
 
 
@@ -3657,6 +3909,11 @@ def _announcement_mgmt_row(r: Any) -> dict[str, Any]:
         "audience_type": r.get("audience_type") or "",
         "department_id": _str_id(r.get("department_id")),
         "course_section_id": _str_id(r.get("course_section_id")),
+        "student_no": (
+            (str(r.get("target_student_no")).strip() or None)
+            if r.get("target_student_no") is not None
+            else None
+        ),
         "is_active": bool(r.get("is_active")),
         "published_at": (
             r.get("published_at").isoformat() if r.get("published_at") else None
@@ -3677,6 +3934,7 @@ def list_announcements_created_by(
             text(
                 f"""
                 SELECT a.id, a.title, a.content, a.audience_type, a.department_id, a.course_section_id,
+                       {_announcement_target_student_select_sql(db)},
                        a.is_active, a.published_at, a.created_at, a.created_by_user_id,
                        u.name AS creator_name
                 FROM obs_announcements a
@@ -3700,6 +3958,7 @@ def list_announcements_all_admin(db: Session, limit: int = 500) -> list[dict[str
             text(
                 f"""
                 SELECT a.id, a.title, a.content, a.audience_type, a.department_id, a.course_section_id,
+                       {_announcement_target_student_select_sql(db)},
                        a.is_active, a.published_at, a.created_at, a.created_by_user_id,
                        u.name AS creator_name
                 FROM obs_announcements a
@@ -3724,6 +3983,7 @@ def get_announcement_mgmt_by_id(
             text(
                 f"""
                 SELECT a.id, a.title, a.content, a.audience_type, a.department_id, a.course_section_id,
+                       {_announcement_target_student_select_sql(db)},
                        a.is_active, a.published_at, a.created_at, a.created_by_user_id,
                        u.name AS creator_name
                 FROM obs_announcements a
@@ -3755,6 +4015,24 @@ def update_announcement_owned(
     if require_creator and str(sel[0]) != str(actor_user_id):
         return False, "forbidden"
 
+    upd = dict(updates)
+    sn_col = obs_announcements_target_student_column(db)
+    if sn_col and "student_no" in upd:
+        raw_sn = upd.pop("student_no")
+        if raw_sn is None:
+            upd[sn_col] = None
+        else:
+            t = str(raw_sn).strip()[:64]
+            upd[sn_col] = t if t else None
+    for uk in ("department_id", "course_section_id"):
+        if uk in upd and upd[uk] is not None:
+            s = str(upd[uk]).strip()
+            upd[uk] = s or None
+    if "title" in upd and upd["title"] is not None:
+        upd["title"] = clamp_announcement_varchar(str(upd["title"]))
+    if "content" in upd and upd["content"] is not None:
+        upd["content"] = clamp_announcement_varchar(str(upd["content"]))
+
     allowed_cols = {
         "title",
         "content",
@@ -3763,10 +4041,12 @@ def update_announcement_owned(
         "course_section_id",
         "is_active",
     }
+    if sn_col:
+        allowed_cols.add(sn_col)
     set_parts: list[str] = []
     params: dict[str, Any] = {"id": announcement_id}
 
-    for key, val in updates.items():
+    for key, val in upd.items():
         if key not in allowed_cols:
             continue
         set_parts.append(f"{key} = :{key}")

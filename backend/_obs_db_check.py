@@ -21,9 +21,32 @@ REPO_ROOT = BACKEND_DIR.parent
 DATA_DIR = Path(os.getenv("DATA_DIR", BACKEND_DIR / "data")).resolve()
 
 
+def _load_env_file(path: Path) -> None:
+    """python-dotenv yoksa bile proje kökündeki .env'i okur (KEY=value)."""
+    if not path.is_file():
+        return
+    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+            val = val[1:-1]
+        os.environ[key] = val
+
+
 def main() -> None:
+    env_path = REPO_ROOT / ".env"
     if load_dotenv:
-        load_dotenv(REPO_ROOT / ".env")
+        load_dotenv(env_path)
+    else:
+        _load_env_file(env_path)
 
     primary = os.getenv("DATABASE_URL") or f"sqlite:///{DATA_DIR.as_posix()}/webui.db"
     obs_raw = (os.getenv("OBS_DATABASE_URL") or "").strip()
@@ -80,6 +103,23 @@ def main() -> None:
             )
             n = conn.execute(text(qtext)).scalar()
             print(f"  {tbl}: {int(n or 0)} satir")
+
+    if "obs_announcements" in all_tabs and not is_sqlite:
+        with eng.connect() as conn:
+            cols = conn.execute(
+                text(
+                    """
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_schema = ANY (current_schemas(false))
+                      AND table_name = 'obs_announcements'
+                      AND column_name IN ('student_number', 'student_no', 'course_section_id', 'audience_type')
+                    ORDER BY column_name
+                    """
+                )
+            ).fetchall()
+            print("\n--- obs_announcements (secili kolonlar) ---")
+            for (cn,) in cols:
+                print(f"  - {cn}")
 
     print(
         "\nNOT: Ekranda ders gorup burada obs_* yoksa, backend'i calistirdigin ortamda\n"

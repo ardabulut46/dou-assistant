@@ -712,7 +712,7 @@
 			content: a.content,
 			audience_type: at,
 			section_id: a.course_section_id ?? '',
-			student_no: ''
+			student_no: (a.student_no ?? '').trim()
 		};
 		annIsActive = a.is_active !== false;
 	}
@@ -2255,6 +2255,7 @@
 							<div class="mb-1 text-xs font-semibold text-slate-500">Başlık</div>
 							<input
 								bind:value={annForm.title}
+								maxlength={255}
 								placeholder="Duyuru başlığı…"
 								class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-400/40 dark:border-white/10 dark:bg-white/5"
 							/>
@@ -2263,6 +2264,7 @@
 							<div class="mb-1 text-xs font-semibold text-slate-500">İçerik</div>
 							<textarea
 								bind:value={annForm.content}
+								maxlength={255}
 								rows="5"
 								placeholder="Duyuru içeriği…"
 								class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-400/40 dark:border-white/10 dark:bg-white/5"
@@ -2336,8 +2338,23 @@
 							{/if}
 							<button
 								on:click={async () => {
-									if (!annForm.title.trim() || !annForm.content.trim()) {
+									const t = annForm.title.trim();
+									const c = annForm.content.trim();
+									const maxLen = 255;
+									if (!t || !c) {
 										annErr = 'Başlık ve içerik zorunlu.';
+										return;
+									}
+									if (t.length > maxLen || c.length > maxLen) {
+										annErr = `Başlık ve içerik en fazla ${maxLen} karakter olabilir.`;
+										return;
+									}
+									if (annForm.audience_type === 'section' && !annForm.section_id?.trim()) {
+										annErr = 'Şube seçmelisiniz.';
+										return;
+									}
+									if (annForm.audience_type === 'student' && !annForm.student_no?.trim()) {
+										annErr = 'Öğrenci numarası girin.';
 										return;
 									}
 									annSaving = true;
@@ -2346,22 +2363,32 @@
 									try {
 										if (editingAnnId) {
 											await updateDouAcademicAnnouncement(token, editingAnnId, {
-												title: annForm.title.trim(),
-												content: annForm.content.trim(),
+												title: t,
+												content: c,
 												audience_type: annForm.audience_type,
 												course_section_id:
-													annForm.audience_type === 'section' ? annForm.section_id || null : null,
+													annForm.audience_type === 'section'
+														? annForm.section_id.trim()
+														: null,
+												student_no:
+													annForm.audience_type === 'student'
+														? annForm.student_no.trim()
+														: null,
 												is_active: annIsActive
 											});
 										} else {
 											const body: AcademicAnnouncementBody = {
-												title: annForm.title,
-												content: annForm.content,
+												title: t,
+												content: c,
 												audience_type: annForm.audience_type,
 												course_section_id:
-													annForm.audience_type === 'section' ? annForm.section_id : undefined,
+													annForm.audience_type === 'section'
+														? annForm.section_id.trim()
+														: undefined,
 												student_no:
-													annForm.audience_type === 'student' ? annForm.student_no : undefined
+													annForm.audience_type === 'student'
+														? annForm.student_no.trim()
+														: undefined
 											};
 											await createDouAcademicAnnouncement(token, body);
 										}

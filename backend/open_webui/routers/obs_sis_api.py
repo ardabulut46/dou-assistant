@@ -13,9 +13,9 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import DataError, IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from open_webui.constants import ERROR_MESSAGES
@@ -544,9 +544,7 @@ async def student_doc_create(
 async def student_me_announcements(
     user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)
 ):
-    prof = repo.get_student_profile_api(obs_db, user.id)
-    dept = prof.get("department_id") if prof else None
-    anns = repo.list_student_feed_announcements(obs_db, dept or None)
+    anns = repo.list_student_feed_announcements(obs_db, user.id)
     return {"student_user_id": user.id, "announcements": anns}
 
 
@@ -1307,7 +1305,10 @@ async def academic_get_attendance(
 ):
     if not repo.section_owned_by_instructor(obs_db, section_id, user.id):
         raise HTTPException(status_code=403, detail="Bu şube size ait değil")
-    rows = repo.section_attendance_week(obs_db, section_id, week_no)
+    try:
+        rows = repo.section_attendance_week(obs_db, section_id, week_no)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
     return {"section_id": section_id, "week_no": week_no, "records": rows}
 
 
@@ -1480,21 +1481,43 @@ async def academic_advisee_remove_enrollment(
 
 
 class AcademicAnnouncementCreate(BaseModel):
-    title: str
-    content: str
-    audience_type: str = "section"
+    title: str = Field(..., min_length=1, max_length=255)
+    content: str = Field(..., min_length=1, max_length=255)
+    audience_type: str = Field(default="section", max_length=32)
     department_id: Optional[str] = None
     course_section_id: Optional[str] = None
     student_no: Optional[str] = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _strip_text(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "title" in data and data["title"] is not None:
+                data["title"] = str(data["title"]).strip()
+            if "content" in data and data["content"] is not None:
+                data["content"] = str(data["content"]).strip()
+        return data
+
 
 class AnnouncementUpdateBody(BaseModel):
-    title: Optional[str] = None
-    content: Optional[str] = None
-    audience_type: Optional[str] = None
+    title: Optional[str] = Field(None, max_length=255)
+    content: Optional[str] = Field(None, max_length=255)
+    audience_type: Optional[str] = Field(None, max_length=32)
     department_id: Optional[str] = None
     course_section_id: Optional[str] = None
+    student_no: Optional[str] = None
     is_active: Optional[bool] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _strip_optional(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            for k in ("title", "content"):
+                if k in data and data[k] is not None:
+                    data[k] = str(data[k]).strip()
+            if "student_no" in data and data["student_no"] is not None:
+                data["student_no"] = str(data["student_no"]).strip() or None
+        return data
 
 
 @academic_user_router.get("/announcements")
@@ -1513,19 +1536,48 @@ async def academic_create_announcement(
     user=Depends(get_verified_user),
     obs_db: Session = Depends(get_obs_session),
 ):
-    aid = repo.insert_announcement(
-        obs_db,
-        user.id,
-        body.title,
-        body.content,
-        body.audience_type,
-        body.department_id,
-        body.course_section_id,
-    )
+    try:
+        did, csid, sn = repo.resolve_academic_announcement_targets(
+            obs_db,
+            user.id,
+            body.audience_type,
+            body.department_id,
+            body.course_section_id,
+            body.student_no,
+        )
+        title = repo.clamp_announcement_varchar(body.title)
+        content = repo.clamp_announcement_varchar(body.content)
+        if not title or not content:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Başlık ve içerik boş olamaz.",
+            )
+        aid = repo.insert_announcement(
+            obs_db,
+            user.id,
+            title,
+            content,
+            body.audience_type,
+            did,
+            csid,
+            student_number=sn,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Duyuru kaydedilemedi (veri veya veritabanı kısıtı).",
+        )
+    except DataError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Geçersiz alan formatı (ör. kimlik).",
+        )
     return {
         "id": aid,
-        "title": body.title,
-        "content": body.content,
+        "title": title,
+        "content": content,
         "audience_type": body.audience_type,
     }
 
@@ -1542,9 +1594,35 @@ async def academic_update_announcement(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Güncellenecek alan yok."
         )
-    ok, err = repo.update_announcement_owned(
-        obs_db, announcement_id, user.id, raw, require_creator=True
-    )
+    try:
+        if "department_id" in raw:
+            raw["department_id"] = repo.optional_uuid_param(
+                raw.get("department_id"), "Bölüm kimliği"
+            )
+        if "course_section_id" in raw:
+            raw["course_section_id"] = repo.optional_uuid_param(
+                raw.get("course_section_id"), "Şube kimliği"
+            )
+        if "title" in raw and raw["title"] is not None:
+            raw["title"] = repo.clamp_announcement_varchar(raw["title"])
+        if "content" in raw and raw["content"] is not None:
+            raw["content"] = repo.clamp_announcement_varchar(raw["content"])
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    try:
+        ok, err = repo.update_announcement_owned(
+            obs_db, announcement_id, user.id, raw, require_creator=True
+        )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Güncelleme reddedildi (veri veya veritabanı kısıtı).",
+        )
+    except DataError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Geçersiz alan formatı.",
+        )
     if not ok:
         if err == "not_found":
             raise HTTPException(status_code=404, detail="Duyuru bulunamadı.")
@@ -2254,10 +2332,20 @@ async def admin_reg_settings_post(
 
 
 class AdminAnnouncementCreate(BaseModel):
-    title: str
-    content: str
-    audience_type: str = "all"
+    title: str = Field(..., min_length=1, max_length=255)
+    content: str = Field(..., min_length=1, max_length=255)
+    audience_type: str = Field(default="all", max_length=32)
     department_id: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _strip_admin_ann(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "title" in data and data["title"] is not None:
+                data["title"] = str(data["title"]).strip()
+            if "content" in data and data["content"] is not None:
+                data["content"] = str(data["content"]).strip()
+        return data
 
 
 @admin_router.post("/announcements", status_code=status.HTTP_201_CREATED)
@@ -2266,15 +2354,36 @@ async def admin_ann_create(
     user=Depends(get_obs_admin_user),
     obs_db: Session = Depends(get_obs_session),
 ):
-    aid = repo.insert_announcement(
-        obs_db,
-        user.id,
-        body.title,
-        body.content,
-        body.audience_type,
-        body.department_id,
-        None,
-    )
+    try:
+        did = repo.optional_uuid_param(body.department_id, "Bölüm kimliği")
+        title = repo.clamp_announcement_varchar(body.title)
+        content = repo.clamp_announcement_varchar(body.content)
+        if not title or not content:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Başlık ve içerik boş olamaz.",
+            )
+        aid = repo.insert_announcement(
+            obs_db,
+            user.id,
+            title,
+            content,
+            body.audience_type,
+            did,
+            None,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Duyuru kaydedilemedi (veri veya veritabanı kısıtı).",
+        )
+    except DataError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Geçersiz alan formatı.",
+        )
     return {"id": aid}
 
 
@@ -2300,9 +2409,35 @@ async def admin_update_announcement(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Güncellenecek alan yok."
         )
-    ok, err = repo.update_announcement_owned(
-        obs_db, announcement_id, user.id, raw, require_creator=False
-    )
+    try:
+        if "department_id" in raw:
+            raw["department_id"] = repo.optional_uuid_param(
+                raw.get("department_id"), "Bölüm kimliği"
+            )
+        if "course_section_id" in raw:
+            raw["course_section_id"] = repo.optional_uuid_param(
+                raw.get("course_section_id"), "Şube kimliği"
+            )
+        if "title" in raw and raw["title"] is not None:
+            raw["title"] = repo.clamp_announcement_varchar(raw["title"])
+        if "content" in raw and raw["content"] is not None:
+            raw["content"] = repo.clamp_announcement_varchar(raw["content"])
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    try:
+        ok, err = repo.update_announcement_owned(
+            obs_db, announcement_id, user.id, raw, require_creator=False
+        )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Güncelleme reddedildi (veri veya veritabanı kısıtı).",
+        )
+    except DataError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Geçersiz alan formatı.",
+        )
     if not ok:
         if err == "not_found":
             raise HTTPException(status_code=404, detail="Duyuru bulunamadı.")
