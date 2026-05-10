@@ -4,18 +4,60 @@ import { browser } from '$app/environment';
 export const APP_NAME = 'DouGPT';
 
 /**
- * Dev: boş string — istekler sayfa köküne (örn. :5173) gider, Vite proxy backend'e yollar (CORS yok).
- * Prod: genelde API ile aynı host; yine göreli yol.
+ * API kökü. OBS `fetch` için **`getWebuiApiBaseUrl()`** kullanın (çağrı anında çözülür).
+ *
+ * Production (aynı host): boş → göreli `/api/v1`.
+ * `.env`: `VITE_OPEN_WEBUI_BACKEND_URL`.
  */
+export function getWebuiBackendOrigin(): string {
+	if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_OPEN_WEBUI_BACKEND_URL) {
+		const v = String(import.meta.env.VITE_OPEN_WEBUI_BACKEND_URL).trim();
+		if (v) return v.replace(/\/$/, '');
+	}
+	if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
+		return 'http://127.0.0.1:8080';
+	}
+	if (typeof window !== 'undefined' && window.location) {
+		const { hostname: rawHost, port, protocol } = window.location;
+		if (!port || port === '8080') return '';
+		const hostname = rawHost.replace(/^\[|\]$/g, '');
+		const looksLocal =
+			hostname === 'localhost' ||
+			hostname === '127.0.0.1' ||
+			hostname === '::1' ||
+			hostname === '0:0:0:0:0:0:0:1';
+		const looksLan =
+			/^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+			/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname);
+		if (!looksLocal && !looksLan) return '';
+		let apiHost = hostname;
+		if (looksLocal) {
+			apiHost = '127.0.0.1';
+		}
+		const hostPart =
+			apiHost.includes(':') && !apiHost.includes('.') ? `[${apiHost}]` : apiHost;
+		return `${protocol}//${hostPart}:8080`;
+	}
+	return '';
+}
+
+export function getWebuiApiBaseUrl(): string {
+	const o = getWebuiBackendOrigin();
+	return o ? `${o.replace(/\/$/, '')}/api/v1` : '/api/v1';
+}
+
 export const WEBUI_HOSTNAME = browser ? location.host : '';
 export const WEBUI_BASE_URL = browser ? '' : '';
-export const WEBUI_API_BASE_URL = `${WEBUI_BASE_URL}/api/v1`;
+/** SSR'da '' olabilir; img URL vb. API için `getWebuiApiBaseUrl` kullanın. */
+export const WEBUI_BACKEND_ORIGIN = browser ? getWebuiBackendOrigin() : '';
 
-export const OLLAMA_API_BASE_URL = `${WEBUI_BASE_URL}/ollama`;
-export const OPENAI_API_BASE_URL = `${WEBUI_BASE_URL}/openai`;
-export const AUDIO_API_BASE_URL = `${WEBUI_BASE_URL}/api/v1/audio`;
-export const IMAGES_API_BASE_URL = `${WEBUI_BASE_URL}/api/v1/images`;
-export const RETRIEVAL_API_BASE_URL = `${WEBUI_BASE_URL}/api/v1/retrieval`;
+export const WEBUI_API_BASE_URL = `${WEBUI_BACKEND_ORIGIN}/api/v1`;
+
+export const OLLAMA_API_BASE_URL = `${WEBUI_BACKEND_ORIGIN}/ollama`;
+export const OPENAI_API_BASE_URL = `${WEBUI_BACKEND_ORIGIN}/openai`;
+export const AUDIO_API_BASE_URL = `${WEBUI_BACKEND_ORIGIN}/api/v1/audio`;
+export const IMAGES_API_BASE_URL = `${WEBUI_BACKEND_ORIGIN}/api/v1/images`;
+export const RETRIEVAL_API_BASE_URL = `${WEBUI_BACKEND_ORIGIN}/api/v1/retrieval`;
 
 export const WEBUI_VERSION = APP_VERSION;
 export const WEBUI_BUILD_HASH = APP_BUILD_HASH;

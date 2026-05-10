@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import datetime
 import logging
+import math
+import numbers
 import re
 import uuid
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -28,6 +32,22 @@ from open_webui.routers import obs_sis_repository as repo
 from open_webui.utils.auth import get_password_hash, get_verified_user
 
 log = logging.getLogger(__name__)
+
+
+def _sanitize_for_json(obj: Any) -> Any:
+    """Starlette JSONResponse varsayılanında NaN/Infinity geçerli JSON değildir; tarayıcı parse edemez."""
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_for_json(v) for v in obj]
+    if isinstance(obj, bool):
+        return obj
+    if isinstance(obj, numbers.Real):
+        x = float(obj)
+        if math.isnan(x) or math.isinf(x):
+            return None
+        return obj
+    return obj
 
 
 def _parse_grade_upsert_return(raw: Any) -> tuple[int, Optional[str]]:
@@ -1962,6 +1982,19 @@ async def admin_delete_student_profile_route(
     return _admin_delete_result(ok, err)
 
 
+@admin_router.get("/advisor-assignments/instructors")
+async def admin_advisor_assignment_instructors(
+    department_id: Optional[str] = Query(None),
+    obs_db: Session = Depends(get_obs_session),
+    db: Session = Depends(get_session),
+    _u=Depends(get_obs_admin_user),
+):
+    rows = repo.list_academic_instructors_dropdown(obs_db, db, department_id)
+    rows = repo.augment_instructors_with_primary_academicians(rows, db, department_id)
+    payload = _sanitize_for_json(jsonable_encoder({"instructors": rows}))
+    return JSONResponse(content=payload)
+
+
 @admin_router.get("/course-sections")
 async def admin_sections(
     term_id: Optional[str] = Query(None),
@@ -2014,17 +2047,6 @@ async def admin_create_section(
     if not crid and body.classroom_code:
         crid = repo.resolve_classroom_id_by_code(obs_db, body.classroom_code)
     iuid = body.instructor_id or None
-    if iuid:
-        apid = repo.resolve_academic_profile_id(obs_db, iuid)
-        if not apid:
-            log.warning(
-                "[OBS-ADMIN] instructor user_id=%s icin obs_academic_profiles yok",
-                iuid,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Bu kullanıcı için obs_academic_profiles kaydı yok; önce akademisyen profili oluşturun.",
-            )
     try:
         sid = repo.admin_insert_section(
             obs_db,
@@ -2038,6 +2060,13 @@ async def admin_create_section(
             body.end_time,
             body.capacity,
         )
+    except ValueError as e:
+        if str(e) == "no_department_for_stub_profile":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Akademik özlük için en az bir bölüm tanımlı olmalıdır.",
+            ) from e
+        raise
     except IntegrityError as e:
         obs_db.rollback()
         log.warning("[OBS-ADMIN] course-sections IntegrityError: %s", e)
@@ -2083,10 +2112,11 @@ async def admin_put_section(
     try:
         row = repo.admin_update_course_section(obs_db, section_id, raw)
     except ValueError as e:
-        if str(e) == "invalid_instructor":
+        se = str(e)
+        if se == "no_department_for_stub_profile":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Seçilen kullanıcı için obs_academic_profiles kaydı yok.",
+                detail="Akademik özlük için en az bir bölüm tanımlı olmalıdır.",
             ) from e
         raise
     if not row:

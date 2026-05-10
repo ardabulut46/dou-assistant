@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any, Optional
 
-from sqlalchemy import text
+from collections import defaultdict
+
+from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
 
 USER_TBL = '"user"'
@@ -582,8 +584,16 @@ def compute_weighted_agno_totals(
 
 
 def resolve_student_profile_id(db: Session, webui_user_id: str) -> Optional[str]:
+    """Aynı user_id için birden fazla kart varsa güncel olanı seç (panel ile tutarlılık)."""
     row = db.execute(
-        text("SELECT id FROM obs_student_profiles WHERE user_id = :u LIMIT 1"),
+        text(
+            """
+            SELECT id FROM obs_student_profiles
+            WHERE user_id = :u
+            ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
+            LIMIT 1
+            """
+        ),
         {"u": webui_user_id},
     ).first()
     return _str_id(row[0]) if row else None
@@ -595,6 +605,59 @@ def resolve_academic_profile_id(db: Session, webui_user_id: str) -> Optional[str
         {"u": webui_user_id},
     ).first()
     return _str_id(row[0]) if row else None
+
+
+def ensure_academic_profile_for_user(db: Session, webui_user_id: str) -> str:
+    """
+    Danışman / şube hocası ataması için obs_academic_profiles yoksa tek satır oluşturur.
+    Bölüm olarak obs_departments içindeki ilk kayıt kullanılır (stub).
+    """
+    existing = resolve_academic_profile_id(db, webui_user_id)
+    if existing:
+        return existing
+    row = db.execute(
+        text("SELECT id FROM obs_departments ORDER BY code NULLS LAST LIMIT 1")
+    ).first()
+    if not row:
+        raise ValueError("no_department_for_stub_profile")
+    did = _str_id(row[0])
+    aid = str(uuid.uuid4())
+    db.execute(
+        text(
+            """
+            INSERT INTO obs_academic_profiles (
+                id, user_id, staff_number, title, department_id, office, phone, created_at
+            ) VALUES (
+                :id, :uid, '', '', :did, '', '', CURRENT_TIMESTAMP
+            )
+            """
+        ),
+        {"id": aid, "uid": webui_user_id, "did": did},
+    )
+    db.commit()
+    return aid
+
+
+def _allocate_auto_student_number(db: Session, hint: str) -> str:
+    """obs_student_profiles.student_number benzersiz AUTO-* üretir."""
+    cleaned = "".join(c for c in str(hint) if c.isalnum())[:14]
+    base = f"AUTO-{cleaned}" if cleaned else "AUTO"
+    base = base[:40]
+    cand = base
+    for _ in range(40):
+        n = int(
+            db.execute(
+                text(
+                    "SELECT COUNT(*) FROM obs_student_profiles WHERE student_number = :sn"
+                ),
+                {"sn": cand},
+            ).scalar()
+            or 0
+        )
+        if n == 0:
+            return cand
+        cand = f"AUTO-{uuid.uuid4().hex[:12]}"
+    return f"AUTO-{uuid.uuid4().hex}"
 
 
 def get_student_profile_api(
@@ -4236,7 +4299,12 @@ def admin_insert_section(
 ) -> dict[str, Any]:
     apid = None
     if instructor_user_id:
-        apid = resolve_academic_profile_id(db, instructor_user_id)
+        try:
+            apid = ensure_academic_profile_for_user(db, instructor_user_id)
+        except ValueError as ex:
+            if str(ex) == "no_department_for_stub_profile":
+                raise ValueError("no_department_for_stub_profile") from ex
+            raise
     sid = str(uuid.uuid4())
     db.execute(
         text("""
@@ -4418,6 +4486,113 @@ def list_sections_raw(db: Session, term_id: Optional[str]) -> list[dict[str, Any
                 else str(d["created_at"])
             )
         out.append(d)
+    return out
+
+
+def list_academic_instructors_dropdown(
+    obs_db: Session,
+    primary_db: Session,
+    department_id: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """Akademisyenler — obs_academic_profiles üzerinden; ad/e-posta ana WebUI user tablosundan."""
+    from open_webui.models.users import User
+
+    params: dict[str, Any] = {}
+    dept_sql = ""
+    if department_id and str(department_id).strip():
+        dept_sql = " AND ap.department_id = :did"
+        params["did"] = str(department_id).strip()
+    q = f"""
+        SELECT ap.id AS academic_profile_id, ap.user_id, ap.title,
+               ap.department_id, d.name AS department_name, d.code AS department_code
+        FROM obs_academic_profiles ap
+        LEFT JOIN obs_departments d ON ap.department_id = d.id
+        WHERE 1=1 {dept_sql}
+        ORDER BY d.code NULLS LAST, ap.id
+        LIMIT 1000
+        """
+    rows = obs_db.execute(text(q), params).mappings().all()
+    uid_set: set[str] = set()
+    for r in rows:
+        u = _str_id(r.get("user_id"))
+        if u:
+            uid_set.add(u)
+    nm_em: dict[str, tuple[str, str]] = {}
+    if uid_set:
+        for uid_row, nm, em in (
+            primary_db.query(User.id, User.name, User.email)
+            .filter(User.id.in_(list(uid_set)))
+            .all()
+        ):
+            nm_em[str(uid_row)] = (nm or "", em or "")
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        uid = _str_id(r.get("user_id"))
+        fn, em = nm_em.get(uid or "", ("", "")) if uid else ("", "")
+        out.append(
+            {
+                "academic_profile_id": _str_id(r.get("academic_profile_id")),
+                "user_id": uid,
+                "title": r.get("title") or "",
+                "full_name": fn,
+                "email": em,
+                "department_id": _str_id(r.get("department_id")),
+                "department_name": r.get("department_name") or "",
+                "department_code": r.get("department_code") or "",
+            }
+        )
+    out.sort(
+        key=lambda x: (
+            (x.get("department_code") or "").lower(),
+            (x.get("full_name") or "").lower(),
+        )
+    )
+    return out
+
+
+def augment_instructors_with_primary_academicians(
+    existing: list[dict[str, Any]],
+    primary_db: Session,
+    department_id: Optional[str],
+) -> list[dict[str, Any]]:
+    """
+    obs_academic_profiles boş kalsa bile ana DB'de rolü academician olan kullanıcıları listeye ekler.
+    Bölüm filtresi varken yalnızca OBS sonucunu kullanır (tutarlılık).
+    """
+    if department_id and str(department_id).strip():
+        return existing
+    from open_webui.models.users import User
+
+    seen: set[str] = set()
+    for r in existing:
+        uid = _str_id(r.get("user_id"))
+        if uid:
+            seen.add(uid)
+    out = list(existing)
+    rows = (
+        primary_db.query(User)
+        .filter(func.lower(func.coalesce(User.role, "")) == "academician")
+        .order_by(User.name)
+        .limit(500)
+        .all()
+    )
+    for u in rows:
+        uid = _str_id(u.id)
+        if not uid or uid in seen:
+            continue
+        seen.add(uid)
+        out.append(
+            {
+                "academic_profile_id": None,
+                "user_id": uid,
+                "title": "",
+                "full_name": u.name or "",
+                "email": u.email or "",
+                "department_id": None,
+                "department_name": "",
+                "department_code": "",
+            }
+        )
     return out
 
 
@@ -4682,9 +4857,12 @@ def admin_update_course_section(
     if "instructor_user_id" in u:
         uid = u.pop("instructor_user_id")
         if uid:
-            apid = resolve_academic_profile_id(db, str(uid))
-            if not apid:
-                raise ValueError("invalid_instructor")
+            try:
+                apid = ensure_academic_profile_for_user(db, str(uid))
+            except ValueError as ex:
+                if str(ex) == "no_department_for_stub_profile":
+                    raise ValueError("no_department_for_stub_profile") from ex
+                raise
             u["instructor_id"] = apid
         else:
             u["instructor_id"] = None

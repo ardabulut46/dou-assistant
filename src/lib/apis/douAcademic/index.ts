@@ -2,7 +2,7 @@
  * OBS akademik API istemcisi — uçlar Open WebUI altında PostgreSQL obs_* verisine bağlıdır.
  */
 
-import { WEBUI_API_BASE_URL } from '$lib/constants';
+import { getWebuiApiBaseUrl } from '$lib/constants';
 
 // ---------------------------------------------------------------------------
 // Yardımcı
@@ -11,7 +11,8 @@ import { WEBUI_API_BASE_URL } from '$lib/constants';
 async function authFetch<T>(path: string, token: string | null, options?: RequestInit): Promise<T> {
 	if (!token) throw new Error('Oturum tokeni yok');
 
-	const res = await fetch(`${WEBUI_API_BASE_URL}${path}`, {
+	const apiBase = getWebuiApiBaseUrl();
+	const res = await fetch(`${apiBase}${path}`, {
 		...options,
 		headers: {
 			'Content-Type': 'application/json',
@@ -21,21 +22,13 @@ async function authFetch<T>(path: string, token: string | null, options?: Reques
 		credentials: 'include'
 	});
 
-	// Yanıtı önce text olarak oku; JSON parse hatasını yakalamak için
 	const text = await res.text();
-
-	let data: unknown;
-	const trimmed = text.trim();
-	if (!trimmed) {
-		if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-		// Boş gövde + 200: bazı proxy veya hatalı ara katmanlar — `{}` varsay
-		data = {};
-	} else {
+	let data: unknown = {};
+	if (text.trim()) {
 		try {
-			data = JSON.parse(trimmed);
+			data = JSON.parse(text.replace(/^\uFEFF/, ''));
 		} catch {
-			if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-			throw new Error(`Sunucu JSON döndürmedi (${res.status}). Endpoint: ${path}`);
+			throw new Error(`HTTP ${res.status}: JSON bekleniyordu (${path})`);
 		}
 	}
 
@@ -45,18 +38,12 @@ async function authFetch<T>(path: string, token: string | null, options?: Reques
 		if (typeof raw === 'string') {
 			msg = raw;
 		} else if (Array.isArray(raw) && raw.length > 0) {
-			// FastAPI validation errors: [{loc, msg, type}, ...]
 			const first = raw[0] as { msg?: string; message?: string };
 			msg = first?.msg ?? first?.message ?? JSON.stringify(raw);
 		} else if (raw != null) {
 			msg = JSON.stringify(raw);
 		} else {
 			msg = `HTTP ${res.status}: ${res.statusText}`;
-		}
-		// detail boş / proxy HTML ise ham gövdeden ipucu (debug)
-		if (!msg.trim() || msg === `HTTP ${res.status}: ${res.statusText}`) {
-			const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 500);
-			if (snippet) msg = `${msg} — ${snippet}`;
 		}
 		throw new Error(msg);
 	}
@@ -1710,6 +1697,33 @@ export const deleteDouAdminSection = (token: string | null, sectionId: string) =
 		token,
 		{ method: 'DELETE' }
 	);
+
+// ---------------------------------------------------------------------------
+// Admin — Akademisyen listesi (şube öğretim üyesi ataması için obs_academic_profiles)
+// ---------------------------------------------------------------------------
+export type AdvisorAssignmentInstructorRow = {
+	academic_profile_id: string | null;
+	user_id: string;
+	full_name: string;
+	email: string;
+	title: string;
+	department_id: string | null;
+	department_name: string;
+	department_code: string;
+};
+
+export const getDouAdvisorAssignmentInstructors = (
+	token: string | null,
+	departmentId?: string | null
+) => {
+	const q = departmentId?.trim()
+		? `?department_id=${encodeURIComponent(departmentId.trim())}`
+		: '';
+	return authFetch<{ instructors: AdvisorAssignmentInstructorRow[] }>(
+		`/admin/advisor-assignments/instructors${q}`,
+		token
+	);
+};
 
 export const updateDouAdminAcademicProfile = (
 	token: string | null,

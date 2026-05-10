@@ -572,21 +572,6 @@ logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
 
 
-class SPAStaticFiles(StaticFiles):
-    async def get_response(self, path: str, scope):
-        try:
-            return await super().get_response(path, scope)
-        except (HTTPException, StarletteHTTPException) as ex:
-            if ex.status_code == 404:
-                if path.endswith(".js"):
-                    # Return 404 for javascript files
-                    raise ex
-                else:
-                    return await super().get_response("index.html", scope)
-            else:
-                raise ex
-
-
 if LOG_FORMAT != "json":
     print(rf"""
  ██████╗ ██████╗ ███████╗███╗   ██╗    ██╗    ██╗███████╗██████╗ ██╗   ██╗██╗
@@ -1576,10 +1561,11 @@ app.include_router(notes.router, prefix="/api/v1/notes", tags=["notes"])
 app.include_router(obs.router, prefix="/api/v1/obs", tags=["obs"])
 
 # --- OBS / akademik API (PostgreSQL obs_*; dou_academic_mock yalnızca re-export) ---
+# Admin önce: bazı ortamlarda geniş public_router kaydı ile sıra yarışı olmasın diye.
+app.include_router(dou_academic_mock.admin_router, prefix="/api/v1/admin")
 app.include_router(dou_academic_mock.public_router, prefix="/api/v1")
 app.include_router(dou_academic_mock.student_router, prefix="/api/v1/student")
 app.include_router(dou_academic_mock.academic_user_router, prefix="/api/v1/academic")
-app.include_router(dou_academic_mock.admin_router, prefix="/api/v1/admin")
 
 
 app.include_router(models.router, prefix="/api/v1/models", tags=["models"])
@@ -1642,6 +1628,8 @@ if audit_level != AuditLevel.NONE:
         excluded_paths=AUDIT_EXCLUDED_PATHS,
         max_body_size=MAX_BODY_LOG_SIZE,
     )
+
+
 ##################################
 #
 # Chat Endpoints
@@ -2698,7 +2686,7 @@ if os.path.exists(FRONTEND_BUILD_DIR):
     mimetypes.add_type("text/javascript", ".js")
     app.mount(
         "/",
-        SPAStaticFiles(directory=FRONTEND_BUILD_DIR, html=True),
+        StaticFiles(directory=FRONTEND_BUILD_DIR, html=True),
         name="spa-static-files",
     )
 else:

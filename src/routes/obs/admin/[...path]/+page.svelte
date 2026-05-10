@@ -46,6 +46,7 @@
 		updateDouAdminAnnouncement,
 		deleteDouAdminAnnouncement,
 		patchDouAdminTermRegistrationWindows,
+		getDouAdvisorAssignmentInstructors,
 		type AdminUser,
 		type AdminRole,
 		type AdminInstructor,
@@ -56,7 +57,8 @@
 		type DouCalendarEvent,
 		type DouAnnouncement,
 		type DouAdminCreateUserBody,
-		type DouStudentProfileCreateInput
+		type DouStudentProfileCreateInput,
+		type AdvisorAssignmentInstructorRow
 	} from '$lib/apis/douAcademic';
 
 	/** `user` tablosu role — API ile aynı stringler (filtre/liste/create uyumu) */
@@ -74,6 +76,10 @@
 	type PageMeta = { title: string; apiKey: string };
 	const PAGES: Record<string, PageMeta> = {
 		'/obs/admin/kullanici-yonetimi': { title: 'Kullanıcı Yönetimi', apiKey: 'users' },
+		'/obs/admin/danisman-ve-ders-atama': {
+			title: 'Şube — Öğretim Üyesi Atama',
+			apiKey: 'section-assignments'
+		},
 		'/obs/admin/rol-yonetimi': { title: 'Rol Yönetimi', apiKey: 'roles' },
 		'/obs/admin/bolum-yonetimi': { title: 'Bölüm Yönetimi', apiKey: 'departments' },
 		'/obs/admin/donem-yonetimi': { title: 'Dönem Yönetimi', apiKey: 'terms' },
@@ -320,6 +326,22 @@
 	let sectionSaved = false;
 	let sectionErr: string | null = null;
 
+	/** Şube — öğretim üyesi adayları (danisman-ve-ders-atama) */
+	let assignmentInstructorsAll: AdvisorAssignmentInstructorRow[] = [];
+	let assignmentTermId = '';
+	let assignmentSectionsList: Record<string, unknown>[] = [];
+	let sectionInstrSavingId = '';
+	let sectionDraft: Record<string, string> = {};
+
+	function syncSectionDraftFromAssignmentSections() {
+		sectionDraft = Object.fromEntries(
+			assignmentSectionsList.map((sec) => [
+				String(sec.id),
+				String(sec.instructor_user_id ?? '')
+			])
+		);
+	}
+
 	const DAYS = ['Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi'];
 	const HOURS = [
 		'08:00',
@@ -434,7 +456,40 @@
 			audit: (t) =>
 				getDouAdminAuditLogs(t).then((r) => {
 					auditLogs = (r as unknown as { logs: unknown[] }).logs ?? [];
-				})
+				}),
+			'section-assignments': async (t) => {
+				const tr = await getDouTerms(t);
+				terms = tr;
+				assignmentTermId = tr.find((x) => x.is_active)?.id ?? tr[0]?.id ?? '';
+				const [insRes, secRes] = await Promise.allSettled([
+					getDouAdvisorAssignmentInstructors(t),
+					assignmentTermId ? getDouAdminSections(t, assignmentTermId) : Promise.resolve([])
+				]);
+				if (insRes.status === 'fulfilled') {
+					assignmentInstructorsAll = [...(insRes.value.instructors ?? [])];
+				}
+				if (!assignmentInstructorsAll.length) {
+					try {
+						const ur = await getDouAdminUsers(t, { role: 'academician' });
+						assignmentInstructorsAll = (ur.users ?? []).map((u) => ({
+							academic_profile_id: null,
+							user_id: u.id,
+							full_name: u.full_name ?? u.email ?? '',
+							email: u.email ?? '',
+							title: '',
+							department_id: null,
+							department_name: '',
+							department_code: ''
+						}));
+					} catch {
+						/* ignore */
+					}
+				}
+				if (secRes.status === 'fulfilled')
+					assignmentSectionsList = secRes.value as unknown as Record<string, unknown>[];
+				else assignmentSectionsList = [];
+				syncSectionDraftFromAssignmentSections();
+			}
 		};
 		try {
 			await (loaders[apiKey]?.(token) ?? Promise.resolve());
@@ -442,6 +497,39 @@
 			loadErr = e instanceof Error ? e.message : 'API hatası.';
 		} finally {
 			loading = false;
+		}
+	}
+
+	async function reloadAssignmentSectionsOnly() {
+		const token = localStorage.token ?? null;
+		if (!token || !assignmentTermId) {
+			assignmentSectionsList = [];
+			return;
+		}
+		try {
+			const rows = await getDouAdminSections(token, assignmentTermId);
+			assignmentSectionsList = rows as unknown as Record<string, unknown>[];
+			syncSectionDraftFromAssignmentSections();
+		} catch {
+			assignmentSectionsList = [];
+			sectionDraft = {};
+		}
+	}
+
+	async function persistSectionInstructor(sectionId: string, instructorUserId: string) {
+		const token = localStorage.token ?? null;
+		if (!token) return;
+		sectionInstrSavingId = sectionId;
+		loadErr = null;
+		try {
+			await updateDouAdminSection(token, sectionId, {
+				instructor_user_id: instructorUserId || ''
+			});
+			await reloadAssignmentSectionsOnly();
+		} catch (e: unknown) {
+			loadErr = e instanceof Error ? e.message : 'Öğretim üyesi güncellenemedi.';
+		} finally {
+			sectionInstrSavingId = '';
 		}
 	}
 
@@ -2365,6 +2453,85 @@
 					</div>
 				</div>
 			</div>
+		{:else if apiKey === 'section-assignments'}
+			<div class="rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5">
+					<div class="mb-4 text-sm font-bold text-slate-800 dark:text-slate-100">
+						Şube → Öğretim üyesi (obs_course_sections)
+					</div>
+					<p class="mb-4 text-xs text-slate-500">
+						Döneme göre şubeleri listeleyip öğretim üyesi atayın.
+					</p>
+					<div class="mb-4 flex flex-wrap items-center gap-3">
+						<label class="text-xs font-semibold text-slate-500">
+							Dönem
+							<select
+								bind:value={assignmentTermId}
+								on:change={() => void reloadAssignmentSectionsOnly()}
+								class="ml-2 rounded-lg border border-black/10 px-3 py-2 text-sm dark:border-white/10 dark:bg-white/5"
+							>
+								{#each terms as tm}
+									<option value={tm.id}>{tm.name}</option>
+								{/each}
+							</select>
+						</label>
+					</div>
+					<div class="overflow-x-auto rounded-lg border border-black/10 dark:border-white/10">
+						<table class="w-full text-sm">
+							<thead class="bg-slate-50 text-xs font-bold text-slate-500 dark:bg-white/5">
+								<tr>
+									<th class="px-3 py-2 text-left">Ders</th>
+									<th class="px-3 py-2 text-center">Şb</th>
+									<th class="px-3 py-2 text-left">Öğretim üyesi</th>
+									<th class="px-3 py-2 text-left">Kaydet</th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each assignmentSectionsList as sec}
+									<tr class="border-t border-black/5 dark:border-white/10">
+										<td class="px-3 py-2">
+											<div class="font-medium">{String(sec.course_code ?? '')}</div>
+											<div class="text-xs text-slate-400">{String(sec.course_name ?? '')}</div>
+										</td>
+										<td class="px-3 py-2 text-center text-xs">{sec.section_no ?? ''}</td>
+										<td class="px-3 py-2">
+											<select
+												bind:value={sectionDraft[String(sec.id)]}
+												class="max-w-[18rem] rounded border border-black/10 px-2 py-1 text-xs dark:border-white/10 dark:bg-slate-900"
+											>
+												<option value="">— Atanmadı —</option>
+												{#each assignmentInstructorsAll as ins}
+													<option value={ins.user_id}>
+														{ins.full_name || ins.email || ins.user_id}
+													</option>
+												{/each}
+											</select>
+										</td>
+										<td class="px-3 py-2">
+											<button
+												type="button"
+												disabled={sectionInstrSavingId === String(sec.id)}
+												on:click={() =>
+													void persistSectionInstructor(
+														String(sec.id),
+														sectionDraft[String(sec.id)] ?? ''
+													)}
+												class="rounded-lg bg-violet-600 px-2 py-1 text-xs font-semibold text-white disabled:opacity-50"
+											>
+												{sectionInstrSavingId === String(sec.id) ? '…' : 'Kaydet'}
+											</button>
+										</td>
+									</tr>
+								{:else}
+									<tr>
+										<td colspan="4" class="px-3 py-8 text-center text-slate-400">
+											Bu dönemde şube yok.
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				</div>
 		{:else if apiKey === 'sections'}
 			<div class="grid grid-cols-1 gap-6 lg:grid-cols-5">
 				<!-- Sol — Form -->
