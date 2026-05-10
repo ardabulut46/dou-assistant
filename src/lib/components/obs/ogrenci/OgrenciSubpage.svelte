@@ -138,17 +138,40 @@
 	let enrollSubmitting = false;
 	let enrollSuccess: string | null = null;
 	let enrollError: string | null = null;
-	$: draftEnrollments = enrollments.filter((e) => e.status === 'draft');
+	$: draftEnrollments = enrollments.filter(
+		(e) => e.status === 'draft' && (e.enrollment_reason || '') !== 'add_drop'
+	);
 	$: hasPendingRegistration = enrollments.some((e) => e.status === 'pending');
 	$: draftAkts = draftEnrollments.reduce((s, e) => s + e.akts, 0);
 	/** Dönem yükü (API ile aynı: active + pending + draft + pending_drop) */
 	$: enrollmentScheduledAkts = enrollments
 		.filter((e) => ['active', 'pending', 'draft', 'pending_drop'].includes(e.status))
 		.reduce((s, e) => s + (e.akts || 0), 0);
-	$: addDropDraftRows = enrollments.filter((e) => e.status === 'draft');
+	$: addDropDraftRows = enrollments.filter(
+		(e) => e.status === 'draft' && (e.enrollment_reason || '') === 'add_drop'
+	);
 	$: hasPendingAddDrop = enrollments.some(
 		(e) => e.status === 'pending' || e.status === 'pending_drop'
 	);
+
+	$: addDropAktsMin = registrationLimits?.add_drop_akts_min ?? 30;
+	$: addDropAktsMax = registrationLimits?.add_drop_akts_max ?? 30;
+	$: addDropProjectedAkts = enrollments.reduce((s, e) => {
+		if (e.status === 'active' && !markedDrop.has(e.id)) return s + (e.akts || 0);
+		if (e.status === 'draft' && (e.enrollment_reason || '') === 'add_drop')
+			return s + (e.akts || 0);
+		return s;
+	}, 0);
+	$: addDropAktsOk =
+		addDropProjectedAkts >= addDropAktsMin && addDropProjectedAkts <= addDropAktsMax;
+	$: addDropAktsRuleHint = (() => {
+		const g =
+			registrationLimits?.gpa_computed ??
+			registrationLimits?.gpa ??
+			registrationLimits?.gpa_profile;
+		const gtxt = g != null ? g.toFixed(2) : '—';
+		return `Ders ekle-bırak: planlanan dönem yükü ${addDropProjectedAkts} AKTS (zorunlu aralık ${addDropAktsMin}–${addDropAktsMax} AKTS). GNO: ${gtxt}.`;
+	})();
 
 	// Ders Ekle/Bırak — bırakılacaklar + taslaklar tek pakette danışmana
 	let markedDrop: Set<string> = new Set();
@@ -399,7 +422,12 @@
 		if (!browser) return;
 		const token = localStorage.token ?? null;
 		if (!token) return;
-		const existing = enrollments.find((e) => e.status === 'draft' && e.section_id === course.id);
+		const existing = enrollments.find(
+			(e) =>
+				e.status === 'draft' &&
+				e.section_id === course.id &&
+				(e.enrollment_reason || '') !== 'add_drop'
+		);
 		enrollError = null;
 		if (hasPendingRegistration) {
 			enrollError = 'Listeniz danışman onayında; değişiklik yapılamaz.';
@@ -496,7 +524,12 @@
 		if (!browser) return;
 		const token = localStorage.token ?? null;
 		if (!token) return;
-		const existing = enrollments.find((e) => e.status === 'draft' && e.section_id === course.id);
+		const existing = enrollments.find(
+			(e) =>
+				e.status === 'draft' &&
+				e.section_id === course.id &&
+				(e.enrollment_reason || '') === 'add_drop'
+		);
 		dropError = null;
 		if (hasPendingAddDrop) {
 			dropError = 'Listeniz danışman onayında; değişiklik yapılamaz.';
@@ -507,13 +540,15 @@
 			if (existing) {
 				await deleteDouDraftEnrollment(token, existing.id);
 			} else {
-				const maxAkts = registrationLimits?.akts_max ?? 30;
-				if (enrollmentScheduledAkts + course.akts > maxAkts) {
-					dropError = `AKTS limitini aşıyor (maks. ${maxAkts}, mevcut: ${enrollmentScheduledAkts}).`;
-					setTimeout(() => (dropError = null), 4000);
+				const maxAd = registrationLimits?.add_drop_akts_max ?? 30;
+				if (addDropProjectedAkts + course.akts > maxAd) {
+					dropError = `AKTS üst sınırı (${maxAd}) aşılır (planlanan: ${addDropProjectedAkts}, eklenen: ${course.akts}).`;
+					setTimeout(() => (dropError = null), 5000);
 					return;
 				}
-				await postDouDraftEnrollments(token, [course.id], 'add_drop');
+				await postDouDraftEnrollments(token, [course.id], 'add_drop', {
+					exclude_drop_enrollment_ids: [...markedDrop]
+				});
 			}
 			await loadPage();
 		} catch (e: unknown) {
@@ -550,12 +585,12 @@
 					receiver_user_id: advisorRid2,
 					receiver_name: 'Danışmanım',
 					receiver_type: 'akademisyen',
-					subject: 'Ders ekle/bırak — onay',
-					body: `Sayın Danışmanım,\n\nEkle/bırak paketimi onayınıza gönderdim.\n\n${adds || '(yeni ders yok)'}\n\n${drops || '(bırakma yok)'}\n\nSaygılarımla`
+					subject: 'Ders ekle-bırak — Danışman onayı',
+					body: `Sayın Danışmanım,\n\nDers değişiklik talebimi danışman onayınıza gönderdim.\n\n${adds || '(yeni ders yok)'}\n\n${drops || '(bırakma yok)'}\n\nPlanlanan dönem yükü: ${addDropProjectedAkts} AKTS.\n\nSaygılarımla`
 				}).catch(() => {});
 			}
 			dropSuccess =
-				'Paket danışman onayına gönderildi; yeni dersler ve bırakma işaretleri kilitlendi.';
+				'Talebiniz danışman onayına iletildi; taslak eklemeler ve bırakma işaretleri geçici olarak kilitlendi.';
 			markedDrop = new Set();
 			await loadPage();
 		} catch (e: unknown) {
@@ -1139,7 +1174,7 @@
 				>
 					<div class="mb-3 flex items-center justify-between">
 						<span class="font-semibold text-emerald-800 dark:text-emerald-200"
-							>Taslak sepet ({draftEnrollments.length} ders · {draftAkts} AKTS)</span
+							>Taslak kayıt listesi ({draftEnrollments.length} ders · {draftAkts} AKTS)</span
 						>
 						<button
 							on:click={clearAllDraftEnrollments}
@@ -1195,7 +1230,7 @@
 						{/if}
 						{enrollSubmitting
 							? 'Gönderiliyor…'
-							: '✓ Danışmana Gönder (listeyi kilitle)'}
+							: 'Danışman onayına gönder'}
 					</button>
 				</div>
 			{:else if enrollSuccess}
@@ -1235,7 +1270,10 @@
 						<tbody>
 							{#each availableCourses as c}
 								{@const inCart = enrollments.some(
-									(x) => x.status === 'draft' && x.section_id === c.id
+									(x) =>
+										x.status === 'draft' &&
+										x.section_id === c.id &&
+										(x.enrollment_reason || '') !== 'add_drop'
 								)}
 								{@const full = c.enrolled >= c.capacity}
 								<tr
@@ -1282,7 +1320,7 @@
 													? 'bg-sky-100 text-sky-700 ring-1 ring-sky-300 dark:bg-sky-900/40 dark:text-sky-300'
 													: 'bg-slate-100 text-slate-600 hover:bg-sky-50 hover:text-sky-700 dark:bg-white/10 dark:hover:bg-sky-900/20'}"
 											>
-												{inCart ? 'Sepette' : 'Sepete ekle'}
+												{inCart ? 'Taslakta' : 'Ders ekle'}
 											</button>
 										{/if}
 									</td>
@@ -1305,6 +1343,11 @@
 		{:else if apiKey === 'ders-ekle'}
 			<p class="mb-2 text-xs text-slate-500">Dönem: {addDropTermLabel}</p>
 			<div
+				class="mb-3 rounded-lg border border-sky-100 bg-sky-50/80 px-4 py-2 text-xs text-sky-900 dark:border-sky-900/40 dark:bg-sky-950/30 dark:text-sky-200"
+			>
+				{addDropAktsRuleHint}
+			</div>
+			<div
 				class="rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
 			>
 				<div
@@ -1324,15 +1367,17 @@
 					{#if addDropDraftRows.length || markedDrop.size}
 						<button
 							on:click={submitAddDropPackage}
-							disabled={dropSubmitting || hasPendingAddDrop}
+							disabled={dropSubmitting || hasPendingAddDrop || !addDropAktsOk}
 							type="button"
 							class="flex items-center gap-1.5 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-500 disabled:opacity-50 transition-colors"
 						>
 							{dropSubmitting
 								? 'Gönderiliyor…'
 								: hasPendingAddDrop
-									? 'Liste kilitli'
-									: '→ Paketi danışmana gönder'}
+									? 'Talep işlemde'
+									: !addDropAktsOk
+										? 'AKTS aralığı uygun değil'
+										: 'Danışman onayına gönder'}
 						</button>
 					{/if}
 				</div>
@@ -1341,7 +1386,7 @@
 					<div
 						class="mt-0 border-b border-amber-100 bg-amber-50/80 px-5 py-2 text-xs text-amber-800 dark:border-amber-900/30 dark:bg-amber-950/30 dark:text-amber-200"
 					>
-						Listeniz danışman onayında; kesinleşene veya reddedilene kadar değişiklik yapılamaz.
+						Ders değişiklik talebiniz danışman onayında; sonuçlanana kadar değişiklik yapılamaz.
 					</div>
 				{/if}
 
@@ -1378,7 +1423,7 @@
 							</tr>
 						</thead>
 						<tbody>
-							{#each enrollments.filter((x) => ['active', 'pending_drop', 'pending', 'draft'].includes(x.status)) as e}
+							{#each enrollments.filter((x) => ['active', 'pending_drop', 'pending', 'draft'].includes(x.status) && (x.status !== 'draft' || (x.enrollment_reason || '') === 'add_drop')) as e}
 								{@const eId = e.id ?? e.course_code}
 								{@const marked = markedDrop.has(eId)}
 								{@const st = e.status}
@@ -1459,8 +1504,7 @@
 											<button
 												type="button"
 												class="text-xs font-semibold text-red-600 hover:underline"
-												on:click={() => removeDraftEnrollmentRow(eId)}>Kaldır</button
-											>
+												on:click={() => removeDraftEnrollmentRow(eId)}>Eklemeyi iptal et</button>
 										{/if}
 									</td>
 								</tr>
@@ -1478,9 +1522,9 @@
 					<div
 						class="border-t border-black/5 bg-slate-50/50 px-5 py-3 text-xs text-slate-600 dark:border-white/10 dark:bg-white/5 dark:text-slate-400"
 					>
-						Aktif dersleri işaretleyerek bırakma talebinizi sepete ekleyin; aşağıdan yeni şube
-						ekleyin. Tek pakette danışmana gönderilir; kesinleşince eklenenler kayda, işaretlenenler
-						düşer.
+						Aktif derslerinizden çıkarmak istediklerinizi işaretleyin; açılan şubelerden yeni ders
+						ekleyin. Tek talep olarak danışman onayına gönderilir; onay sonrası eklenenler kayda,
+						işaretlenenler düşer.
 					</div>
 				{/if}
 			</div>
@@ -1492,7 +1536,7 @@
 					class="flex items-center justify-between border-b border-black/5 px-5 py-3 dark:border-white/10"
 				>
 					<div class="text-sm font-bold text-slate-600 dark:text-slate-300">
-						Ekle-bırak için açılan dersler
+						Ders ekle-bırak için açılan şubeler
 					</div>
 					<div class="text-xs text-slate-400">{availableCourses.length} şube</div>
 				</div>
@@ -1552,7 +1596,7 @@
 										{#if full && !inCart}
 											<span class="text-xs text-slate-300">—</span>
 										{:else if hasPendingAddDrop}
-											<span class="text-xs text-slate-400" title="Liste kilitli">Kilitli</span>
+											<span class="text-xs text-slate-400" title="Talep kilitli">Kilitli</span>
 										{:else}
 											<button
 												type="button"
@@ -1562,7 +1606,7 @@
 													? 'bg-sky-100 text-sky-700 ring-1 ring-sky-300 dark:bg-sky-900/40 dark:text-sky-300'
 													: 'bg-slate-100 text-slate-600 hover:bg-sky-50 hover:text-sky-700 dark:bg-white/10 dark:hover:bg-sky-900/20'}"
 											>
-												{inCart ? 'Sepette' : 'Sepete ekle'}
+												{inCart ? 'Taslakta' : 'Ders ekle'}
 											</button>
 										{/if}
 									</td>

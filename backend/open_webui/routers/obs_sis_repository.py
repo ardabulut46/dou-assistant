@@ -286,6 +286,12 @@ LETTER_POINTS: dict[str, float] = {
 BATCH_TERM_NOTE_PREFIX = "BATCH_TERM:"
 BATCH_ADDDROP_TERM_NOTE_PREFIX = "BATCH_ADDDROP_TERM:"
 
+# Ders ekle-bırak (add_drop): zorunlu AKTS tabanı ve GNO ile üst sınır (çakışma kontrolü bu modda yok).
+ADD_DROP_AKTS_MIN_NORMAL = 30
+ADD_DROP_GPA_EXTRA_AKTS_THRESHOLD = 2.5
+ADD_DROP_AKTS_MAX_BELOW_THRESHOLD = 30
+ADD_DROP_AKTS_MAX_FROM_THRESHOLD = 35
+
 # Öğrenci arayüzü gün filtreleri Türkçe (Pazartesi, …). DB İngilizce veya sayı olabilir.
 _EN_WEEKDAY_TO_TR: dict[str, str] = {
     "monday": "Pazartesi",
@@ -1324,7 +1330,7 @@ def list_enrollments(
         st = ("active",)
     in_clause = ", ".join(f"'{x}'" for x in st)
     q = f"""
-        SELECT ce.id AS enrollment_id, ce.status,
+        SELECT ce.id AS enrollment_id, ce.status, COALESCE(ce.enrollment_reason, '') AS enrollment_reason,
                c.id AS course_id, c.code AS course_code, c.name AS course_name, c.credits, c.akts,
                c.theory_hours, c.language, c.class_year, c.type,
                cs.id AS section_id, cs.term_id, cs.section_no, cs.day_of_week,
@@ -1373,6 +1379,7 @@ def list_enrollments(
                 "class_year": int(r.get("class_year") or 0),
                 "type": r.get("type") or "",
                 "status": r.get("status") or "",
+                "enrollment_reason": r.get("enrollment_reason") or "",
                 "registration_priority_tier": ptier,
                 "registration_priority_label": plab,
             }
@@ -2996,6 +3003,238 @@ def _revert_adddrop_batch(
         _purge_enrollment_row(db, student_profile_id, _str_id(ar[0]))
 
 
+def add_drop_effective_agno(db: Session, student_profile_id: str) -> Optional[float]:
+    """Ekle-bırak AKTS üst sınırı için kullanılan GNO (ağırlıklı hesap öncelikli, yoksa profil)."""
+    agno, _ = compute_weighted_agno_totals(db, student_profile_id)
+    grow = db.execute(
+        text("SELECT gpa FROM obs_student_profiles WHERE id = :id"),
+        {"id": student_profile_id},
+    ).first()
+    profile_gpa = float(grow[0]) if grow and grow[0] is not None else None
+    if agno is not None:
+        return float(agno)
+    return profile_gpa
+
+
+def add_drop_akts_min_max_for_student(db: Session, student_profile_id: str, term_id: str) -> tuple[int, int]:
+    """(min_akts, max_akts) ders ekle-bırak paketi için. Hazırlık sınıfı: yalnızca mevcut tavan."""
+    if student_is_prep(db, student_profile_id):
+        mx_reg, _, _ = effective_akts_limit_for_student(db, student_profile_id, term_id)
+        imx = max(0, int(mx_reg))
+        return (imx, imx)
+    gpa_eff = add_drop_effective_agno(db, student_profile_id)
+    if gpa_eff is not None and gpa_eff >= ADD_DROP_GPA_EXTRA_AKTS_THRESHOLD:
+        return (ADD_DROP_AKTS_MIN_NORMAL, ADD_DROP_AKTS_MAX_FROM_THRESHOLD)
+    return (ADD_DROP_AKTS_MIN_NORMAL, ADD_DROP_AKTS_MAX_BELOW_THRESHOLD)
+
+
+def add_drop_projected_load_before_submit(
+    db: Session, student_profile_id: str, term_id: str, drop_enrollment_ids: Optional[list[str]]
+) -> int:
+    """Bırakılacaklar henüz pending_drop değilken: aktif (bırakılacak hariç) + add_drop taslakları."""
+    drops = [x for x in (drop_enrollment_ids or []) if x]
+    if not drops:
+        row = db.execute(
+            text("""
+            SELECT COALESCE(SUM(c.akts), 0) FROM obs_course_enrollments ce
+            JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+            JOIN obs_courses c ON cs.course_id = c.id
+            WHERE ce.student_id = :spid AND cs.term_id = :tid
+              AND (
+                ce.status = 'active'
+                OR (ce.status = 'draft' AND COALESCE(ce.enrollment_reason, '') = 'add_drop')
+              )
+            """),
+            {"spid": student_profile_id, "tid": term_id},
+        ).scalar()
+        return int(row or 0)
+    in_ph = ", ".join(f":d{i}" for i in range(len(drops)))
+    bind: dict[str, Any] = {"spid": student_profile_id, "tid": term_id}
+    for i, eid in enumerate(drops):
+        bind[f"d{i}"] = eid
+    row = db.execute(
+        text(f"""
+            SELECT COALESCE(SUM(c.akts), 0) FROM obs_course_enrollments ce
+            JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+            JOIN obs_courses c ON cs.course_id = c.id
+            WHERE ce.student_id = :spid AND cs.term_id = :tid
+              AND (
+                (ce.status = 'active' AND ce.id NOT IN ({in_ph}))
+                OR (ce.status = 'draft' AND COALESCE(ce.enrollment_reason, '') = 'add_drop')
+              )
+            """),
+        bind,
+    ).scalar()
+    return int(row or 0)
+
+
+def add_drop_projected_load_pending_review(
+    db: Session, student_profile_id: str, term_id: str
+) -> int:
+    """Danışman onayı beklerken: korunan aktifler + eklenecek pending add_drop (bırakılacaklar hariç)."""
+    row = db.execute(
+        text("""
+        SELECT COALESCE(SUM(c.akts), 0) FROM obs_course_enrollments ce
+        JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+        JOIN obs_courses c ON cs.course_id = c.id
+        WHERE ce.student_id = :spid AND cs.term_id = :tid
+          AND (
+            ce.status = 'active'
+            OR (ce.status = 'pending' AND COALESCE(ce.enrollment_reason, '') IN ('add_drop', 'advisor_added'))
+          )
+        """),
+        {"spid": student_profile_id, "tid": term_id},
+    ).scalar()
+    return int(row or 0)
+
+
+def validate_add_drop_akts_bounds(
+    db: Session, student_profile_id: str, term_id: str, projected_akts: int
+) -> tuple[bool, str]:
+    mn, mx = add_drop_akts_min_max_for_student(db, student_profile_id, term_id)
+    if projected_akts < mn:
+        return (
+            False,
+            f"Danışman onayına göndermek için en az {mn} AKTS olmalıdır (hesaplanan dönem yükü: {projected_akts} AKTS). "
+            f"Ders yükünüzü {mn} AKTS ve üzerine tamamlayınız.",
+        )
+    if projected_akts > mx:
+        gno = add_drop_effective_agno(db, student_profile_id)
+        gtxt = f"{gno:.2f}" if gno is not None else "—"
+        cap = (
+            ADD_DROP_AKTS_MAX_FROM_THRESHOLD
+            if gno is not None and gno >= ADD_DROP_GPA_EXTRA_AKTS_THRESHOLD
+            else ADD_DROP_AKTS_MAX_BELOW_THRESHOLD
+        )
+        return (
+            False,
+            f"AKTS üst sınırı {mx} aşıldı (hesaplanan yük: {projected_akts} AKTS). "
+            f"Kullanılan GNO: {gtxt}; bu GNO için üst sınır {cap} AKTS olabilir.",
+        )
+    return True, ""
+
+
+def _is_student_add_drop_pending_batch(db: Session, student_profile_id: str, term_id: str) -> bool:
+    row = db.execute(
+        text("""
+        SELECT 1 FROM obs_course_enrollments ce
+        JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+        WHERE ce.student_id = :spid AND cs.term_id = :tid
+          AND (
+            ce.status = 'pending_drop'
+            OR (ce.status = 'pending' AND COALESCE(ce.enrollment_reason, '') = 'add_drop')
+          )
+        LIMIT 1
+        """),
+        {"spid": student_profile_id, "tid": term_id},
+    ).first()
+    return row is not None
+
+
+def build_add_drop_approval_detail(
+    db: Session, advisor_user_id: str, student_webui_user_id: str, term_id: str
+) -> Optional[dict[str, Any]]:
+    """Danışman ekranı: öğrenci özeti + eklenen / bırakılacak / korunan dersler."""
+    spid = resolve_student_profile_id(db, student_webui_user_id)
+    if not spid or not _ensure_advisor_for_student(db, advisor_user_id, spid):
+        return None
+    stud = (
+        db.execute(
+            text("""
+            SELECT u.name AS full_name, sp.student_number,
+                   d.name AS department_name, d.code AS department_code
+            FROM obs_student_profiles sp
+            JOIN "user" u ON u.id = sp.user_id
+            LEFT JOIN obs_departments d ON d.id = sp.department_id
+            WHERE sp.id = :spid
+            """),
+            {"spid": spid},
+        )
+        .mappings()
+        .first()
+    )
+    tname = (
+        db.execute(
+            text("SELECT name FROM obs_terms WHERE id = :tid LIMIT 1"), {"tid": term_id}
+        )
+        .scalar()
+    )
+    gno = add_drop_effective_agno(db, spid)
+    mn, mx = add_drop_akts_min_max_for_student(db, spid, term_id)
+    proj = add_drop_projected_load_pending_review(db, spid, term_id)
+    rows = (
+        db.execute(
+            text("""
+            SELECT ce.id AS enrollment_id, ce.status, COALESCE(ce.enrollment_reason, '') AS enrollment_reason,
+                   c.code AS course_code, c.name AS course_name, COALESCE(c.akts, 0) AS akts
+            FROM obs_course_enrollments ce
+            JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+            JOIN obs_courses c ON cs.course_id = c.id
+            WHERE ce.student_id = :spid AND cs.term_id = :tid
+              AND ce.status IN ('active', 'pending', 'pending_drop')
+            ORDER BY c.code
+            """),
+            {"spid": spid, "tid": term_id},
+        )
+        .mappings()
+        .all()
+    )
+    added: list[dict[str, Any]] = []
+    dropped: list[dict[str, Any]] = []
+    kept: list[dict[str, Any]] = []
+    for r in rows:
+        st = r.get("status") or ""
+        er = r.get("enrollment_reason") or ""
+        item = {
+            "enrollment_id": _str_id(r.get("enrollment_id")),
+            "course_code": r.get("course_code") or "",
+            "course_name": r.get("course_name") or "",
+            "akts": int(r.get("akts") or 0),
+        }
+        if st == "pending_drop":
+            dropped.append(item)
+        elif st == "pending" and er in ("add_drop", "advisor_added"):
+            added.append(item)
+        elif st == "active":
+            kept.append(item)
+    return {
+        "student_user_id": student_webui_user_id,
+        "student_name": (stud or {}).get("full_name") or "",
+        "student_no": (stud or {}).get("student_number") or "",
+        "department_name": (stud or {}).get("department_name")
+        or (stud or {}).get("department_code")
+        or "",
+        "term_id": term_id,
+        "term_name": str(tname or ""),
+        "agno": float(gno) if gno is not None else None,
+        "akts_min": mn,
+        "akts_max": mx,
+        "projected_akts": proj,
+        "added_courses": added,
+        "dropped_courses": dropped,
+        "kept_courses": kept,
+    }
+
+
+def enrich_approval_requests_add_drop(
+    db: Session, academic_user_id: str, reqs: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    for r in reqs:
+        if (r.get("request_type") or "") != "schedule_batch":
+            continue
+        note = r.get("note") or ""
+        tid, flow = _batch_flow_and_term_from_note(note)
+        if flow != "add_drop" or not tid:
+            continue
+        suid = r.get("student_user_id") or ""
+        if not suid:
+            continue
+        det = build_add_drop_approval_detail(db, academic_user_id, str(suid), str(tid))
+        if det:
+            r["add_drop_detail"] = det
+    return reqs
+
+
 def student_term_scheduled_akts(db: Session, student_profile_id: str, term_id: str) -> int:
     """Dönemdeki yük: active + pending + draft + pending_drop (henüz düşmemiş)."""
     row = db.execute(
@@ -3097,9 +3336,12 @@ def student_registration_limits_payload(
             "min_gpa_for_high_akts": 2.50,
             "min_gpa_for_top_akts": 3.50,
             "program_semester_number": psem,
+            "add_drop_akts_min": ADD_DROP_AKTS_MIN_NORMAL,
+            "add_drop_akts_max": ADD_DROP_AKTS_MAX_BELOW_THRESHOLD,
         }
     akts_max, rule, det = effective_akts_limit_for_student(db, spid, tid)
     load = student_term_scheduled_akts(db, spid, tid)
+    ad_mn, ad_mx = add_drop_akts_min_max_for_student(db, spid, tid)
     return {
         "student_user_id": webui_user_id,
         "term_id": tid,
@@ -3118,6 +3360,8 @@ def student_registration_limits_payload(
         "min_gpa_for_high_akts": det["min_gpa_for_high_akts"],
         "min_gpa_for_top_akts": det["min_gpa_for_top_akts"],
         "program_semester_number": int(det.get("program_semester_number") or 1),
+        "add_drop_akts_min": ad_mn,
+        "add_drop_akts_max": ad_mx,
     }
 
 
@@ -3126,6 +3370,7 @@ def upsert_draft_enrollments(
     webui_user_id: str,
     section_ids: list[str],
     mode: str,
+    exclude_drop_enrollment_ids: Optional[list[str]] = None,
 ) -> tuple[list[dict[str, Any]], Optional[str]]:
     """Taslak satırlar — obs_course_enrollments.status = draft. mode: registration | add_drop"""
     spid = resolve_student_profile_id(db, webui_user_id)
@@ -3173,24 +3418,36 @@ def upsert_draft_enrollments(
         if dup:
             continue
         batch_sids = [str(x["section_id"]) for x in out if x.get("section_id")]
-        sc_msg = schedule_conflict_message_for_section(
-            db, spid, tid, sid, batch_sids
-        )
-        if sc_msg:
-            return [], sc_msg
+        if mode != "add_drop":
+            sc_msg = schedule_conflict_message_for_section(
+                db, spid, tid, sid, batch_sids
+            )
+            if sc_msg:
+                return [], sc_msg
         taken = int(meta.get("taken") or 0)
         cap = int(meta.get("capacity") or 0)
         if cap and taken >= cap:
             return [], "Kontenjan dolu."
         new_akts = int(meta.get("course_akts") or 0)
-        load = student_term_scheduled_akts(db, spid, tid)
         queued = sum(int(x.get("akts") or 0) for x in out)
-        akts_max, _, _ = effective_akts_limit_for_student(db, spid, tid)
-        if load + queued + new_akts > akts_max:
-            return (
-                [],
-                f"AKTS üst sınırı ({akts_max}) aşılır (mevcut yük: {load + queued}, eklenecek: {new_akts}).",
+        if mode == "add_drop":
+            base_proj = add_drop_projected_load_before_submit(
+                db, spid, tid, exclude_drop_enrollment_ids
             )
+            _, mx_ad = add_drop_akts_min_max_for_student(db, spid, tid)
+            if base_proj + queued + new_akts > mx_ad:
+                return (
+                    [],
+                    f"Ders ekle-bırak AKTS üst sınırı ({mx_ad}) aşılır (planlanan yük: {base_proj + queued}, eklenecek: {new_akts} AKTS).",
+                )
+        else:
+            load = student_term_scheduled_akts(db, spid, tid)
+            akts_max, _, _ = effective_akts_limit_for_student(db, spid, tid)
+            if load + queued + new_akts > akts_max:
+                return (
+                    [],
+                    f"AKTS üst sınırı ({akts_max}) aşılır (mevcut yük: {load + queued}, eklenecek: {new_akts}).",
+                )
         eid = str(uuid.uuid4())
         db.execute(
             text("""
@@ -3355,10 +3612,10 @@ def submit_schedule_to_advisor(
         ok, reason = _term_window_allowed(db, term_id, "add_drop")
         if not ok:
             return None, reason
-        akts_max, _, _ = effective_akts_limit_for_student(db, spid, term_id)
-        load = student_term_scheduled_akts(db, spid, term_id)
-        if load > akts_max:
-            return None, f"AKTS toplamı ({load}) üst sınırı ({akts_max}) a çıkamaz; sepeti güncelleyin."
+        proj = add_drop_projected_load_before_submit(db, spid, term_id, eids_drop)
+        ok_ak, msg_ak = validate_add_drop_akts_bounds(db, spid, term_id, proj)
+        if not ok_ak:
+            return None, msg_ak
         if eids_drop:
             if not all(isinstance(x, str) and x for x in eids_drop):
                 return None, "Geçersiz bırakma listesi."
@@ -3487,20 +3744,30 @@ def advisor_add_enrollment_line(
     ).first()
     if dup:
         return None, "Bu ders zaten listede."
-    sc_msg = schedule_conflict_message_for_section(
-        db, spid, tid, section_id, None
-    )
-    if sc_msg:
-        return None, sc_msg
+    if not _is_student_add_drop_pending_batch(db, spid, tid):
+        sc_msg = schedule_conflict_message_for_section(
+            db, spid, tid, section_id, None
+        )
+        if sc_msg:
+            return None, sc_msg
     taken = int(meta.get("taken") or 0)
     cap = int(meta.get("capacity") or 0)
     if cap and taken >= cap:
         return None, "Kontenjan dolu."
     new_akts = int(meta.get("course_akts") or 0)
-    load = student_term_scheduled_akts(db, spid, tid)
-    akts_max, _, _ = effective_akts_limit_for_student(db, spid, tid)
-    if load + new_akts > akts_max:
-        return None, f"Öğrencinin AKTS üst sınırı ({akts_max}) aşılır (mevcut: {load})."
+    if _is_student_add_drop_pending_batch(db, spid, tid):
+        proj = add_drop_projected_load_pending_review(db, spid, tid)
+        _, mx_ad = add_drop_akts_min_max_for_student(db, spid, tid)
+        if proj + new_akts > mx_ad:
+            return (
+                None,
+                f"Ders ekle-bırak AKTS üst sınırı ({mx_ad}) aşılır (planlanan yük: {proj}, eklenecek: {new_akts}).",
+            )
+    else:
+        load = student_term_scheduled_akts(db, spid, tid)
+        akts_max, _, _ = effective_akts_limit_for_student(db, spid, tid)
+        if load + new_akts > akts_max:
+            return None, f"Öğrencinin AKTS üst sınırı ({akts_max}) aşılır (mevcut: {load})."
     eid = str(uuid.uuid4())
     db.execute(
         text("""
@@ -3639,6 +3906,10 @@ def finalize_advisee_schedule(
     if not tnote or tnote != term_id:
         return False, "Talep bu dönem ile eşleşmiyor."
     if flow == "add_drop":
+        proj = add_drop_projected_load_pending_review(db, spid, term_id)
+        ok_b, msg_b = validate_add_drop_akts_bounds(db, spid, term_id, proj)
+        if not ok_b:
+            return False, msg_b
         _finalize_adddrop_batch(db, spid, term_id)
     else:
         _finalize_pending_enrollments_for_term(db, spid, term_id)
@@ -3763,7 +4034,7 @@ def resolve_approval(
     approver_user_id: str,
     approve: bool,
     note: Optional[str],
-) -> bool:
+) -> tuple[bool, Optional[str]]:
     row = (
         db.execute(
             text("""
@@ -3777,7 +4048,7 @@ def resolve_approval(
         .first()
     )
     if not row or (row.get("status") or "") != "pending":
-        return False
+        return False, None
     req_type = row.get("request_type") or ""
     spid_prof = str(row["student_id"])
     if approve and req_type == "drop_request" and row.get("related_enrollment_id"):
@@ -3790,12 +4061,17 @@ def resolve_approval(
         )
     if req_type == "schedule_batch":
         if not _ensure_advisor_for_student(db, approver_user_id, spid_prof):
-            return False
+            return False, None
         term_id, flow = _batch_flow_and_term_from_note(row.get("note"))
         if not term_id:
-            return False
+            return False, None
         if approve:
             if flow == "add_drop":
+                proj = add_drop_projected_load_pending_review(db, spid_prof, term_id)
+                ok_b, msg_b = validate_add_drop_akts_bounds(db, spid_prof, term_id, proj)
+                if not ok_b:
+                    db.rollback()
+                    return False, msg_b
                 _finalize_adddrop_batch(db, spid_prof, term_id)
             else:
                 _finalize_pending_enrollments_for_term(db, spid_prof, term_id)
@@ -3813,7 +4089,9 @@ def resolve_approval(
         {"st": st, "note": note, "rid": request_id, "aid": approver_user_id},
     )
     db.commit()
-    return res.rowcount > 0
+    if res.rowcount > 0:
+        return True, None
+    return False, None
 
 
 def _announcement_target_student_select_sql(db: Session) -> str:

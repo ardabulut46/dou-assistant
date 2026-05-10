@@ -134,6 +134,8 @@ export type DouEnrollment = {
 	class_year?: number;
 	type?: string;
 	status: string;
+	/** Taslak satırda: registration | add_drop | advisor_added … */
+	enrollment_reason?: string;
 	registration_priority_tier?: number;
 	registration_priority_label?: string;
 };
@@ -310,6 +312,29 @@ export type DouMessagesResponse = {
 	_mock?: boolean;
 };
 
+export type DouAddDropCourseLine = {
+	enrollment_id: string;
+	course_code: string;
+	course_name: string;
+	akts: number;
+};
+
+export type DouAddDropApprovalDetail = {
+	student_user_id: string;
+	student_name: string;
+	student_no: string;
+	department_name: string;
+	term_id: string;
+	term_name: string;
+	agno: number | null;
+	akts_min: number;
+	akts_max: number;
+	projected_akts: number;
+	added_courses: DouAddDropCourseLine[];
+	dropped_courses: DouAddDropCourseLine[];
+	kept_courses: DouAddDropCourseLine[];
+};
+
 export type DouApprovalRequest = {
 	id: string;
 	student_user_id?: string;
@@ -322,6 +347,8 @@ export type DouApprovalRequest = {
 	status: string;
 	note?: string | null;
 	created_at: string;
+	/** schedule_batch + add_drop talepleri için danışman özeti */
+	add_drop_detail?: DouAddDropApprovalDetail;
 };
 
 export type DouCalendarEvent = {
@@ -449,6 +476,10 @@ export type DouStudentRegistrationLimits = {
 	min_gpa_for_high_akts: number;
 	min_gpa_for_top_akts: number;
 	program_semester_number: number;
+	/** Ders ekle-bırak: danışman onayına gönderilecek paket için zorunlu taban (çoğunlukla 30). */
+	add_drop_akts_min?: number;
+	/** Ders ekle-bırak: GNO ≥ 2,50 ise 35, aksi 30 (hazırlıkta farklı olabilir). */
+	add_drop_akts_max?: number;
 };
 
 export const getDouStudentRegistrationLimits = (token: string | null, termId?: string) => {
@@ -1250,11 +1281,16 @@ export const createDouEnrollmentRequest = (
 export const postDouDraftEnrollments = (
 	token: string | null,
 	sectionIds: string[],
-	mode: 'registration' | 'add_drop' = 'registration'
+	mode: 'registration' | 'add_drop' = 'registration',
+	opts?: { exclude_drop_enrollment_ids?: string[] }
 ) =>
 	authFetch<{ created: unknown[]; count: number }>('/student/me/draft-enrollments', token, {
 		method: 'POST',
-		body: JSON.stringify({ section_ids: sectionIds, mode })
+		body: JSON.stringify({
+			section_ids: sectionIds,
+			mode,
+			exclude_drop_enrollment_ids: opts?.exclude_drop_enrollment_ids ?? []
+		})
 	});
 
 export const deleteDouDraftEnrollment = (token: string | null, enrollmentId: string) =>

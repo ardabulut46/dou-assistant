@@ -2048,7 +2048,7 @@
 								on:click={() => loadAdviseeEnrollments(adv.student_user_id ?? '')}
 								class="rounded-lg bg-sky-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-sky-400"
 							>
-								Liste
+								Ders yükü
 							</button>
 						</div>
 					</div>
@@ -2063,7 +2063,7 @@
 				>
 					<div class="flex flex-wrap items-center justify-between gap-2">
 						<span class="text-sm font-bold text-indigo-900 dark:text-indigo-100">
-							Ders listesi — öğrenci user:
+							Öğrencinin ders yükü — kullanıcı:
 							<span class="font-mono text-xs">{adviseeDetailUserId}</span>
 						</span>
 						<button
@@ -2126,7 +2126,7 @@
 								on:click={() => adviseeDetailUserId && runFinalizeSched(adviseeDetailUserId)}
 								class="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
 							>
-								Kesinleştir (pending → active, schedule_batch onay)
+								Kesinleştir (onaylanmış ders değişiklik talebi → kayıt)
 							</button>
 							<button
 								type="button"
@@ -2138,9 +2138,9 @@
 							</button>
 						</div>
 						<p class="text-xs text-indigo-800/80 dark:text-indigo-200/80">
-							Aynı işlem <strong>Onay Talepleri</strong> sayfasındaki «Liste» talebi için «Onayla /
-							Reddet» ile de yapılabilir; DB: obs_approval_requests (schedule_batch) +
-							obs_course_enrollments.
+							Aynı işlem <strong>Onay Talepleri</strong> sayfasındaki talepler için <strong>Onayla</strong> veya
+							<strong>Reddet</strong> ile de yapılabilir; kayıtlar <code>obs_approval_requests</code> ve
+							<code>obs_course_enrollments</code> üzerinden güncellenir.
 						</p>
 					{/if}
 				</div>
@@ -2163,16 +2163,106 @@
 						class="rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5"
 					>
 						<div class="flex items-start justify-between gap-4">
-							<div>
-								<div class="font-semibold">{req.student_name ?? 'Öğrenci'}</div>
-								<div class="mt-0.5 text-xs text-slate-400">
-									{req.request_type === 'schedule_batch'
-										? 'Ders kayıt listesi (tüm dönem)'
-										: req.request_type} · {req.created_at?.slice(0, 10)}
+							<div class="min-w-0 flex-1">
+								<div class="text-sm font-bold text-slate-800 dark:text-slate-100">
+									{#if req.add_drop_detail}
+										Öğrencinin ders değişiklik talebi
+									{:else if req.request_type === 'schedule_batch'}
+										Ders kayıt / değişiklik talebi
+									{:else}
+										{req.request_type}
+									{/if}
+								</div>
+								<div class="mt-1 text-sm font-semibold text-slate-800 dark:text-slate-200">
+									{req.add_drop_detail?.student_name ?? req.student_name ?? 'Öğrenci'}
+									<span class="ml-2 font-mono text-xs font-normal text-slate-500"
+										>{req.add_drop_detail?.student_no ?? req.student_no}</span
+									>
+								</div>
+								{#if req.add_drop_detail}
+									<div class="mt-1 text-xs text-slate-500">
+										{req.add_drop_detail.department_name} · Dönem:
+										{req.add_drop_detail.term_name || req.add_drop_detail.term_id}
+									</div>
+									<div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 dark:text-slate-400">
+										<span
+											><span class="font-semibold text-slate-800 dark:text-slate-200"
+												>Planlanan AKTS:</span
+											>
+											{req.add_drop_detail.projected_akts}</span
+										>
+										<span
+											><span class="font-semibold text-slate-800 dark:text-slate-200">GNO:</span>
+											{req.add_drop_detail.agno != null
+												? req.add_drop_detail.agno.toFixed(2)
+												: '—'}</span
+										>
+										<span
+											><span class="font-semibold text-slate-800 dark:text-slate-200"
+												>İzin verilen aralık:</span
+											>
+											{req.add_drop_detail.akts_min}–{req.add_drop_detail.akts_max} AKTS</span
+										>
+									</div>
+								{/if}
+								<div class="mt-1 text-xs text-slate-400">
+									{req.request_type === 'schedule_batch' && req.add_drop_detail
+										? 'Ders ekle-bırak (danışman onayı)'
+										: req.request_type === 'schedule_batch'
+											? 'Ders kayıt (danışman onayı)'
+											: req.request_type} · {req.created_at?.slice(0, 10)}
 								</div>
 								{#if req.note}
-									<div class="mt-1 text-sm text-slate-600 dark:text-slate-300">
+									<div class="mt-2 whitespace-pre-wrap text-sm text-slate-600 dark:text-slate-300">
 										{req.note}
+									</div>
+								{/if}
+								{#if req.add_drop_detail}
+									<div
+										class="mt-4 grid gap-4 rounded-lg border border-slate-100 bg-slate-50/60 p-4 text-sm dark:border-white/10 dark:bg-white/5"
+									>
+										<div>
+											<div
+												class="mb-1 text-[11px] font-bold uppercase tracking-wide text-emerald-800 dark:text-emerald-200"
+											>
+												Eklenen dersler
+											</div>
+											<ul class="list-inside list-disc text-slate-700 dark:text-slate-300">
+												{#each req.add_drop_detail.added_courses as c}
+													<li>{c.course_code} — {c.course_name} ({c.akts} AKTS)</li>
+												{:else}
+													<li class="list-none text-slate-400">—</li>
+												{/each}
+											</ul>
+										</div>
+										<div>
+											<div
+												class="mb-1 text-[11px] font-bold uppercase tracking-wide text-amber-800 dark:text-amber-200"
+											>
+												Bırakılacak dersler
+											</div>
+											<ul class="list-inside list-disc text-slate-700 dark:text-slate-300">
+												{#each req.add_drop_detail.dropped_courses as c}
+													<li>{c.course_code} — {c.course_name} ({c.akts} AKTS)</li>
+												{:else}
+													<li class="list-none text-slate-400">—</li>
+												{/each}
+											</ul>
+										</div>
+										<div>
+											<div
+												class="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-600 dark:text-slate-400"
+											>
+												Mevcut (korunan) dersler
+											</div>
+											<ul class="list-inside list-disc text-slate-700 dark:text-slate-300">
+												{#each req.add_drop_detail.kept_courses as c}
+													<li>{c.course_code} — {c.course_name} ({c.akts} AKTS)</li>
+												{:else}
+													<li class="list-none text-slate-400">—</li>
+												{/each}
+											</ul>
+										</div>
 									</div>
 								{/if}
 							</div>

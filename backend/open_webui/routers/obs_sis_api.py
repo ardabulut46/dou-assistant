@@ -587,6 +587,7 @@ async def student_enrollment_request(
 class DraftEnrollmentsBody(BaseModel):
     section_ids: list[str]
     mode: str = "registration"
+    exclude_drop_enrollment_ids: list[str] = Field(default_factory=list)
 
 
 @student_router.post(
@@ -598,7 +599,11 @@ async def student_draft_enrollments(
     obs_db: Session = Depends(get_obs_session),
 ):
     rows, err = repo.upsert_draft_enrollments(
-        obs_db, user.id, body.section_ids, body.mode
+        obs_db,
+        user.id,
+        body.section_ids,
+        body.mode,
+        body.exclude_drop_enrollment_ids or None,
     )
     if err:
         raise HTTPException(status_code=400, detail=err)
@@ -1368,6 +1373,7 @@ async def academic_me_approval_requests(
     obs_db: Session = Depends(get_obs_session),
 ):
     reqs = repo.list_approval_requests_for_academic(obs_db, user.id, status_filter)
+    reqs = repo.enrich_approval_requests_add_drop(obs_db, user.id, reqs)
     return {"academic_user_id": user.id, "requests": reqs, "total": len(reqs)}
 
 
@@ -1383,11 +1389,14 @@ async def academic_approve_request(
     user=Depends(get_verified_user),
     obs_db: Session = Depends(get_obs_session),
 ):
-    ok = repo.resolve_approval(
+    ok, err = repo.resolve_approval(
         obs_db, request_id, user.id, body.action == "approve", body.note
     )
     if not ok:
-        raise HTTPException(status_code=404, detail="Talep bulunamadı")
+        raise HTTPException(
+            status_code=400 if err else 404,
+            detail=err or "Talep bulunamadı",
+        )
     return {
         "id": request_id,
         "status": "approved" if body.action == "approve" else "rejected",
