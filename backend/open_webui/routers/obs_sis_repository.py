@@ -5679,3 +5679,274 @@ def admin_delete_student_profile_by_user_id(
     if res.rowcount and res.rowcount > 0:
         return True, ""
     return False, "not_found"
+
+
+# ---------------------------------------------------------------------------
+# Admin — Danışman Atama (obs_student_advisors)
+# ---------------------------------------------------------------------------
+
+def list_students_with_advisor(
+    obs_db: Session,
+    primary_db: Session,
+    *,
+    search: Optional[str] = None,
+    department_id: Optional[str] = None,
+    advisor_filter: Optional[str] = None,
+    only_unassigned: bool = False,
+) -> list[dict[str, Any]]:
+    """Tüm öğrencileri ve aktif danışmanlarını döndürür.
+
+    `obs_student_advisors` üzerinden `valid_to IS NULL OR valid_to >= CURRENT_DATE` olan
+    en güncel kayıt aktif danışman olarak alınır. Ad/e-posta WebUI `user` tablosundan
+    yüklenir. `advisor_filter` verilirse o danışman_user_id'sine atanmış öğrenciler
+    döner. `only_unassigned=True` ise yalnızca aktif danışmanı olmayan öğrenciler.
+    """
+    from open_webui.models.users import User
+
+    params: dict[str, Any] = {}
+    where_parts: list[str] = ["1=1"]
+    if department_id and str(department_id).strip():
+        where_parts.append("sp.department_id = :did")
+        params["did"] = str(department_id).strip()
+
+    sql = f"""
+        SELECT sp.id AS student_profile_id,
+               sp.user_id,
+               sp.student_number,
+               sp.department_id,
+               sp.class_year,
+               sp.program,
+               sp.gpa,
+               sp.status,
+               d.code AS department_code,
+               d.name AS department_name,
+               sa.id AS advisor_assignment_id,
+               sa.advisor_id AS advisor_profile_id,
+               sa.valid_from AS advisor_valid_from,
+               sa.valid_to AS advisor_valid_to,
+               ap.user_id AS advisor_user_id,
+               ap.title AS advisor_title
+        FROM obs_student_profiles sp
+        LEFT JOIN obs_departments d ON sp.department_id = d.id
+        LEFT JOIN LATERAL (
+            SELECT sa.id, sa.advisor_id, sa.valid_from, sa.valid_to
+            FROM obs_student_advisors sa
+            WHERE sa.student_id = sp.id
+              AND (sa.valid_to IS NULL OR sa.valid_to >= CURRENT_DATE)
+            ORDER BY sa.valid_from DESC NULLS LAST, sa.id DESC
+            LIMIT 1
+        ) sa ON TRUE
+        LEFT JOIN obs_academic_profiles ap ON sa.advisor_id = ap.id
+        WHERE {" AND ".join(where_parts)}
+        ORDER BY sp.student_number NULLS LAST, sp.id
+        LIMIT 5000
+        """
+
+    bind = obs_db.get_bind()
+    if bind.dialect.name == "sqlite":
+        # SQLite LATERAL desteklemediği için yedek (sadece test/dev içindir).
+        sql = f"""
+            SELECT sp.id AS student_profile_id,
+                   sp.user_id,
+                   sp.student_number,
+                   sp.department_id,
+                   sp.class_year,
+                   sp.program,
+                   sp.gpa,
+                   sp.status,
+                   d.code AS department_code,
+                   d.name AS department_name,
+                   sa.id AS advisor_assignment_id,
+                   sa.advisor_id AS advisor_profile_id,
+                   sa.valid_from AS advisor_valid_from,
+                   sa.valid_to AS advisor_valid_to,
+                   ap.user_id AS advisor_user_id,
+                   ap.title AS advisor_title
+            FROM obs_student_profiles sp
+            LEFT JOIN obs_departments d ON sp.department_id = d.id
+            LEFT JOIN obs_student_advisors sa ON sa.student_id = sp.id
+                 AND (sa.valid_to IS NULL OR sa.valid_to >= CURRENT_DATE)
+            LEFT JOIN obs_academic_profiles ap ON sa.advisor_id = ap.id
+            WHERE {" AND ".join(where_parts)}
+            ORDER BY sp.student_number, sp.id
+            LIMIT 5000
+            """
+
+    rows = obs_db.execute(text(sql), params).mappings().all()
+
+    # WebUI user tablosundan ad/e-posta ekle.
+    student_uids: set[str] = set()
+    advisor_uids: set[str] = set()
+    for r in rows:
+        sid = _str_id(r.get("user_id"))
+        if sid:
+            student_uids.add(sid)
+        aid = _str_id(r.get("advisor_user_id"))
+        if aid:
+            advisor_uids.add(aid)
+
+    user_lookup: dict[str, tuple[str, str]] = {}
+    all_uids = list(student_uids | advisor_uids)
+    if all_uids:
+        for uid_row, nm, em in (
+            primary_db.query(User.id, User.name, User.email)
+            .filter(User.id.in_(all_uids))
+            .all()
+        ):
+            user_lookup[str(uid_row)] = (nm or "", em or "")
+
+    out: list[dict[str, Any]] = []
+    s = (search or "").strip().lower()
+    for r in rows:
+        sid = _str_id(r.get("user_id")) or ""
+        s_name, s_email = user_lookup.get(sid, ("", ""))
+        adv_uid = _str_id(r.get("advisor_user_id")) or ""
+        a_name, a_email = (
+            user_lookup.get(adv_uid, ("", "")) if adv_uid else ("", "")
+        )
+        # Filtreler
+        if advisor_filter and adv_uid != str(advisor_filter):
+            continue
+        if only_unassigned and adv_uid:
+            continue
+        if s:
+            hay = " ".join(
+                [
+                    s_name.lower(),
+                    s_email.lower(),
+                    str(r.get("student_number") or "").lower(),
+                ]
+            )
+            if s not in hay:
+                continue
+        out.append(
+            {
+                "student_profile_id": _str_id(r.get("student_profile_id")),
+                "user_id": sid,
+                "full_name": s_name,
+                "email": s_email,
+                "student_number": r.get("student_number") or "",
+                "department_id": _str_id(r.get("department_id")),
+                "department_code": r.get("department_code") or "",
+                "department_name": r.get("department_name") or "",
+                "class_year": int(r.get("class_year") or 0),
+                "program": r.get("program") or "",
+                "gpa": _num(r.get("gpa")) if r.get("gpa") is not None else None,
+                "status": r.get("status") or "",
+                "advisor_assignment_id": _str_id(r.get("advisor_assignment_id")),
+                "advisor_profile_id": _str_id(r.get("advisor_profile_id")),
+                "advisor_user_id": adv_uid,
+                "advisor_full_name": a_name,
+                "advisor_email": a_email,
+                "advisor_title": r.get("advisor_title") or "",
+                "advisor_valid_from": _fmt_date(r.get("advisor_valid_from")),
+                "advisor_valid_to": _fmt_date(r.get("advisor_valid_to")),
+            }
+        )
+    return out
+
+
+def assign_student_advisor(
+    obs_db: Session,
+    student_user_id: str,
+    advisor_user_id: Optional[str],
+) -> tuple[bool, str]:
+    """Öğrenciye danışman atar / değiştirir / kaldırır.
+
+    `advisor_user_id` boş/None ise mevcut aktif danışmanlık kapatılır.
+    Aksi takdirde aktif kayıt varsa `valid_to = CURRENT_DATE` ile sonlandırılır
+    ve bugün başlangıçlı yeni satır eklenir. Akademisyenin obs_academic_profiles
+    kaydı yoksa stub oluşturulur.
+    """
+    if not student_user_id:
+        return False, "missing_student"
+    spid = resolve_student_profile_id(obs_db, str(student_user_id).strip())
+    if not spid:
+        return False, "student_profile_not_found"
+
+    target_apid: Optional[str] = None
+    if advisor_user_id and str(advisor_user_id).strip():
+        adv_uid = str(advisor_user_id).strip()
+        target_apid = resolve_academic_profile_id(obs_db, adv_uid)
+        if not target_apid:
+            try:
+                target_apid = ensure_academic_profile_for_user(obs_db, adv_uid)
+            except ValueError:
+                return False, "advisor_no_department_for_stub"
+            except Exception:
+                return False, "advisor_profile_not_found"
+        if not target_apid:
+            return False, "advisor_profile_not_found"
+
+    try:
+        # Aynı kişi zaten aktifse no-op.
+        if target_apid:
+            existing = obs_db.execute(
+                text(
+                    """
+                    SELECT id FROM obs_student_advisors
+                    WHERE student_id = :sid AND advisor_id = :apid
+                      AND (valid_to IS NULL OR valid_to >= CURRENT_DATE)
+                    LIMIT 1
+                    """
+                ),
+                {"sid": spid, "apid": target_apid},
+            ).first()
+            if existing:
+                return True, ""
+
+        # Aktif danışmanlığı sonlandır.
+        obs_db.execute(
+            text(
+                """
+                UPDATE obs_student_advisors
+                SET valid_to = CURRENT_DATE
+                WHERE student_id = :sid
+                  AND (valid_to IS NULL OR valid_to >= CURRENT_DATE)
+                """
+            ),
+            {"sid": spid},
+        )
+
+        if target_apid:
+            obs_db.execute(
+                text(
+                    """
+                    INSERT INTO obs_student_advisors (
+                        id, student_id, advisor_id, valid_from, valid_to
+                    ) VALUES (
+                        :id, :sid, :apid, CURRENT_DATE, NULL
+                    )
+                    """
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "sid": spid,
+                    "apid": target_apid,
+                },
+            )
+        obs_db.commit()
+        return True, ""
+    except Exception as ex:  # pragma: no cover - DB hata akışı
+        try:
+            obs_db.rollback()
+        except Exception:
+            pass
+        return False, f"db_error: {ex}"
+
+
+def bulk_assign_student_advisor(
+    obs_db: Session,
+    student_user_ids: list[str],
+    advisor_user_id: Optional[str],
+) -> dict[str, Any]:
+    """Birden çok öğrenciye aynı danışmanı atar (veya advisor_user_id boşsa hepsini kaldırır)."""
+    updated = 0
+    failed: list[dict[str, str]] = []
+    for sid in student_user_ids or []:
+        ok, err = assign_student_advisor(obs_db, sid, advisor_user_id)
+        if ok:
+            updated += 1
+        else:
+            failed.append({"student_user_id": str(sid), "error": err})
+    return {"updated": updated, "failed": failed}

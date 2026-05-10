@@ -45,6 +45,12 @@
 			desc: 'Kullanıcı oluştur, düzenle, rol ata'
 		},
 		{
+			href: '/obs/admin/danisman-atama',
+			title: 'Danışman Atama',
+			icon: '🧑‍🏫',
+			desc: 'Öğrencilere danışman ata / değiştir'
+		},
+		{
 			href: '/obs/admin/rol-yonetimi',
 			title: 'Rol Yönetimi',
 			icon: '🔑',

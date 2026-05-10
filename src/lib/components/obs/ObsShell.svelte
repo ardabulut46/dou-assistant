@@ -96,6 +96,7 @@
 			section: 'KULLANICI',
 			items: [
 				{ label: 'Kullanıcı Yönetimi', href: '/obs/admin/kullanici-yonetimi' },
+				{ label: 'Danışman Atama', href: '/obs/admin/danisman-atama' },
 				{ label: 'Şube — Öğretim Üyesi Atama', href: '/obs/admin/danisman-ve-ders-atama' },
 				{ label: 'Rol Yönetimi', href: '/obs/admin/rol-yonetimi' }
 			]

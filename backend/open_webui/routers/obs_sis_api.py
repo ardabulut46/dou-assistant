@@ -2081,6 +2081,99 @@ async def admin_advisor_assignment_instructors(
     return JSONResponse(content=payload)
 
 
+# ---------------------------------------------------------------------------
+# Admin — Danışman Atama (obs_student_advisors)
+# ---------------------------------------------------------------------------
+
+
+@admin_router.get("/student-advisors")
+async def admin_list_student_advisors(
+    search: Optional[str] = Query(None),
+    department_id: Optional[str] = Query(None),
+    advisor_user_id: Optional[str] = Query(None),
+    only_unassigned: bool = Query(False),
+    obs_db: Session = Depends(get_obs_session),
+    db: Session = Depends(get_session),
+    _u=Depends(get_obs_admin_user),
+):
+    rows = repo.list_students_with_advisor(
+        obs_db,
+        db,
+        search=search,
+        department_id=department_id,
+        advisor_filter=advisor_user_id,
+        only_unassigned=only_unassigned,
+    )
+    payload = _sanitize_for_json(jsonable_encoder({"students": rows, "total": len(rows)}))
+    return JSONResponse(content=payload)
+
+
+class StudentAdvisorAssignBody(BaseModel):
+    """`advisor_user_id` boş/None = mevcut danışmanlığı kapat."""
+
+    advisor_user_id: Optional[str] = None
+
+
+@admin_router.put("/student-advisors/{student_user_id}")
+async def admin_assign_student_advisor(
+    student_user_id: str,
+    body: StudentAdvisorAssignBody,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
+    adv = (body.advisor_user_id or "").strip() or None
+    ok, err = repo.assign_student_advisor(obs_db, student_user_id, adv)
+    if not ok:
+        if err == "student_profile_not_found":
+            raise HTTPException(status_code=404, detail="Öğrenci profili bulunamadı.")
+        if err in ("advisor_profile_not_found", "advisor_no_department_for_stub"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Akademisyen profili oluşturulamadı (bölüm yok)."
+                    if err == "advisor_no_department_for_stub"
+                    else "Akademisyen profili bulunamadı."
+                ),
+            )
+        if err == "missing_student":
+            raise HTTPException(status_code=400, detail="Öğrenci kimliği zorunlu.")
+        raise HTTPException(status_code=500, detail=f"Atama yapılamadı: {err}")
+    return {"ok": True, "student_user_id": student_user_id, "advisor_user_id": adv}
+
+
+@admin_router.delete("/student-advisors/{student_user_id}")
+async def admin_clear_student_advisor(
+    student_user_id: str,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
+    ok, err = repo.assign_student_advisor(obs_db, student_user_id, None)
+    if not ok:
+        if err == "student_profile_not_found":
+            raise HTTPException(status_code=404, detail="Öğrenci profili bulunamadı.")
+        raise HTTPException(status_code=500, detail=f"Kaldırılamadı: {err}")
+    return {"ok": True, "student_user_id": student_user_id, "advisor_user_id": None}
+
+
+class StudentAdvisorBulkAssignBody(BaseModel):
+    student_user_ids: list[str]
+    advisor_user_id: Optional[str] = None
+
+
+@admin_router.post("/student-advisors/bulk")
+async def admin_bulk_assign_student_advisor(
+    body: StudentAdvisorBulkAssignBody,
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
+    if not body.student_user_ids:
+        raise HTTPException(status_code=400, detail="Öğrenci listesi boş.")
+    adv = (body.advisor_user_id or "").strip() or None
+    result = repo.bulk_assign_student_advisor(obs_db, body.student_user_ids, adv)
+    payload = _sanitize_for_json(jsonable_encoder(result))
+    return JSONResponse(content=payload)
+
+
 @admin_router.get("/course-sections")
 async def admin_sections(
     term_id: Optional[str] = Query(None),

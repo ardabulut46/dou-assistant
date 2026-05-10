@@ -1745,6 +1745,95 @@ export const updateDouAdminAcademicProfile = (
 		{ method: 'PUT', body: JSON.stringify(body) }
 	);
 
+// ---------------------------------------------------------------------------
+// Admin — Danışman Atama (obs_student_advisors)
+// ---------------------------------------------------------------------------
+export type AdminStudentAdvisorRow = {
+	student_profile_id: string | null;
+	user_id: string;
+	full_name: string;
+	email: string;
+	student_number: string;
+	department_id: string | null;
+	department_code: string;
+	department_name: string;
+	class_year: number;
+	program: string;
+	gpa: number | null;
+	status: string;
+	advisor_assignment_id: string | null;
+	advisor_profile_id: string | null;
+	advisor_user_id: string;
+	advisor_full_name: string;
+	advisor_email: string;
+	advisor_title: string;
+	advisor_valid_from: string | null;
+	advisor_valid_to: string | null;
+};
+
+export const getDouAdminStudentAdvisors = (
+	token: string | null,
+	params?: {
+		search?: string;
+		department_id?: string;
+		advisor_user_id?: string;
+		only_unassigned?: boolean;
+	}
+) => {
+	const sp = new URLSearchParams();
+	if (params?.search?.trim()) sp.set('search', params.search.trim());
+	if (params?.department_id?.trim()) sp.set('department_id', params.department_id.trim());
+	if (params?.advisor_user_id?.trim()) sp.set('advisor_user_id', params.advisor_user_id.trim());
+	if (params?.only_unassigned) sp.set('only_unassigned', 'true');
+	const q = sp.toString();
+	return authFetch<{ students: AdminStudentAdvisorRow[]; total: number }>(
+		`/admin/student-advisors${q ? `?${q}` : ''}`,
+		token
+	);
+};
+
+export const putDouAdminStudentAdvisor = (
+	token: string | null,
+	studentUserId: string,
+	advisorUserId: string | null
+) =>
+	authFetch<{ ok: boolean; student_user_id: string; advisor_user_id: string | null }>(
+		`/admin/student-advisors/${encodeURIComponent(studentUserId)}`,
+		token,
+		{
+			method: 'PUT',
+			body: JSON.stringify({ advisor_user_id: advisorUserId ?? null })
+		}
+	);
+
+export const deleteDouAdminStudentAdvisor = (
+	token: string | null,
+	studentUserId: string
+) =>
+	authFetch<{ ok: boolean; student_user_id: string; advisor_user_id: null }>(
+		`/admin/student-advisors/${encodeURIComponent(studentUserId)}`,
+		token,
+		{ method: 'DELETE' }
+	);
+
+export type AdminStudentAdvisorBulkResult = {
+	updated: number;
+	failed: { student_user_id: string; error: string }[];
+};
+
+export const postDouAdminStudentAdvisorBulk = (
+	token: string | null,
+	studentUserIds: string[],
+	advisorUserId: string | null
+) =>
+	authFetch<AdminStudentAdvisorBulkResult>('/admin/student-advisors/bulk', token, {
+		method: 'POST',
+		body: JSON.stringify({
+			student_user_ids: studentUserIds,
+			advisor_user_id: advisorUserId ?? null
+		})
+	});
+
 export const deleteDouAdminAcademicProfile = (token: string | null, userId: string) =>
 	authFetch<{ deleted: boolean }>(
 		`/admin/academics/${encodeURIComponent(userId)}`,

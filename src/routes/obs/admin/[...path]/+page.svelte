@@ -47,6 +47,10 @@
 		deleteDouAdminAnnouncement,
 		patchDouAdminTermRegistrationWindows,
 		getDouAdvisorAssignmentInstructors,
+		getDouAdminStudentAdvisors,
+		putDouAdminStudentAdvisor,
+		deleteDouAdminStudentAdvisor,
+		postDouAdminStudentAdvisorBulk,
 		type AdminUser,
 		type AdminRole,
 		type AdminInstructor,
@@ -58,7 +62,8 @@
 		type DouAnnouncement,
 		type DouAdminCreateUserBody,
 		type DouStudentProfileCreateInput,
-		type AdvisorAssignmentInstructorRow
+		type AdvisorAssignmentInstructorRow,
+		type AdminStudentAdvisorRow
 	} from '$lib/apis/douAcademic';
 
 	/** `user` tablosu role — API ile aynı stringler (filtre/liste/create uyumu) */
@@ -76,6 +81,10 @@
 	type PageMeta = { title: string; apiKey: string };
 	const PAGES: Record<string, PageMeta> = {
 		'/obs/admin/kullanici-yonetimi': { title: 'Kullanıcı Yönetimi', apiKey: 'users' },
+		'/obs/admin/danisman-atama': {
+			title: 'Danışman Atama',
+			apiKey: 'student-advisors'
+		},
 		'/obs/admin/danisman-ve-ders-atama': {
 			title: 'Şube — Öğretim Üyesi Atama',
 			apiKey: 'section-assignments'
@@ -342,6 +351,120 @@
 		);
 	}
 
+	/** Danışman Atama (danisman-atama) */
+	let studentAdvisorsRows: AdminStudentAdvisorRow[] = [];
+	let studentAdvisorsAdvisorOptions: AdvisorAssignmentInstructorRow[] = [];
+	let studentAdvisorsSearch = '';
+	let studentAdvisorsDeptId = '';
+	let studentAdvisorsAdvisorFilter = '';
+	let studentAdvisorsOnlyUnassigned = false;
+	let studentAdvisorsLoading = false;
+	let studentAdvisorsErr: string | null = null;
+	let studentAdvisorsInfo: string | null = null;
+	let studentAdvisorsRowSavingId = '';
+	let studentAdvisorsRowDraft: Record<string, string> = {};
+	let studentAdvisorsSelected: Record<string, boolean> = {};
+	let studentAdvisorsBulkAdvisor = '';
+	let studentAdvisorsBulkSaving = false;
+
+	function studentAdvisorsSyncDraftFromRows() {
+		studentAdvisorsRowDraft = Object.fromEntries(
+			studentAdvisorsRows.map((r) => [r.user_id, r.advisor_user_id ?? ''])
+		);
+		studentAdvisorsSelected = {};
+	}
+
+	$: studentAdvisorsAllSelected =
+		studentAdvisorsRows.length > 0 &&
+		studentAdvisorsRows.every((r) => studentAdvisorsSelected[r.user_id]);
+
+	$: studentAdvisorsSelectedIds = studentAdvisorsRows
+		.filter((r) => studentAdvisorsSelected[r.user_id])
+		.map((r) => r.user_id);
+
+	function toggleStudentAdvisorAll(checked: boolean) {
+		const next: Record<string, boolean> = {};
+		if (checked) for (const r of studentAdvisorsRows) next[r.user_id] = true;
+		studentAdvisorsSelected = next;
+	}
+
+	function studentAdvisorsAdvisorLabel(ins: AdvisorAssignmentInstructorRow) {
+		const name = ins.full_name?.trim() || ins.email || ins.user_id;
+		const tcode = ins.department_code ? ` · ${ins.department_code}` : '';
+		const ttitle = ins.title ? `${ins.title} ` : '';
+		return `${ttitle}${name}${tcode}`.trim();
+	}
+
+	async function reloadStudentAdvisorsList() {
+		const token = localStorage.token ?? null;
+		if (!token) return;
+		studentAdvisorsLoading = true;
+		studentAdvisorsErr = null;
+		try {
+			const res = await getDouAdminStudentAdvisors(token, {
+				search: studentAdvisorsSearch || undefined,
+				department_id: studentAdvisorsDeptId || undefined,
+				advisor_user_id: studentAdvisorsAdvisorFilter || undefined,
+				only_unassigned: studentAdvisorsOnlyUnassigned || undefined
+			});
+			studentAdvisorsRows = res.students ?? [];
+			studentAdvisorsSyncDraftFromRows();
+		} catch (e: unknown) {
+			studentAdvisorsErr = e instanceof Error ? e.message : 'Liste yüklenemedi.';
+			studentAdvisorsRows = [];
+		} finally {
+			studentAdvisorsLoading = false;
+		}
+	}
+
+	async function persistStudentAdvisor(studentUserId: string, advisorUserId: string) {
+		const token = localStorage.token ?? null;
+		if (!token) return;
+		studentAdvisorsErr = null;
+		studentAdvisorsInfo = null;
+		studentAdvisorsRowSavingId = studentUserId;
+		try {
+			if (advisorUserId) {
+				await putDouAdminStudentAdvisor(token, studentUserId, advisorUserId);
+				studentAdvisorsInfo = 'Danışman güncellendi.';
+			} else {
+				await deleteDouAdminStudentAdvisor(token, studentUserId);
+				studentAdvisorsInfo = 'Danışmanlık kaldırıldı.';
+			}
+			await reloadStudentAdvisorsList();
+		} catch (e: unknown) {
+			studentAdvisorsErr = e instanceof Error ? e.message : 'Atama yapılamadı.';
+		} finally {
+			studentAdvisorsRowSavingId = '';
+		}
+	}
+
+	async function bulkAssignStudentAdvisor() {
+		const ids = studentAdvisorsSelectedIds;
+		if (!ids.length) {
+			studentAdvisorsErr = 'En az bir öğrenci seçin.';
+			return;
+		}
+		const token = localStorage.token ?? null;
+		if (!token) return;
+		studentAdvisorsErr = null;
+		studentAdvisorsInfo = null;
+		studentAdvisorsBulkSaving = true;
+		try {
+			const res = await postDouAdminStudentAdvisorBulk(
+				token,
+				ids,
+				studentAdvisorsBulkAdvisor || null
+			);
+			studentAdvisorsInfo = `${res.updated} öğrenci güncellendi${res.failed.length ? `, ${res.failed.length} hata` : ''}.`;
+			await reloadStudentAdvisorsList();
+		} catch (e: unknown) {
+			studentAdvisorsErr = e instanceof Error ? e.message : 'Toplu atama yapılamadı.';
+		} finally {
+			studentAdvisorsBulkSaving = false;
+		}
+	}
+
 	const DAYS = ['Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi'];
 	const HOURS = [
 		'08:00',
@@ -457,6 +580,49 @@
 				getDouAdminAuditLogs(t).then((r) => {
 					auditLogs = (r as unknown as { logs: unknown[] }).logs ?? [];
 				}),
+			'student-advisors': async (t) => {
+				const [dRes, insRes, listRes] = await Promise.allSettled([
+					getDouDepartments(t),
+					getDouAdvisorAssignmentInstructors(t),
+					getDouAdminStudentAdvisors(t, {
+						search: studentAdvisorsSearch || undefined,
+						department_id: studentAdvisorsDeptId || undefined,
+						advisor_user_id: studentAdvisorsAdvisorFilter || undefined,
+						only_unassigned: studentAdvisorsOnlyUnassigned || undefined
+					})
+				]);
+				if (dRes.status === 'fulfilled') departments = dRes.value;
+				if (insRes.status === 'fulfilled') {
+					studentAdvisorsAdvisorOptions = [...(insRes.value.instructors ?? [])];
+				}
+				if (!studentAdvisorsAdvisorOptions.length) {
+					try {
+						const ur = await getDouAdminUsers(t, { role: 'academician' });
+						studentAdvisorsAdvisorOptions = (ur.users ?? []).map((u) => ({
+							academic_profile_id: null,
+							user_id: u.id,
+							full_name: u.full_name ?? u.email ?? '',
+							email: u.email ?? '',
+							title: '',
+							department_id: null,
+							department_name: '',
+							department_code: ''
+						}));
+					} catch {
+						/* ignore */
+					}
+				}
+				if (listRes.status === 'fulfilled') {
+					studentAdvisorsRows = listRes.value.students ?? [];
+				} else {
+					studentAdvisorsErr =
+						listRes.reason instanceof Error
+							? listRes.reason.message
+							: 'Liste yüklenemedi.';
+					studentAdvisorsRows = [];
+				}
+				studentAdvisorsSyncDraftFromRows();
+			},
 			'section-assignments': async (t) => {
 				const tr = await getDouTerms(t);
 				terms = tr;
@@ -2450,6 +2616,271 @@
 								>{editingClassId ? 'Güncelle' : 'Ekle'}</button
 							>
 						</div>
+					</div>
+				</div>
+			</div>
+		{:else if apiKey === 'student-advisors'}
+			<div class="space-y-5">
+				<!-- Filtre + Toplu atama -->
+				<div
+					class="rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5"
+				>
+					<div class="mb-3 flex items-center justify-between">
+						<div>
+							<div class="text-sm font-bold text-slate-800 dark:text-slate-100">
+								Öğrenci → Danışman (obs_student_advisors)
+							</div>
+							<p class="text-xs text-slate-500">
+								Öğrenci listesinden ilgili kişileri seçip toplu danışman atayın veya
+								satır içinden tek tek değiştirin. Mevcut danışman tabloda görünür.
+							</p>
+						</div>
+						<button
+							type="button"
+							on:click={() => void reloadStudentAdvisorsList()}
+							class="rounded-lg border border-black/10 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/10"
+							disabled={studentAdvisorsLoading}
+						>
+							{studentAdvisorsLoading ? 'Yükleniyor…' : '↺ Yenile'}
+						</button>
+					</div>
+
+					{#if studentAdvisorsInfo}
+						<div
+							class="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-300"
+						>
+							{studentAdvisorsInfo}
+						</div>
+					{/if}
+					{#if studentAdvisorsErr}
+						<div
+							class="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-400"
+						>
+							{studentAdvisorsErr}
+						</div>
+					{/if}
+
+					<div class="grid grid-cols-1 gap-3 md:grid-cols-12">
+						<label class="md:col-span-3 block">
+							<span class="mb-1 block text-xs font-semibold text-slate-500">Ara</span>
+							<input
+								type="text"
+								placeholder="Ad, e-posta, öğrenci no…"
+								bind:value={studentAdvisorsSearch}
+								on:keydown={(e) => {
+									if (e.key === 'Enter') void reloadStudentAdvisorsList();
+								}}
+								class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm dark:border-white/10 dark:bg-white/5"
+							/>
+						</label>
+						<label class="md:col-span-3 block">
+							<span class="mb-1 block text-xs font-semibold text-slate-500">Bölüm</span>
+							<select
+								bind:value={studentAdvisorsDeptId}
+								on:change={() => void reloadStudentAdvisorsList()}
+								class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm dark:border-white/10 dark:bg-white/5"
+							>
+								<option value="">Hepsi</option>
+								{#each departments as d}
+									<option value={d.id}>{d.code ? `${d.code} — ` : ''}{d.name}</option>
+								{/each}
+							</select>
+						</label>
+						<label class="md:col-span-3 block">
+							<span class="mb-1 block text-xs font-semibold text-slate-500"
+								>Mevcut Danışman</span
+							>
+							<select
+								bind:value={studentAdvisorsAdvisorFilter}
+								on:change={() => void reloadStudentAdvisorsList()}
+								class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm dark:border-white/10 dark:bg-white/5"
+							>
+								<option value="">Hepsi</option>
+								{#each studentAdvisorsAdvisorOptions as ins}
+									<option value={ins.user_id}>{studentAdvisorsAdvisorLabel(ins)}</option>
+								{/each}
+							</select>
+						</label>
+						<label
+							class="md:col-span-3 flex items-center gap-2 self-end pb-1 text-xs font-medium text-slate-600 dark:text-slate-300"
+						>
+							<input
+								type="checkbox"
+								bind:checked={studentAdvisorsOnlyUnassigned}
+								on:change={() => void reloadStudentAdvisorsList()}
+								class="rounded border-black/20"
+							/>
+							Sadece danışmansız öğrenciler
+						</label>
+					</div>
+
+					<div
+						class="mt-4 flex flex-wrap items-end gap-3 rounded-lg border border-violet-100 bg-violet-50/40 p-3 dark:border-violet-900/30 dark:bg-violet-950/20"
+					>
+						<div class="text-xs font-semibold text-violet-700 dark:text-violet-300">
+							Toplu Atama
+						</div>
+						<label class="flex-1 min-w-[260px] block">
+							<span class="mb-1 block text-xs font-semibold text-slate-500"
+								>Atanacak Danışman</span
+							>
+							<select
+								bind:value={studentAdvisorsBulkAdvisor}
+								class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm dark:border-white/10 dark:bg-white/5"
+							>
+								<option value="">— Danışmanlığı Kaldır —</option>
+								{#each studentAdvisorsAdvisorOptions as ins}
+									<option value={ins.user_id}>{studentAdvisorsAdvisorLabel(ins)}</option>
+								{/each}
+							</select>
+						</label>
+						<button
+							type="button"
+							on:click={() => void bulkAssignStudentAdvisor()}
+							disabled={studentAdvisorsBulkSaving || studentAdvisorsSelectedIds.length === 0}
+							class="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-500 disabled:opacity-50"
+						>
+							{studentAdvisorsBulkSaving
+								? 'Kaydediliyor…'
+								: `Seçili ${studentAdvisorsSelectedIds.length} öğrenciye uygula`}
+						</button>
+					</div>
+				</div>
+
+				<!-- Liste -->
+				<div
+					class="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
+				>
+					<div
+						class="flex items-center justify-between border-b border-black/5 px-5 py-3 dark:border-white/10"
+					>
+						<div class="text-sm font-semibold text-slate-800 dark:text-slate-100">
+							Öğrenciler
+						</div>
+						<div
+							class="rounded-full bg-sky-100 px-2.5 py-0.5 text-xs font-bold text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
+						>
+							{studentAdvisorsRows.length} kayıt
+						</div>
+					</div>
+
+					<div class="overflow-x-auto">
+						<table class="w-full text-sm">
+							<thead
+								class="bg-slate-50 text-xs font-bold text-slate-500 dark:bg-white/5"
+							>
+								<tr>
+									<th class="px-3 py-2 text-left w-8">
+										<input
+											type="checkbox"
+											checked={studentAdvisorsAllSelected}
+											on:change={(e) =>
+												toggleStudentAdvisorAll(
+													(e.currentTarget as HTMLInputElement).checked
+												)}
+											class="rounded border-black/20"
+										/>
+									</th>
+									<th class="px-3 py-2 text-left">Öğrenci No</th>
+									<th class="px-3 py-2 text-left">Ad Soyad</th>
+									<th class="px-3 py-2 text-left">Bölüm / Sınıf</th>
+									<th class="px-3 py-2 text-left">Mevcut Danışman</th>
+									<th class="px-3 py-2 text-left">Yeni Danışman</th>
+									<th class="px-3 py-2 text-left">İşlem</th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each studentAdvisorsRows as r (r.user_id)}
+									<tr class="border-t border-black/5 dark:border-white/10">
+										<td class="px-3 py-2">
+											<input
+												type="checkbox"
+												bind:checked={studentAdvisorsSelected[r.user_id]}
+												class="rounded border-black/20"
+											/>
+										</td>
+										<td class="px-3 py-2 font-mono text-xs">{r.student_number || '—'}</td>
+										<td class="px-3 py-2">
+											<div class="font-medium">{r.full_name || r.email || r.user_id}</div>
+											<div class="text-xs text-slate-400">{r.email}</div>
+										</td>
+										<td class="px-3 py-2 text-xs text-slate-500">
+											{r.department_code
+												? `${r.department_code} · `
+												: ''}{r.department_name || '—'}
+											<div class="text-[11px] text-slate-400">
+												Sınıf {r.class_year || '—'} · {r.program || '—'}
+											</div>
+										</td>
+										<td class="px-3 py-2 text-xs">
+											{#if r.advisor_user_id}
+												<div class="font-medium text-slate-700 dark:text-slate-200">
+													{r.advisor_title ? `${r.advisor_title} ` : ''}{r.advisor_full_name ||
+														r.advisor_email ||
+														r.advisor_user_id}
+												</div>
+												<div class="text-[11px] text-slate-400">
+													{r.advisor_email}
+													{#if r.advisor_valid_from}
+														· {r.advisor_valid_from} →
+													{/if}
+												</div>
+											{:else}
+												<span
+													class="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+													>Atanmadı</span
+												>
+											{/if}
+										</td>
+										<td class="px-3 py-2">
+											<select
+												bind:value={studentAdvisorsRowDraft[r.user_id]}
+												class="w-full max-w-[16rem] rounded border border-black/10 px-2 py-1 text-xs dark:border-white/10 dark:bg-slate-900"
+											>
+												<option value="">— Atanmadı —</option>
+												{#each studentAdvisorsAdvisorOptions as ins}
+													<option value={ins.user_id}
+														>{studentAdvisorsAdvisorLabel(ins)}</option
+													>
+												{/each}
+											</select>
+										</td>
+										<td class="px-3 py-2">
+											<button
+												type="button"
+												disabled={studentAdvisorsRowSavingId === r.user_id ||
+													(studentAdvisorsRowDraft[r.user_id] ?? '') ===
+														(r.advisor_user_id ?? '')}
+												on:click={() =>
+													void persistStudentAdvisor(
+														r.user_id,
+														studentAdvisorsRowDraft[r.user_id] ?? ''
+													)}
+												class="rounded-lg bg-violet-600 px-2 py-1 text-xs font-semibold text-white disabled:opacity-50"
+											>
+												{studentAdvisorsRowSavingId === r.user_id ? '…' : 'Kaydet'}
+											</button>
+											{#if r.advisor_user_id}
+												<button
+													type="button"
+													disabled={studentAdvisorsRowSavingId === r.user_id}
+													on:click={() => void persistStudentAdvisor(r.user_id, '')}
+													class="ml-1 rounded-lg border border-red-200 px-2 py-1 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-900/40 dark:text-red-400"
+												>
+													Kaldır
+												</button>
+											{/if}
+										</td>
+									</tr>
+								{:else}
+									<tr>
+										<td colspan="7" class="px-3 py-10 text-center text-sm text-slate-400">
+											{studentAdvisorsLoading ? 'Yükleniyor…' : 'Kriterlere uyan öğrenci yok.'}
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
 					</div>
 				</div>
 			</div>
