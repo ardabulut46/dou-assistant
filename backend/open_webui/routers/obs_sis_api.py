@@ -309,14 +309,50 @@ async def delete_message(
 
 @student_router.get("/me/profile")
 async def student_me_profile(
-    user=Depends(get_verified_user), obs_db: Session = Depends(get_obs_session)
+    user=Depends(get_verified_user),
+    db: Session = Depends(get_session),
+    obs_db: Session = Depends(get_obs_session),
 ):
     row = repo.get_student_profile_api(obs_db, user.id)
-    if not row:
+    if row:
+        return row
+    # Hesap var ama obs_student_profiles satırı yok (yanlış oluşturma yolu, rollback vb.)
+    role = getattr(user, "role", None)
+    if role not in ("user", "pending"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Öğrenci profili bulunamadı"
         )
-    return row
+    urow = Users.get_user_by_id(user.id, db=db)
+    if not urow:
+        raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
+    info_raw = getattr(urow, "info", None)
+    info_phone = ""
+    if isinstance(info_raw, dict):
+        info_phone = str(info_raw.get("phone") or "").strip()
+    return {
+        "user_id": user.id,
+        "email": urow.email or "",
+        "full_name": urow.name or "",
+        "student_no": "",
+        "department_id": "",
+        "department_name": "Özlük kaydı oluşturulmadı",
+        "faculty_name": "",
+        "program": "—",
+        "class_level": 0,
+        "program_semester_number": 1,
+        "gpa": 0.0,
+        "status": "pending_profile",
+        "enrollment_date": None,
+        "is_financially_eligible": True,
+        "phone": info_phone,
+        "address": "",
+        "emergency_contact": "",
+        "emergency_phone": "",
+        "completed_akts": 0,
+        "total_akts_required": 240,
+        "dno": None,
+        "_obs_profile_missing": True,
+    }
 
 
 @student_router.get("/me/advisor")
@@ -2330,21 +2366,101 @@ async def admin_list_users(
     return {"users": users_out, "total": len(users_out)}
 
 
+class StudentProfileCreateBody(BaseModel):
+    """Admin öğrenci oluştururken obs_student_profiles ile birlikte."""
+
+    student_number: str = Field(..., min_length=1)
+    department_id: str = Field(..., min_length=1)
+    enrollment_date: Optional[str] = None
+    class_year: int = 1
+    program: str = "Lisans"
+    gpa: float = 0.0
+    completed_akts: int = 0
+    total_akts_required: int = 240
+    status: str = "active"
+    is_financially_eligible: bool = True
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    emergency_phone: Optional[str] = None
+    tc_kimlik_no: Optional[str] = None
+    birth_date: Optional[str] = None
+    birth_place: Optional[str] = None
+    nationality: Optional[str] = None
+    mother_name: Optional[str] = None
+    father_name: Optional[str] = None
+    high_school_name: Optional[str] = None
+    high_school_graduation_year: Optional[int] = None
+    program_semester_number: int = 1
+
+
+class AcademicProfileCreateBody(BaseModel):
+    """Admin akademisyen oluştururken obs_academic_profiles ile birlikte."""
+
+    department_id: str = Field(..., min_length=1)
+    staff_number: Optional[str] = None
+    title: Optional[str] = None
+    office: Optional[str] = None
+    phone: Optional[str] = None
+
+
 class UserCreate(BaseModel):
     email: str
     full_name: str
     role: str = "user"
     password: str = "Abc123!"
+    username: Optional[str] = None
+    gender: Optional[str] = None
+    date_of_birth: Optional[str] = None
+    phone: Optional[str] = None
+    student_profile: Optional[StudentProfileCreateBody] = None
+    academic_profile: Optional[AcademicProfileCreateBody] = None
+
+
+def _rollback_webui_user_after_failed_obs_profile(webui_user_id: str, db: Session) -> None:
+    """OBS tarafı yazılamazsa ana DB'deki yarım auth+user kaydını kaldırır."""
+    try:
+        if Auths.delete_auth_by_id(webui_user_id, db=db):
+            log.warning(
+                "OBS profil yazılamadı; WebUI kullanıcı geri alındı (user_id=%s)",
+                webui_user_id,
+            )
+        else:
+            log.error(
+                "OBS profil yazılamadı; WebUI kullanıcı geri alınamadı (user_id=%s)",
+                webui_user_id,
+            )
+    except Exception:
+        log.exception(
+            "OBS profil sonrası WebUI geri alma hatası (user_id=%s)",
+            webui_user_id,
+        )
 
 
 @admin_router.post("/users", status_code=status.HTTP_201_CREATED)
 async def admin_create_user(
-    body: UserCreate, db: Session = Depends(get_session), _u=Depends(get_obs_admin_user)
+    body: UserCreate,
+    db: Session = Depends(get_session),
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
 ):
     hashed = get_password_hash(body.password)
     role = body.role if body.role in OBS_ADMIN_ASSIGNABLE_USER_ROLES else "user"
+    email = str(body.email).strip().lower()
+
+    if role in ("user", "pending") and not body.student_profile:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Öğrenci veya bekleyen kullanıcı için özlük bilgisi (student_profile) zorunludur.",
+        )
+    if role == "academician" and not body.academic_profile:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Akademisyen için akademik profil (academic_profile) zorunludur.",
+        )
+
     nu = Auths.insert_new_auth(
-        email=body.email,
+        email=email,
         password=hashed,
         name=body.full_name,
         profile_image_url="",
@@ -2353,6 +2469,122 @@ async def admin_create_user(
     )
     if not nu:
         raise HTTPException(status_code=400, detail="Oluşturulamadı")
+
+    obs_profile_required = role in ("user", "pending", "academician")
+
+    upd: dict[str, Any] = {}
+    if body.username and str(body.username).strip():
+        upd["username"] = str(body.username).strip()
+    if body.gender and str(body.gender).strip():
+        upd["gender"] = str(body.gender).strip()
+
+    dob_done = False
+    if body.date_of_birth and str(body.date_of_birth).strip():
+        try:
+            upd["date_of_birth"] = datetime.date.fromisoformat(
+                str(body.date_of_birth).strip()[:10]
+            )
+            dob_done = True
+        except ValueError:
+            pass
+    if (
+        not dob_done
+        and role in ("user", "pending")
+        and body.student_profile
+        and body.student_profile.birth_date
+        and str(body.student_profile.birth_date).strip()
+    ):
+        try:
+            upd["date_of_birth"] = datetime.date.fromisoformat(
+                str(body.student_profile.birth_date).strip()[:10]
+            )
+        except ValueError:
+            pass
+
+    phone_line = None
+    if body.phone and str(body.phone).strip():
+        phone_line = str(body.phone).strip()
+    elif (
+        role in ("user", "pending")
+        and body.student_profile
+        and body.student_profile.phone
+        and str(body.student_profile.phone).strip()
+    ):
+        phone_line = str(body.student_profile.phone).strip()
+    if phone_line:
+        info_u: dict[str, Any] = {}
+        u0 = Users.get_user_by_id(nu.id, db=db)
+        if u0 and getattr(u0, "info", None) and isinstance(u0.info, dict):
+            info_u = dict(u0.info)
+        info_u["phone"] = phone_line
+        upd["info"] = info_u
+
+    if upd:
+        Users.update_user_by_id(nu.id, upd, db=db)
+
+    uf = Users.get_user_by_id(nu.id, db=db)
+    uref = uf or nu
+
+    try:
+        if role in ("user", "pending"):
+            repo.ensure_mirror_openwebui_user_row(
+                obs_db,
+                user_id=str(nu.id),
+                email=str(uref.email),
+                name=str(uref.name),
+                role=str(uref.role),
+                profile_image_url=getattr(uref, "profile_image_url", None) or "",
+            )
+            repo.admin_insert_student_profile(
+                obs_db, nu.id, body.student_profile.model_dump(exclude_none=True)
+            )
+            if not repo.resolve_student_profile_id(obs_db, nu.id):
+                log.error(
+                    "OBS obs_student_profiles doğrulanamadı (user_id=%s)",
+                    nu.id,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Öğrenci profili veritabanında oluşturulamadı (doğrulama).",
+                )
+        elif role == "academician":
+            repo.ensure_mirror_openwebui_user_row(
+                obs_db,
+                user_id=str(nu.id),
+                email=str(uref.email),
+                name=str(uref.name),
+                role=str(uref.role),
+                profile_image_url=getattr(uref, "profile_image_url", None) or "",
+            )
+            repo.admin_insert_academic_profile(
+                obs_db, nu.id, body.academic_profile.model_dump(exclude_none=True)
+            )
+            if not repo.resolve_academic_profile_id(obs_db, nu.id):
+                log.error(
+                    "OBS obs_academic_profiles doğrulanamadı (user_id=%s)",
+                    nu.id,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Akademik profil veritabanında oluşturulamadı (doğrulama).",
+                )
+    except HTTPException as hex_obj:
+        if obs_profile_required:
+            _rollback_webui_user_after_failed_obs_profile(nu.id, db)
+        raise hex_obj
+    except ValueError as e:
+        if obs_profile_required:
+            _rollback_webui_user_after_failed_obs_profile(nu.id, db)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
+    except SQLAlchemyError:
+        log.exception("OBS profil INSERT")
+        if obs_profile_required:
+            _rollback_webui_user_after_failed_obs_profile(nu.id, db)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="OBS veritabanında profil kaydı oluşturulamadı (şema veya zorunlu alan).",
+        ) from None
+
     return {
         "id": nu.id,
         "email": nu.email,
@@ -2361,6 +2593,59 @@ async def admin_create_user(
         "is_active": True,
         "created_at": datetime.datetime.utcnow().date().isoformat(),
     }
+
+
+@admin_router.post("/users/{user_id}/student-profile")
+async def admin_create_student_profile_existing_user(
+    user_id: str,
+    body: StudentProfileCreateBody,
+    db: Session = Depends(get_session),
+    obs_db: Session = Depends(get_obs_session),
+    _u=Depends(get_obs_admin_user),
+):
+    """
+    `POST /api/v1/auths/add` veya benzeri yollarla yalnızca WebUI `user` tablosunda oluşmuş
+    öğrenci için obs_student_profiles kaydı ekler (veya zaten varsa idempotent kalır).
+    """
+    u = Users.get_user_by_id(user_id, db=db)
+    if not u:
+        raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
+    if u.role not in ("user", "pending"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Özlük yalnızca rolü 'user' veya 'pending' olan hesaplara eklenebilir.",
+        )
+    uf = Users.get_user_by_id(user_id, db=db)
+    uref = uf or u
+    try:
+        repo.ensure_mirror_openwebui_user_row(
+            obs_db,
+            user_id=str(user_id),
+            email=str(uref.email),
+            name=str(uref.name),
+            role=str(uref.role),
+            profile_image_url=getattr(uref, "profile_image_url", None) or "",
+        )
+        repo.admin_insert_student_profile(
+            obs_db, user_id, body.model_dump(exclude_none=True)
+        )
+        spid = repo.resolve_student_profile_id(obs_db, user_id)
+        if not spid:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Öğrenci profili doğrulanamadı.",
+            )
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from None
+    except SQLAlchemyError:
+        log.exception("OBS öğrenci özlük INSERT (mevcut kullanıcı)")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="OBS veritabanında öğrenci kaydı oluşturulamadı.",
+        ) from None
+    return {"ok": True, "user_id": user_id, "student_profile_id": spid}
 
 
 class UserUpdate(BaseModel):

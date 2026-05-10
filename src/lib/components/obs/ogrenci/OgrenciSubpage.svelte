@@ -714,6 +714,20 @@
 			<!-- ================================================================ -->
 		{:else if apiKey === 'profile' && profile}
 			{#if !profileEdit}
+				{#if profile._obs_profile_missing}
+					<div
+						class="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-left text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-100"
+					>
+						<div class="font-semibold">Öğrenci özlük kaydı eksik</div>
+						<p class="mt-1 text-xs leading-relaxed opacity-90">
+							<code class="rounded bg-amber-100/80 px-1 dark:bg-white/10">obs_student_profiles</code>
+							tablosunda satırınız yok. <strong>OBS Yönetim → Kullanıcı Yönetimi</strong>’nde hesabınız
+							için <strong>Özlük</strong> ile kayıt oluşturun veya hesabı (öğrenci numarası + bölüm ile)
+							<strong>+ Kullanıcı Ekle</strong> üzerinden oluşturun. Open WebUI’nin genel “kullanıcı ekle”
+							ekranı özlük oluşturmaz.
+						</p>
+					</div>
+				{/if}
 				<!-- ── Hero kartı ────────────────────────────────────── -->
 				<div
 					class="overflow-hidden rounded-2xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-slate-900"

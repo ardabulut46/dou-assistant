@@ -8,6 +8,7 @@
 	import {
 		getDouAdminUsers,
 		createDouAdminUser,
+		postDouAdminUserStudentProfile,
 		patchDouAdminUser,
 		getDouAdminRoles,
 		putDouAdminRolePermissions,
@@ -53,7 +54,9 @@
 		type DouCourse,
 		type DouClassroom,
 		type DouCalendarEvent,
-		type DouAnnouncement
+		type DouAnnouncement,
+		type DouAdminCreateUserBody,
+		type DouStudentProfileCreateInput
 	} from '$lib/apis/douAcademic';
 
 	/** `user` tablosu role — API ile aynı stringler (filtre/liste/create uyumu) */
@@ -100,8 +103,63 @@
 	let userSearch = '';
 	let userRoleFilter = '';
 	let showUserModal = false;
-	let newUser = { email: '', full_name: '', role: 'user', password: '' };
+	/** WebUI’de oluşmuş öğrenciye sonradan obs_student_profiles */
+	let showOzlukModal = false;
+	let ozlukErr: string | null = null;
+	let ozlukSaving = false;
+	let ozlukTarget: AdminUser | null = null;
+	let ozlukSp: ReturnType<typeof emptyNewUser>['student_profile'];
+
+	function emptyNewUser() {
+		return {
+			email: '',
+			full_name: '',
+			role: 'user',
+			password: '',
+			username: '',
+			gender: '',
+			date_of_birth: '',
+			phone: '',
+			student_profile: {
+				student_number: '',
+				department_id: '',
+				enrollment_date: '',
+				class_year: 1,
+				program: 'Lisans',
+				gpa: 0,
+				completed_akts: 0,
+				total_akts_required: 240,
+				status: 'active',
+				is_financially_eligible: true,
+				phone: '',
+				address: '',
+				emergency_contact: '',
+				emergency_phone: '',
+				tc_kimlik_no: '',
+				birth_date: '',
+				birth_place: '',
+				nationality: '',
+				mother_name: '',
+				father_name: '',
+				high_school_name: '',
+				high_school_graduation_year: '' as number | '',
+				program_semester_number: 1
+			},
+			academic_profile: {
+				department_id: '',
+				staff_number: '',
+				title: '',
+				office: '',
+				phone: ''
+			}
+		};
+	}
+
+	let newUser = emptyNewUser();
+	ozlukSp = emptyNewUser().student_profile;
 	let userCreating = false;
+	/** Kullanıcı oluştur modalı — loadErr sayfa yükleme ile paylaşılmaz (tam sayfa gizlenmesin) */
+	let createUserErr: string | null = null;
 
 	// roles
 	let roles: AdminRole[] = [];
@@ -291,13 +349,17 @@
 		}
 
 		const loaders: Record<string, TokenFn> = {
-			users: (t) =>
-				getDouAdminUsers(t, {
-					role: userRoleFilter || undefined,
-					search: userSearch || undefined
-				}).then((r) => {
-					users = r.users;
-				}),
+			users: async (t) => {
+				const [uRes, dRes] = await Promise.allSettled([
+					getDouAdminUsers(t, {
+						role: userRoleFilter || undefined,
+						search: userSearch || undefined
+					}),
+					getDouDepartments(t)
+				]);
+				if (uRes.status === 'fulfilled') users = uRes.value.users;
+				if (dRes.status === 'fulfilled') departments = dRes.value;
+			},
 			roles: (t) =>
 				getDouAdminRoles(t).then((r) => {
 					roles = r.roles;
@@ -600,25 +662,175 @@
 
 	async function createUser() {
 		userCreating = true;
-		loadErr = null;
+		createUserErr = null;
 		const token = localStorage.token ?? null;
 		if (!token) {
 			userCreating = false;
 			return;
 		}
+		if (!newUser.email.trim() || !newUser.full_name.trim() || !newUser.password) {
+			createUserErr = 'E-posta, ad soyad ve parola zorunludur.';
+			userCreating = false;
+			return;
+		}
+		if (newUser.role === 'user' || newUser.role === 'pending') {
+			if (
+				!newUser.student_profile.student_number.trim() ||
+				!newUser.student_profile.department_id
+			) {
+				createUserErr = 'Öğrenci / bekleyen için öğrenci numarası ve bölüm seçimi zorunludur.';
+				userCreating = false;
+				return;
+			}
+		}
+		if (newUser.role === 'academician' && !newUser.academic_profile.department_id) {
+			createUserErr = 'Akademisyen için bölüm seçimi zorunludur.';
+			userCreating = false;
+			return;
+		}
+
+		const payload: DouAdminCreateUserBody = {
+			email: newUser.email.trim(),
+			full_name: newUser.full_name.trim(),
+			role: newUser.role,
+			password: newUser.password
+		};
+		if (newUser.username?.trim()) payload.username = newUser.username.trim();
+		if (newUser.gender?.trim()) payload.gender = newUser.gender.trim();
+		if (newUser.date_of_birth?.trim()) payload.date_of_birth = newUser.date_of_birth.trim();
+		if (newUser.phone?.trim()) payload.phone = newUser.phone.trim();
+
+		if (newUser.role === 'user' || newUser.role === 'pending') {
+			const sp = newUser.student_profile;
+			const hsRaw = sp.high_school_graduation_year;
+			const hsNum =
+				typeof hsRaw === 'number'
+					? hsRaw
+					: String(hsRaw ?? '').trim()
+						? parseInt(String(hsRaw).trim(), 10)
+						: NaN;
+			payload.student_profile = {
+				student_number: sp.student_number.trim(),
+				department_id: sp.department_id,
+				enrollment_date: sp.enrollment_date?.trim() || undefined,
+				class_year: Number(sp.class_year) || 1,
+				program: (sp.program || 'Lisans').trim(),
+				gpa: Number(sp.gpa) || 0,
+				completed_akts: Number(sp.completed_akts) || 0,
+				total_akts_required: Number(sp.total_akts_required) || 240,
+				status: sp.status || 'active',
+				is_financially_eligible: sp.is_financially_eligible !== false,
+				phone: sp.phone?.trim() || undefined,
+				address: sp.address?.trim() || undefined,
+				emergency_contact: sp.emergency_contact?.trim() || undefined,
+				emergency_phone: sp.emergency_phone?.trim() || undefined,
+				tc_kimlik_no: sp.tc_kimlik_no?.trim() || undefined,
+				birth_date: sp.birth_date?.trim() || undefined,
+				birth_place: sp.birth_place?.trim() || undefined,
+				nationality: sp.nationality?.trim() || undefined,
+				mother_name: sp.mother_name?.trim() || undefined,
+				father_name: sp.father_name?.trim() || undefined,
+				high_school_name: sp.high_school_name?.trim() || undefined,
+				program_semester_number: Number(sp.program_semester_number) || 1
+			};
+			if (Number.isFinite(hsNum)) payload.student_profile.high_school_graduation_year = hsNum;
+		}
+		if (newUser.role === 'academician') {
+			const ap = newUser.academic_profile;
+			payload.academic_profile = {
+				department_id: ap.department_id,
+				staff_number: ap.staff_number?.trim() || undefined,
+				title: ap.title?.trim() || undefined,
+				office: ap.office?.trim() || undefined,
+				phone: ap.phone?.trim() || undefined
+			};
+		}
+
 		try {
-			await createDouAdminUser(token, { ...newUser });
+			await createDouAdminUser(token, payload);
 			showUserModal = false;
-			newUser = { email: '', full_name: '', role: 'user', password: '' };
+			createUserErr = null;
+			newUser = emptyNewUser();
 			const r = await getDouAdminUsers(token, {
 				role: userRoleFilter || undefined,
 				search: userSearch || undefined
 			});
 			users = r.users ?? [];
 		} catch (e: unknown) {
-			loadErr = e instanceof Error ? e.message : 'Kullanıcı oluşturulamadı.';
+			createUserErr = e instanceof Error ? e.message : 'Kullanıcı oluşturulamadı.';
 		} finally {
 			userCreating = false;
+		}
+	}
+
+	function openOzlukModal(u: AdminUser) {
+		if (u.role !== 'user' && u.role !== 'pending') return;
+		ozlukTarget = u;
+		ozlukSp = { ...emptyNewUser().student_profile };
+		ozlukErr = null;
+		showOzlukModal = true;
+	}
+
+	async function submitOzluk() {
+		ozlukSaving = true;
+		ozlukErr = null;
+		const token = localStorage.token ?? null;
+		if (!token || !ozlukTarget) {
+			ozlukSaving = false;
+			return;
+		}
+		if (!ozlukSp.student_number?.trim() || !ozlukSp.department_id) {
+			ozlukErr = 'Öğrenci numarası ve bölüm seçimi zorunludur.';
+			ozlukSaving = false;
+			return;
+		}
+		try {
+			const sp = ozlukSp;
+			const hsRaw = sp.high_school_graduation_year;
+			const hsNum =
+				typeof hsRaw === 'number'
+					? hsRaw
+					: String(hsRaw ?? '').trim()
+						? parseInt(String(hsRaw).trim(), 10)
+						: NaN;
+			const payload: DouStudentProfileCreateInput = {
+				student_number: sp.student_number.trim(),
+				department_id: sp.department_id,
+				enrollment_date: sp.enrollment_date?.trim() || undefined,
+				class_year: Number(sp.class_year) || 1,
+				program: (sp.program || 'Lisans').trim(),
+				gpa: Number(sp.gpa) || 0,
+				completed_akts: Number(sp.completed_akts) || 0,
+				total_akts_required: Number(sp.total_akts_required) || 240,
+				status: sp.status || 'active',
+				is_financially_eligible: sp.is_financially_eligible !== false,
+				phone: sp.phone?.trim() || undefined,
+				address: sp.address?.trim() || undefined,
+				emergency_contact: sp.emergency_contact?.trim() || undefined,
+				emergency_phone: sp.emergency_phone?.trim() || undefined,
+				tc_kimlik_no: sp.tc_kimlik_no?.trim() || undefined,
+				birth_date: sp.birth_date?.trim() || undefined,
+				birth_place: sp.birth_place?.trim() || undefined,
+				nationality: sp.nationality?.trim() || undefined,
+				mother_name: sp.mother_name?.trim() || undefined,
+				father_name: sp.father_name?.trim() || undefined,
+				high_school_name: sp.high_school_name?.trim() || undefined,
+				program_semester_number: Number(sp.program_semester_number) || 1
+			};
+			if (Number.isFinite(hsNum)) payload.high_school_graduation_year = hsNum;
+
+			await postDouAdminUserStudentProfile(token, ozlukTarget.id, payload);
+			showOzlukModal = false;
+			ozlukTarget = null;
+			const r = await getDouAdminUsers(token, {
+				role: userRoleFilter || undefined,
+				search: userSearch || undefined
+			});
+			users = r.users ?? [];
+		} catch (e: unknown) {
+			ozlukErr = e instanceof Error ? e.message : 'Özlük kaydı oluşturulamadı.';
+		} finally {
+			ozlukSaving = false;
 		}
 	}
 
@@ -978,13 +1190,23 @@
 					{/each}
 				</select>
 				<button
-					on:click={() => (showUserModal = true)}
+					on:click={() => {
+						newUser = emptyNewUser();
+						createUserErr = null;
+						showUserModal = true;
+					}}
 					type="button"
 					class="ml-auto rounded-lg bg-sky-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-sky-400 transition-colors"
 				>
 					+ Kullanıcı Ekle
 				</button>
 			</div>
+
+			<p class="mb-3 text-xs text-slate-500 dark:text-slate-400">
+				<strong>Open WebUI</strong> (Ayarlar → Kullanıcı ekle / <code class="rounded bg-slate-100 px-1 dark:bg-white/10">/api/v1/auths/add</code>)
+				yalnızca <code class="rounded bg-slate-100 px-1 dark:bg-white/10">user</code> tablosuna yazar; OBS özlük için bu sayfadan
+				<strong>+ Kullanıcı Ekle</strong> kullanın veya listede ilgili öğrenci için <strong>Özlük</strong> ile kayıt oluşturun.
+			</p>
 
 			<div
 				class="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
@@ -1035,13 +1257,25 @@
 									</td>
 									<td class="px-4 py-3 text-center text-xs text-slate-400">{u.created_at}</td>
 									<td class="px-4 py-3 text-center">
-										<button
-											on:click={() => toggleUserActive(u)}
-											type="button"
-											class="rounded-lg border border-black/10 px-2 py-1 text-xs hover:bg-slate-50 dark:border-white/10 dark:hover:bg-white/5 transition-colors"
-										>
-											{u.is_active ? 'Dondur' : 'Aktifleştir'}
-										</button>
+										<div class="flex flex-wrap items-center justify-center gap-1">
+											{#if u.role === 'user' || u.role === 'pending'}
+												<button
+													on:click={() => openOzlukModal(u)}
+													type="button"
+													class="rounded-lg border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-medium text-sky-800 hover:bg-sky-100 dark:border-sky-800/50 dark:bg-sky-950/40 dark:text-sky-200 dark:hover:bg-sky-900/40 transition-colors"
+													title="obs_student_profiles kaydı oluştur veya tamamla"
+												>
+													Özlük
+												</button>
+											{/if}
+											<button
+												on:click={() => toggleUserActive(u)}
+												type="button"
+												class="rounded-lg border border-black/10 px-2 py-1 text-xs hover:bg-slate-50 dark:border-white/10 dark:hover:bg-white/5 transition-colors"
+											>
+												{u.is_active ? 'Dondur' : 'Aktifleştir'}
+											</button>
+										</div>
 									</td>
 								</tr>
 							{:else}
@@ -1056,64 +1290,582 @@
 				</div>
 			</div>
 
-			<!-- Yeni kullanıcı modal -->
+			<!-- Yeni kullanıcı modal (OBS özlük: öğrenci / akademisyen) -->
 			{#if showUserModal}
 				<div
-					class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+					class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-3"
 				>
 					<div
-						class="w-full max-w-md rounded-2xl border border-black/10 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-slate-900"
+						class="flex max-h-[92vh] w-full max-w-2xl flex-col rounded-2xl border border-black/10 bg-white shadow-2xl dark:border-white/10 dark:bg-slate-900"
 					>
-						<div class="mb-5 flex items-center justify-between">
-							<div class="font-bold">Yeni Kullanıcı</div>
+						<div
+							class="flex shrink-0 items-center justify-between border-b border-black/5 px-5 py-4 dark:border-white/10"
+						>
+							<div>
+								<div class="font-bold">Yeni kullanıcı</div>
+								<p class="mt-0.5 text-[11px] text-slate-400">
+									Öğrenci → <code class="rounded bg-slate-100 px-1 dark:bg-white/10">obs_student_profiles</code>
+									· Akademisyen →
+									<code class="rounded bg-slate-100 px-1 dark:bg-white/10">obs_academic_profiles</code>
+								</p>
+							</div>
 							<button
 								on:click={() => (showUserModal = false)}
 								type="button"
 								class="text-slate-400 hover:text-slate-700">✕</button
 							>
 						</div>
-						<div class="space-y-3">
-							{#each [['Ad Soyad', 'full_name', 'text'], ['E-posta', 'email', 'email'], ['Parola', 'password', 'password']] as [lbl, field, type]}
-								<label class="block">
-									<div class="mb-1 text-xs font-semibold text-slate-500">{lbl}</div>
-									<input
-										bind:value={newUser[field as keyof typeof newUser]}
-										{type}
-										class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-400/40 dark:border-white/10 dark:bg-slate-800"
-									/>
-								</label>
-							{/each}
-							<label class="block">
-								<div class="mb-1 text-xs font-semibold text-slate-500">Rol</div>
-								<select
-									bind:value={newUser.role}
-									class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+						<div class="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+							{#if createUserErr}
+								<div
+									class="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-200"
 								>
-									{#each ADMIN_USER_ROLE_OPTIONS.filter((r) => r.value !== 'pending') as ro}
-										<option value={ro.value}>{ro.label} — {ro.value}</option>
-									{/each}
-								</select>
-								<p class="mt-1 text-[11px] leading-snug text-slate-400">
-									Veritabanı değerleri: user, academician, admin; onay bekleyenler için ayrıca pending.
-								</p>
-							</label>
-							<div class="flex gap-2 pt-2">
-								<button
-									on:click={createUser}
-									disabled={userCreating}
-									type="button"
-									class="flex-1 rounded-lg bg-sky-500 py-2 text-sm font-semibold text-white hover:bg-sky-400 disabled:opacity-50"
-								>
-									{userCreating ? 'Oluşturuluyor…' : 'Oluştur'}
-								</button>
-								<button
-									on:click={() => (showUserModal = false)}
-									type="button"
-									class="rounded-lg border border-black/10 px-4 py-2 text-sm hover:bg-slate-50 dark:border-white/10 dark:hover:bg-white/5"
-								>
-									İptal
-								</button>
+									{createUserErr}
+								</div>
+							{/if}
+							<div class="space-y-4">
+								<div class="text-xs font-bold uppercase tracking-wide text-slate-400">
+									Hesap (user tablosu)
+								</div>
+								<div class="grid gap-3 sm:grid-cols-2">
+									<label class="block sm:col-span-2">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Ad Soyad *</div>
+										<input
+											bind:value={newUser.full_name}
+											type="text"
+											class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+										/>
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">E-posta *</div>
+										<input
+											bind:value={newUser.email}
+											type="email"
+											autocomplete="off"
+											class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+										/>
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Parola *</div>
+										<input
+											bind:value={newUser.password}
+											type="password"
+											autocomplete="new-password"
+											class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+										/>
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Rol *</div>
+										<select
+											bind:value={newUser.role}
+											class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+										>
+											{#each ADMIN_USER_ROLE_OPTIONS as ro}
+												<option value={ro.value}>{ro.label} ({ro.value})</option>
+											{/each}
+										</select>
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Kullanıcı adı</div>
+										<input
+											bind:value={newUser.username}
+											type="text"
+											class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+										/>
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Cinsiyet</div>
+										<input
+											bind:value={newUser.gender}
+											type="text"
+											placeholder="örn. Erkek / Kadın"
+											class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+										/>
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Doğum tarihi</div>
+										<input
+											bind:value={newUser.date_of_birth}
+											type="date"
+											class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+										/>
+									</label>
+									<label class="block sm:col-span-2">
+										<div class="mb-1 text-xs font-semibold text-slate-500">
+											Telefon (user.info içinde saklanır)
+										</div>
+										<input
+											bind:value={newUser.phone}
+											type="tel"
+											class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+										/>
+									</label>
+								</div>
+
+								{#if newUser.role === 'user' || newUser.role === 'pending'}
+									<div
+										class="border-t border-black/5 pt-4 dark:border-white/10"
+									>
+										<div class="mb-2 text-xs font-bold uppercase tracking-wide text-sky-600 dark:text-sky-400">
+											Öğrenci özlük — zorunlu
+										</div>
+										<div class="grid gap-3 sm:grid-cols-2">
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Öğrenci numarası *</div>
+												<input
+													bind:value={newUser.student_profile.student_number}
+													type="text"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Bölüm *</div>
+												<select
+													bind:value={newUser.student_profile.department_id}
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												>
+													<option value="">— Seçin —</option>
+													{#each departments as d}
+														<option value={d.id}>{d.code} — {d.name}</option>
+													{/each}
+												</select>
+											</label>
+										</div>
+										<div class="mt-3 text-xs font-bold uppercase tracking-wide text-slate-400">
+											İsteğe bağlı (obs_student_profiles)
+										</div>
+										<div class="mt-2 grid gap-3 sm:grid-cols-2">
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Kayıt tarihi</div>
+												<input
+													bind:value={newUser.student_profile.enrollment_date}
+													type="date"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Sınıf / yıl</div>
+												<input
+													bind:value={newUser.student_profile.class_year}
+													type="number"
+													min="1"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Program</div>
+												<input
+													bind:value={newUser.student_profile.program}
+													type="text"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">GNO</div>
+												<input
+													bind:value={newUser.student_profile.gpa}
+													type="number"
+													step="0.01"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Tamamlanan AKTS</div>
+												<input
+													bind:value={newUser.student_profile.completed_akts}
+													type="number"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Gerekli AKTS</div>
+												<input
+													bind:value={newUser.student_profile.total_akts_required}
+													type="number"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Durum</div>
+												<input
+													bind:value={newUser.student_profile.status}
+													type="text"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="flex items-center gap-2 pt-6 text-sm">
+												<input
+													type="checkbox"
+													bind:checked={newUser.student_profile.is_financially_eligible}
+													class="rounded border-black/20"
+												/>
+												Mali uygun
+											</label>
+											<label class="block sm:col-span-2">
+												<div class="mb-1 text-xs font-semibold text-slate-500">
+													Öğrenci telefonu (özlük tablosu)
+												</div>
+												<input
+													bind:value={newUser.student_profile.phone}
+													type="tel"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="block sm:col-span-2">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Adres</div>
+												<input
+													bind:value={newUser.student_profile.address}
+													type="text"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Acil kişi</div>
+												<input
+													bind:value={newUser.student_profile.emergency_contact}
+													type="text"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Acil tel</div>
+												<input
+													bind:value={newUser.student_profile.emergency_phone}
+													type="tel"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">T.C. kimlik</div>
+												<input
+													bind:value={newUser.student_profile.tc_kimlik_no}
+													type="text"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Doğum (özlük)</div>
+												<input
+													bind:value={newUser.student_profile.birth_date}
+													type="date"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Doğum yeri</div>
+												<input
+													bind:value={newUser.student_profile.birth_place}
+													type="text"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Uyruk</div>
+												<input
+													bind:value={newUser.student_profile.nationality}
+													type="text"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Anne adı</div>
+												<input
+													bind:value={newUser.student_profile.mother_name}
+													type="text"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Baba adı</div>
+												<input
+													bind:value={newUser.student_profile.father_name}
+													type="text"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="block sm:col-span-2">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Lise adı</div>
+												<input
+													bind:value={newUser.student_profile.high_school_name}
+													type="text"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Lise mezuniyet yılı</div>
+												<input
+													bind:value={newUser.student_profile.high_school_graduation_year}
+													type="number"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Program yarıyılı</div>
+												<input
+													bind:value={newUser.student_profile.program_semester_number}
+													type="number"
+													min="1"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+										</div>
+									</div>
+								{/if}
+
+								{#if newUser.role === 'academician'}
+									<div class="border-t border-black/5 pt-4 dark:border-white/10">
+										<div class="mb-2 text-xs font-bold uppercase tracking-wide text-violet-600 dark:text-violet-400">
+											Akademik profil — zorunlu
+										</div>
+										<div class="grid gap-3 sm:grid-cols-2">
+											<label class="block sm:col-span-2">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Bölüm *</div>
+												<select
+													bind:value={newUser.academic_profile.department_id}
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												>
+													<option value="">— Seçin —</option>
+													{#each departments as d}
+														<option value={d.id}>{d.code} — {d.name}</option>
+													{/each}
+												</select>
+											</label>
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Sicil no</div>
+												<input
+													bind:value={newUser.academic_profile.staff_number}
+													type="text"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Unvan</div>
+												<input
+													bind:value={newUser.academic_profile.title}
+													type="text"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">Ofis</div>
+												<input
+													bind:value={newUser.academic_profile.office}
+													type="text"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+											<label class="block">
+												<div class="mb-1 text-xs font-semibold text-slate-500">
+													Telefon (akademik özlük)
+												</div>
+												<input
+													bind:value={newUser.academic_profile.phone}
+													type="tel"
+													class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+												/>
+											</label>
+										</div>
+									</div>
+								{/if}
+
+								{#if newUser.role === 'admin'}
+									<p class="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:bg-white/5">
+										<strong>Admin</strong> için yalnızca Open WebUI kullanıcı kaydı oluşturulur; OBS özlük
+										tablosu eklenmez.
+									</p>
+								{/if}
 							</div>
+						</div>
+						<div
+							class="flex shrink-0 gap-2 border-t border-black/5 px-5 py-4 dark:border-white/10"
+						>
+							<button
+								on:click={createUser}
+								disabled={userCreating}
+								type="button"
+								class="flex-1 rounded-lg bg-sky-500 py-2.5 text-sm font-semibold text-white hover:bg-sky-400 disabled:opacity-50"
+							>
+								{userCreating ? 'Oluşturuluyor…' : 'Oluştur'}
+							</button>
+							<button
+								on:click={() => (showUserModal = false)}
+								type="button"
+								class="rounded-lg border border-black/10 px-5 py-2.5 text-sm hover:bg-slate-50 dark:border-white/10 dark:hover:bg-white/5"
+							>
+								İptal
+							</button>
+						</div>
+					</div>
+				</div>
+			{/if}
+
+			{#if showOzlukModal && ozlukTarget}
+				<div
+					class="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-3"
+				>
+					<div
+						class="flex max-h-[92vh] w-full max-w-2xl flex-col rounded-2xl border border-black/10 bg-white shadow-2xl dark:border-white/10 dark:bg-slate-900"
+					>
+						<div
+							class="flex shrink-0 items-center justify-between border-b border-black/5 px-5 py-4 dark:border-white/10"
+						>
+							<div>
+								<div class="font-bold">Öğrenci özlüğü</div>
+								<p class="mt-0.5 text-[11px] text-slate-400">
+									{ozlukTarget.full_name} · {ozlukTarget.email}
+								</p>
+							</div>
+							<button
+								on:click={() => (showOzlukModal = false)}
+								type="button"
+								class="text-slate-400 hover:text-slate-700">✕</button
+							>
+						</div>
+						<div class="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+							{#if ozlukErr}
+								<div
+									class="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-200"
+								>
+									{ozlukErr}
+								</div>
+							{/if}
+							<p class="mb-4 text-xs text-slate-500 dark:text-slate-400">
+								Kayıt <code class="rounded bg-slate-100 px-1 dark:bg-white/10">obs_student_profiles</code>
+								tablosuna yazılır; zaten varsa mevcut kayıt korunur.
+							</p>
+							<div class="border-t border-black/5 pt-4 dark:border-white/10">
+								<div class="mb-2 text-xs font-bold uppercase tracking-wide text-sky-600 dark:text-sky-400">
+									Zorunlu alanlar
+								</div>
+								<div class="grid gap-3 sm:grid-cols-2">
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Öğrenci numarası *</div>
+										<input
+											bind:value={ozlukSp.student_number}
+											type="text"
+											class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+										/>
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Bölüm *</div>
+										<select
+											bind:value={ozlukSp.department_id}
+											class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800"
+										>
+											<option value="">— Seçin —</option>
+											{#each departments as d}
+												<option value={d.id}>{d.code} — {d.name}</option>
+											{/each}
+										</select>
+									</label>
+								</div>
+								<div class="mt-3 text-xs font-bold uppercase tracking-wide text-slate-400">
+									İsteğe bağlı
+								</div>
+								<div class="mt-2 grid gap-3 sm:grid-cols-2">
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Kayıt tarihi</div>
+										<input bind:value={ozlukSp.enrollment_date} type="date" class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800" />
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Sınıf / yıl</div>
+										<input bind:value={ozlukSp.class_year} type="number" min="1" class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800" />
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Program</div>
+										<input bind:value={ozlukSp.program} type="text" class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800" />
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">GNO</div>
+										<input bind:value={ozlukSp.gpa} type="number" step="0.01" class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800" />
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Tamamlanan AKTS</div>
+										<input bind:value={ozlukSp.completed_akts} type="number" class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800" />
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Gerekli AKTS</div>
+										<input bind:value={ozlukSp.total_akts_required} type="number" class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800" />
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Durum</div>
+										<input bind:value={ozlukSp.status} type="text" class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800" />
+									</label>
+									<label class="flex items-center gap-2 pt-6 text-sm">
+										<input type="checkbox" bind:checked={ozlukSp.is_financially_eligible} class="rounded border-black/20" />
+										Mali uygun
+									</label>
+									<label class="block sm:col-span-2">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Öğrenci telefonu</div>
+										<input bind:value={ozlukSp.phone} type="tel" class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800" />
+									</label>
+									<label class="block sm:col-span-2">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Adres</div>
+										<input bind:value={ozlukSp.address} type="text" class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800" />
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Acil kişi</div>
+										<input bind:value={ozlukSp.emergency_contact} type="text" class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800" />
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Acil tel</div>
+										<input bind:value={ozlukSp.emergency_phone} type="tel" class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800" />
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">T.C. kimlik</div>
+										<input bind:value={ozlukSp.tc_kimlik_no} type="text" class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800" />
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Doğum</div>
+										<input bind:value={ozlukSp.birth_date} type="date" class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800" />
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Doğum yeri</div>
+										<input bind:value={ozlukSp.birth_place} type="text" class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800" />
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Uyruk</div>
+										<input bind:value={ozlukSp.nationality} type="text" class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800" />
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Anne adı</div>
+										<input bind:value={ozlukSp.mother_name} type="text" class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800" />
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Baba adı</div>
+										<input bind:value={ozlukSp.father_name} type="text" class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800" />
+									</label>
+									<label class="block sm:col-span-2">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Lise adı</div>
+										<input bind:value={ozlukSp.high_school_name} type="text" class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800" />
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Lise mezuniyet yılı</div>
+										<input bind:value={ozlukSp.high_school_graduation_year} type="number" class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800" />
+									</label>
+									<label class="block">
+										<div class="mb-1 text-xs font-semibold text-slate-500">Program yarıyılı</div>
+										<input bind:value={ozlukSp.program_semester_number} type="number" min="1" class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-800" />
+									</label>
+								</div>
+							</div>
+						</div>
+						<div class="flex shrink-0 gap-2 border-t border-black/5 px-5 py-4 dark:border-white/10">
+							<button
+								on:click={submitOzluk}
+								disabled={ozlukSaving}
+								type="button"
+								class="flex-1 rounded-lg bg-sky-500 py-2.5 text-sm font-semibold text-white hover:bg-sky-400 disabled:opacity-50"
+							>
+								{ozlukSaving ? 'Kaydediliyor…' : 'Özlük kaydet'}
+							</button>
+							<button
+								on:click={() => (showOzlukModal = false)}
+								type="button"
+								class="rounded-lg border border-black/10 px-5 py-2.5 text-sm hover:bg-slate-50 dark:border-white/10 dark:hover:bg-white/5"
+							>
+								İptal
+							</button>
 						</div>
 					</div>
 				</div>

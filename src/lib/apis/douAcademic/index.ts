@@ -103,6 +103,8 @@ export type DouStudentProfile = {
 	enrollment_date?: string;
 	is_financially_eligible?: boolean;
 	_mock?: boolean;
+	/** obs_student_profiles satırı yok; yönetimden özlük eklenmeli */
+	_obs_profile_missing?: boolean;
 };
 
 export type DouAdvisor = {
@@ -1555,15 +1557,68 @@ export const getDouAdminUsers = (
 export const DOU_ADMIN_USER_ROLES = ['user', 'academician', 'admin', 'pending'] as const;
 export type DouAdminAssignableRole = (typeof DOU_ADMIN_USER_ROLES)[number];
 
-export const createDouAdminUser = (
+/** POST /admin/users — backend `UserCreate` + `obs_student_profiles` / `obs_academic_profiles` */
+export type DouStudentProfileCreateInput = {
+	student_number: string;
+	department_id: string;
+	enrollment_date?: string;
+	class_year?: number;
+	program?: string;
+	gpa?: number;
+	completed_akts?: number;
+	total_akts_required?: number;
+	status?: string;
+	is_financially_eligible?: boolean;
+	phone?: string;
+	address?: string;
+	emergency_contact?: string;
+	emergency_phone?: string;
+	tc_kimlik_no?: string;
+	birth_date?: string;
+	birth_place?: string;
+	nationality?: string;
+	mother_name?: string;
+	father_name?: string;
+	high_school_name?: string;
+	high_school_graduation_year?: number;
+	program_semester_number?: number;
+};
+
+export type DouAcademicProfileCreateInput = {
+	department_id: string;
+	staff_number?: string;
+	title?: string;
+	office?: string;
+	phone?: string;
+};
+
+export type DouAdminCreateUserBody = {
+	email: string;
+	full_name: string;
+	role?: DouAdminAssignableRole | string;
+	password?: string;
+	username?: string;
+	gender?: string;
+	date_of_birth?: string;
+	phone?: string;
+	student_profile?: DouStudentProfileCreateInput;
+	academic_profile?: DouAcademicProfileCreateInput;
+};
+
+export const createDouAdminUser = (token: string | null, body: DouAdminCreateUserBody) =>
+	authFetch<AdminUser>('/admin/users', token, { method: 'POST', body: JSON.stringify(body) });
+
+/** Mevcut öğrenci hesabına obs_student_profiles kaydı (auths/add ile oluşanlar için) */
+export const postDouAdminUserStudentProfile = (
 	token: string | null,
-	body: {
-		email: string;
-		full_name: string;
-		role?: DouAdminAssignableRole | string;
-		password?: string;
-	}
-) => authFetch<AdminUser>('/admin/users', token, { method: 'POST', body: JSON.stringify(body) });
+	userId: string,
+	body: DouStudentProfileCreateInput
+) =>
+	authFetch<{ ok: boolean; user_id: string; student_profile_id: string }>(
+		`/admin/users/${encodeURIComponent(userId)}/student-profile`,
+		token,
+		{ method: 'POST', body: JSON.stringify(body) }
+	);
 
 export const patchDouAdminUser = (
 	token: string | null,

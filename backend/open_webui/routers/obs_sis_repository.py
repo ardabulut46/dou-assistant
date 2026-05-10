@@ -2343,6 +2343,7 @@ def record_attendance(
     records: list[dict[str, Any]],
     recorded_by: str,
 ) -> int:
+    validate_attendance_week_no(week_no)
     for rec in records:
         eid = rec.get("enrollment_id")
         st = _normalize_attendance_status(rec.get("status"))
@@ -4945,6 +4946,227 @@ def admin_update_student_profile_by_user_id(
         "student_number": row.get("student_number") or "",
         "department_id": _str_id(row.get("department_id")),
     }
+
+
+def _obs_opt_str(v: Any) -> Optional[str]:
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s if s else None
+
+
+def _obs_opt_int(v: Any) -> Optional[int]:
+    if v is None or v == "":
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _obs_parse_date(v: Any) -> Optional[date]:
+    if v is None:
+        return None
+    s = str(v).strip()
+    if not s:
+        return None
+    try:
+        return date.fromisoformat(s[:10])
+    except ValueError:
+        return None
+
+
+def ensure_mirror_openwebui_user_row(
+    obs_db: Session,
+    *,
+    user_id: str,
+    email: str,
+    name: str,
+    role: str,
+    profile_image_url: Optional[str] = None,
+) -> None:
+    """
+    OBS_DATABASE_URL ana DATABASE_URL'den farklıysa obs_* FK'ları \"user\".id ile bağlanır;
+    yeni WebUI kullanıcısı yalnızca ana DB'de olduğundan burada satır yoksa minimal INSERT yapılır.
+    """
+    from time import time as wall_time
+
+    import logging
+
+    from open_webui.internal.obs_db import OBS_USES_PRIMARY_DATABASE
+
+    log = logging.getLogger(__name__)
+    if OBS_USES_PRIMARY_DATABASE:
+        return
+
+    hit = obs_db.execute(
+        text(f"SELECT 1 FROM {USER_TBL} WHERE id = :id LIMIT 1"),
+        {"id": user_id},
+    ).first()
+    if hit:
+        return
+
+    now_ts = int(wall_time())
+    img = (profile_image_url or "").strip() or "/user.png"
+    obs_db.execute(
+        text(
+            f"""
+            INSERT INTO {USER_TBL} (
+                id, email, role, name, profile_image_url,
+                created_at, updated_at, last_active_at
+            ) VALUES (
+                :id, :email, :role, :name, :img,
+                :ca, :ua, :la
+            )
+            """
+        ),
+        {
+            "id": user_id,
+            "email": email,
+            "role": role,
+            "name": name,
+            "img": img,
+            "ca": now_ts,
+            "ua": now_ts,
+            "la": now_ts,
+        },
+    )
+    obs_db.commit()
+    log.info(
+        'OBS ayrı DB: "user" satırı yansıtıldı (user_id=%s)',
+        user_id,
+    )
+
+
+def admin_insert_student_profile(
+    db: Session,
+    user_id: str,
+    data: dict[str, Any],
+) -> str:
+    """
+    obs_student_profiles için ilk kayıt. Zaten varsa mevcut id döner (idempotent).
+    """
+    existing = resolve_student_profile_id(db, user_id)
+    if existing:
+        return existing
+
+    sn = _obs_opt_str(data.get("student_number"))
+    did = _obs_opt_str(data.get("department_id"))
+    if not sn or not did:
+        raise ValueError("Öğrenci için öğrenci numarası ve bölüm (department_id) zorunludur.")
+
+    pid = str(uuid.uuid4())
+    enrollment_date = _obs_parse_date(data.get("enrollment_date"))
+    birth_date = _obs_parse_date(data.get("birth_date"))
+
+    cy = int(data.get("class_year") or 1)
+    try:
+        cy = max(1, min(20, cy))
+    except (TypeError, ValueError):
+        cy = 1
+
+    gpa = float(data.get("gpa") or 0)
+    cakts = int(data.get("completed_akts") or 0)
+    takts = int(data.get("total_akts_required") or 240)
+    st = _obs_opt_str(data.get("status")) or "active"
+    ife = bool(data.get("is_financially_eligible", True))
+    prog = _obs_opt_str(data.get("program")) or "Lisans"
+    psn = int(data.get("program_semester_number") or 1)
+    try:
+        psn = max(1, min(40, psn))
+    except (TypeError, ValueError):
+        psn = 1
+
+    hsy = _obs_opt_int(data.get("high_school_graduation_year"))
+
+    db.execute(
+        text(
+            """
+            INSERT INTO obs_student_profiles (
+                id, user_id, student_number, department_id, enrollment_date, class_year, program,
+                gpa, completed_akts, total_akts_required, status, is_financially_eligible,
+                phone, address, emergency_contact, emergency_phone, tc_kimlik_no,
+                created_at, updated_at, birth_date, birth_place, nationality,
+                mother_name, father_name, high_school_name, high_school_graduation_year,
+                program_semester_number
+            ) VALUES (
+                :id, :uid, :sn, :did, CAST(:ed AS date), :cy, :prog,
+                :gpa, :cakts, :takts, :st, :ife,
+                :phone, :addr, :ec, :ep, :tc,
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CAST(:bd AS date),
+                :bp, :nat, :mn, :fn, :hsn, :hsy, :psn
+            )
+            """
+        ),
+        {
+            "id": pid,
+            "uid": user_id,
+            "sn": sn,
+            "did": did,
+            "ed": enrollment_date,
+            "cy": cy,
+            "prog": prog,
+            "gpa": gpa,
+            "cakts": cakts,
+            "takts": takts,
+            "st": st,
+            "ife": ife,
+            "phone": _obs_opt_str(data.get("phone")),
+            "addr": _obs_opt_str(data.get("address")),
+            "ec": _obs_opt_str(data.get("emergency_contact")),
+            "ep": _obs_opt_str(data.get("emergency_phone")),
+            "tc": _obs_opt_str(data.get("tc_kimlik_no")),
+            "bd": birth_date,
+            "bp": _obs_opt_str(data.get("birth_place")),
+            "nat": _obs_opt_str(data.get("nationality")),
+            "mn": _obs_opt_str(data.get("mother_name")),
+            "fn": _obs_opt_str(data.get("father_name")),
+            "hsn": _obs_opt_str(data.get("high_school_name")),
+            "hsy": hsy,
+            "psn": psn,
+        },
+    )
+    db.commit()
+    return pid
+
+
+def admin_insert_academic_profile(
+    db: Session,
+    user_id: str,
+    data: dict[str, Any],
+) -> str:
+    """obs_academic_profiles ilk kayıt; kayıt varsa mevcut id döner."""
+    existing = resolve_academic_profile_id(db, user_id)
+    if existing:
+        return existing
+
+    did = _obs_opt_str(data.get("department_id"))
+    if not did:
+        raise ValueError("Akademisyen için bölüm (department_id) zorunludur.")
+
+    aid = str(uuid.uuid4())
+    db.execute(
+        text(
+            """
+            INSERT INTO obs_academic_profiles (
+                id, user_id, staff_number, title, department_id, office, phone, created_at
+            ) VALUES (
+                :id, :uid, :staff, :title, :did, :office, :phone, CURRENT_TIMESTAMP
+            )
+            """
+        ),
+        {
+            "id": aid,
+            "uid": user_id,
+            "staff": _obs_opt_str(data.get("staff_number")) or "",
+            "title": _obs_opt_str(data.get("title")) or "",
+            "did": did,
+            "office": _obs_opt_str(data.get("office")) or "",
+            "phone": _obs_opt_str(data.get("phone")) or "",
+        },
+    )
+    db.commit()
+    return aid
 
 
 def admin_delete_student_profile_by_user_id(
