@@ -2122,7 +2122,19 @@ async def admin_assign_student_advisor(
     _u=Depends(get_obs_admin_user),
 ):
     adv = (body.advisor_user_id or "").strip() or None
+    log.info(
+        "[OBS-ADMIN] PUT /admin/student-advisors/%s body=%r -> resolved adv=%r",
+        student_user_id,
+        body.model_dump(),
+        adv,
+    )
     ok, err = repo.assign_student_advisor(obs_db, student_user_id, adv)
+    log.info(
+        "[OBS-ADMIN] PUT /admin/student-advisors/%s result ok=%s err=%s",
+        student_user_id,
+        ok,
+        err,
+    )
     if not ok:
         if err == "student_profile_not_found":
             raise HTTPException(status_code=404, detail="Öğrenci profili bulunamadı.")
@@ -2147,7 +2159,17 @@ async def admin_clear_student_advisor(
     obs_db: Session = Depends(get_obs_session),
     _u=Depends(get_obs_admin_user),
 ):
+    log.info(
+        "[OBS-ADMIN] DELETE /admin/student-advisors/%s (kaldır)",
+        student_user_id,
+    )
     ok, err = repo.assign_student_advisor(obs_db, student_user_id, None)
+    log.info(
+        "[OBS-ADMIN] DELETE /admin/student-advisors/%s result ok=%s err=%s",
+        student_user_id,
+        ok,
+        err,
+    )
     if not ok:
         if err == "student_profile_not_found":
             raise HTTPException(status_code=404, detail="Öğrenci profili bulunamadı.")

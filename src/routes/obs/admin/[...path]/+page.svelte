@@ -367,11 +367,30 @@
 	let studentAdvisorsBulkAdvisor = '';
 	let studentAdvisorsBulkSaving = false;
 
+	let studentAdvisorsRowSavedAt: Record<string, number> = {};
+
 	function studentAdvisorsSyncDraftFromRows() {
 		studentAdvisorsRowDraft = Object.fromEntries(
 			studentAdvisorsRows.map((r) => [r.user_id, r.advisor_user_id ?? ''])
 		);
 		studentAdvisorsSelected = {};
+	}
+
+	/**
+	 * Dropdown değişiminde otomatik kaydet. Aynı değer seçilirse no-op.
+	 * advisorUserId boş ise mevcut danışmanlık kapatılır.
+	 */
+	async function onStudentAdvisorRowChange(
+		studentUserId: string,
+		newAdvisorUserId: string,
+		previousAdvisorUserId: string
+	) {
+		if ((newAdvisorUserId ?? '') === (previousAdvisorUserId ?? '')) return;
+		await persistStudentAdvisor(studentUserId, newAdvisorUserId);
+		studentAdvisorsRowSavedAt = {
+			...studentAdvisorsRowSavedAt,
+			[studentUserId]: Date.now()
+		};
 	}
 
 	$: studentAdvisorsAllSelected =
@@ -419,21 +438,45 @@
 
 	async function persistStudentAdvisor(studentUserId: string, advisorUserId: string) {
 		const token = localStorage.token ?? null;
-		if (!token) return;
+		if (!token) {
+			console.warn('[advisor-assign] token yok, işlem yapılmadı');
+			return;
+		}
 		studentAdvisorsErr = null;
 		studentAdvisorsInfo = null;
 		studentAdvisorsRowSavingId = studentUserId;
+		const action = advisorUserId ? 'PUT (atama/değiştir)' : 'DELETE (kaldır)';
+		console.info(
+			`[advisor-assign] ${action} →`,
+			{ studentUserId, advisorUserId: advisorUserId || null }
+		);
 		try {
+			let resp: unknown;
 			if (advisorUserId) {
-				await putDouAdminStudentAdvisor(token, studentUserId, advisorUserId);
+				resp = await putDouAdminStudentAdvisor(token, studentUserId, advisorUserId);
 				studentAdvisorsInfo = 'Danışman güncellendi.';
 			} else {
-				await deleteDouAdminStudentAdvisor(token, studentUserId);
+				resp = await deleteDouAdminStudentAdvisor(token, studentUserId);
 				studentAdvisorsInfo = 'Danışmanlık kaldırıldı.';
 			}
+			console.info(`[advisor-assign] ${action} ✓ response`, resp);
 			await reloadStudentAdvisorsList();
+			const refreshed = studentAdvisorsRows.find((r) => r.user_id === studentUserId);
+			console.info(
+				`[advisor-assign] ${action} liste yenilendi → satır:`,
+				refreshed
+					? {
+							user_id: refreshed.user_id,
+							advisor_user_id: refreshed.advisor_user_id || null,
+							advisor_full_name: refreshed.advisor_full_name || null,
+							advisor_valid_from: refreshed.advisor_valid_from,
+							advisor_valid_to: refreshed.advisor_valid_to
+						}
+					: '(filtre dışı kaldı / bulunamadı)'
+			);
 		} catch (e: unknown) {
 			studentAdvisorsErr = e instanceof Error ? e.message : 'Atama yapılamadı.';
+			console.error(`[advisor-assign] ${action} ✗`, e);
 		} finally {
 			studentAdvisorsRowSavingId = '';
 		}
@@ -2631,8 +2674,11 @@
 								Öğrenci → Danışman (obs_student_advisors)
 							</div>
 							<p class="text-xs text-slate-500">
-								Öğrenci listesinden ilgili kişileri seçip toplu danışman atayın veya
-								satır içinden tek tek değiştirin. Mevcut danışman tabloda görünür.
+								Tablodaki "Danışman" sütunu salt okunurdur — sadece mevcut atamayı
+								gösterir. Atama/değiştirme/kaldırma işlemini yapmak için
+								öğrencileri sol kutucuktan seçip aşağıdaki "Toplu Atama" panelinden
+								"Seçili öğrenciye uygula" butonunu kullanın. Danışmanlığı kaldırmak
+								için "— Danışmanlığı Kaldır —" seçeneğini seçip uygulayın.
 							</p>
 						</div>
 						<button
@@ -2785,8 +2831,6 @@
 									<th class="px-3 py-2 text-left">Ad Soyad</th>
 									<th class="px-3 py-2 text-left">Bölüm / Sınıf</th>
 									<th class="px-3 py-2 text-left">Mevcut Danışman</th>
-									<th class="px-3 py-2 text-left">Yeni Danışman</th>
-									<th class="px-3 py-2 text-left">İşlem</th>
 								</tr>
 							</thead>
 							<tbody>
@@ -2832,49 +2876,10 @@
 												>
 											{/if}
 										</td>
-										<td class="px-3 py-2">
-											<select
-												bind:value={studentAdvisorsRowDraft[r.user_id]}
-												class="w-full max-w-[16rem] rounded border border-black/10 px-2 py-1 text-xs dark:border-white/10 dark:bg-slate-900"
-											>
-												<option value="">— Atanmadı —</option>
-												{#each studentAdvisorsAdvisorOptions as ins}
-													<option value={ins.user_id}
-														>{studentAdvisorsAdvisorLabel(ins)}</option
-													>
-												{/each}
-											</select>
-										</td>
-										<td class="px-3 py-2">
-											<button
-												type="button"
-												disabled={studentAdvisorsRowSavingId === r.user_id ||
-													(studentAdvisorsRowDraft[r.user_id] ?? '') ===
-														(r.advisor_user_id ?? '')}
-												on:click={() =>
-													void persistStudentAdvisor(
-														r.user_id,
-														studentAdvisorsRowDraft[r.user_id] ?? ''
-													)}
-												class="rounded-lg bg-violet-600 px-2 py-1 text-xs font-semibold text-white disabled:opacity-50"
-											>
-												{studentAdvisorsRowSavingId === r.user_id ? '…' : 'Kaydet'}
-											</button>
-											{#if r.advisor_user_id}
-												<button
-													type="button"
-													disabled={studentAdvisorsRowSavingId === r.user_id}
-													on:click={() => void persistStudentAdvisor(r.user_id, '')}
-													class="ml-1 rounded-lg border border-red-200 px-2 py-1 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-900/40 dark:text-red-400"
-												>
-													Kaldır
-												</button>
-											{/if}
-										</td>
 									</tr>
 								{:else}
 									<tr>
-										<td colspan="7" class="px-3 py-10 text-center text-sm text-slate-400">
+										<td colspan="5" class="px-3 py-10 text-center text-sm text-slate-400">
 											{studentAdvisorsLoading ? 'Yükleniyor…' : 'Kriterlere uyan öğrenci yok.'}
 										</td>
 									</tr>

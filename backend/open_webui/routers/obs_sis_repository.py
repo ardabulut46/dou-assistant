@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -11,6 +12,8 @@ from collections import defaultdict
 
 from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
+
+log = logging.getLogger(__name__)
 
 USER_TBL = '"user"'
 
@@ -5854,26 +5857,44 @@ def assign_student_advisor(
     """Öğrenciye danışman atar / değiştirir / kaldırır.
 
     `advisor_user_id` boş/None ise mevcut aktif danışmanlık kapatılır.
-    Aksi takdirde aktif kayıt varsa `valid_to = CURRENT_DATE` ile sonlandırılır
-    ve bugün başlangıçlı yeni satır eklenir. Akademisyenin obs_academic_profiles
-    kaydı yoksa stub oluşturulur.
+    Aktif kaydı kapatırken:
+      - `valid_from = bugün` olan satırlar (gün içinde eklenip iptal edilenler) silinir
+        — aksi halde `valid_to < valid_from` üreterek geçersiz aralık oluşur.
+      - Diğer satırların `valid_to` değeri `dün` olarak işaretlenir, çünkü listeleme
+        sorgusu (`get_advisor_api`, vs.) `valid_to >= CURRENT_DATE` kullanır ve
+        bugünü hâlâ "aktif" sayar; "kaldır" sonucu hemen yansımaz.
+    Akademisyenin obs_academic_profiles kaydı yoksa stub oluşturulur.
     """
     if not student_user_id:
+        log.warning("[advisor-assign] missing_student")
         return False, "missing_student"
     spid = resolve_student_profile_id(obs_db, str(student_user_id).strip())
     if not spid:
+        log.warning(
+            "[advisor-assign] student_profile_not_found user_id=%s",
+            student_user_id,
+        )
         return False, "student_profile_not_found"
 
     target_apid: Optional[str] = None
+    adv_uid_norm: Optional[str] = None
     if advisor_user_id and str(advisor_user_id).strip():
-        adv_uid = str(advisor_user_id).strip()
-        target_apid = resolve_academic_profile_id(obs_db, adv_uid)
+        adv_uid_norm = str(advisor_user_id).strip()
+        target_apid = resolve_academic_profile_id(obs_db, adv_uid_norm)
         if not target_apid:
             try:
-                target_apid = ensure_academic_profile_for_user(obs_db, adv_uid)
+                target_apid = ensure_academic_profile_for_user(obs_db, adv_uid_norm)
             except ValueError:
+                log.warning(
+                    "[advisor-assign] advisor_no_department_for_stub adv_uid=%s",
+                    adv_uid_norm,
+                )
                 return False, "advisor_no_department_for_stub"
             except Exception:
+                log.exception(
+                    "[advisor-assign] ensure_academic_profile_for_user failed adv_uid=%s",
+                    adv_uid_norm,
+                )
                 return False, "advisor_profile_not_found"
         if not target_apid:
             return False, "advisor_profile_not_found"
@@ -5893,22 +5914,49 @@ def assign_student_advisor(
                 {"sid": spid, "apid": target_apid},
             ).first()
             if existing:
+                log.info(
+                    "[advisor-assign] noop already_active student_user_id=%s spid=%s adv_uid=%s apid=%s",
+                    student_user_id,
+                    spid,
+                    adv_uid_norm,
+                    target_apid,
+                )
                 return True, ""
 
-        # Aktif danışmanlığı sonlandır.
-        obs_db.execute(
+        # 1) Bugün açılmış aktif satırları SİL (aksi halde valid_to<valid_from olur).
+        del_res = obs_db.execute(
+            text(
+                """
+                DELETE FROM obs_student_advisors
+                WHERE student_id = :sid
+                  AND valid_from = CURRENT_DATE
+                  AND (valid_to IS NULL OR valid_to >= CURRENT_DATE)
+                """
+            ),
+            {"sid": spid},
+        )
+        # 2) Önceki aktif satırların valid_to değerini DÜN olarak işaretle.
+        upd_res = obs_db.execute(
             text(
                 """
                 UPDATE obs_student_advisors
-                SET valid_to = CURRENT_DATE
+                SET valid_to = CURRENT_DATE - INTERVAL '1 day'
                 WHERE student_id = :sid
                   AND (valid_to IS NULL OR valid_to >= CURRENT_DATE)
                 """
             ),
             {"sid": spid},
         )
+        log.info(
+            "[advisor-assign] closed previous student_user_id=%s spid=%s deleted=%s updated=%s",
+            student_user_id,
+            spid,
+            getattr(del_res, "rowcount", None),
+            getattr(upd_res, "rowcount", None),
+        )
 
         if target_apid:
+            new_id = str(uuid.uuid4())
             obs_db.execute(
                 text(
                     """
@@ -5920,18 +5968,37 @@ def assign_student_advisor(
                     """
                 ),
                 {
-                    "id": str(uuid.uuid4()),
+                    "id": new_id,
                     "sid": spid,
                     "apid": target_apid,
                 },
             )
+            log.info(
+                "[advisor-assign] inserted new student_user_id=%s spid=%s adv_uid=%s apid=%s row_id=%s",
+                student_user_id,
+                spid,
+                adv_uid_norm,
+                target_apid,
+                new_id,
+            )
+        else:
+            log.info(
+                "[advisor-assign] cleared advisor student_user_id=%s spid=%s",
+                student_user_id,
+                spid,
+            )
         obs_db.commit()
         return True, ""
-    except Exception as ex:  # pragma: no cover - DB hata akışı
+    except Exception as ex:
         try:
             obs_db.rollback()
         except Exception:
             pass
+        log.exception(
+            "[advisor-assign] db_error student_user_id=%s adv_uid=%s",
+            student_user_id,
+            adv_uid_norm,
+        )
         return False, f"db_error: {ex}"
 
 
