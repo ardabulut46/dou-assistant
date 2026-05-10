@@ -100,7 +100,7 @@
 			: undefined;
 	let sectionStudents: AcademicStudent[] = [];
 	let gradeRows: AcademicGradeRow[] = [];
-	let gradeEdits: Record<string, { midterm?: number; final?: number; letter_grade?: string }> = {};
+	let gradeEdits: Record<string, { midterm?: number; final?: number; makeup?: number; letter_grade?: string }> = {};
 	let gradeDeletingId: string | null = null;
 	let gradeSaving = false;
 	let gradeSaved = false;
@@ -468,6 +468,7 @@
 					gradeEdits[row.enrollment_id] = {
 						midterm: row.midterm ?? undefined,
 						final: row.final ?? undefined,
+						makeup: row.makeup ?? undefined,
 						letter_grade: row.letter_grade?.trim() ?? ''
 					};
 				});
@@ -799,6 +800,7 @@
 				enrollment_id,
 				midterm: g.midterm,
 				final: g.final,
+				makeup: g.makeup,
 				// Harf notunu backend de hesaplayabiliyor; yine de UI'daki değeri gönderiyoruz
 				letter_grade: (g.letter_grade ?? '').trim()
 			}));
@@ -883,17 +885,23 @@
 		if (!g) return;
 		const mid = g.midterm;
 		const fin = g.final;
-		if (mid == null || fin == null) {
+		const makeup = g.makeup;
+
+		if (mid == null || (fin == null && makeup == null)) {
 			g.letter_grade = '';
 			return;
 		}
+
 		let wMid = clampPct(gradeWeights.midterm_weight_percent, 40);
 		let wFin = clampPct(gradeWeights.final_weight_percent, 60);
 		if (wMid + wFin <= 0) {
 			wMid = 40;
 			wFin = 60;
 		}
-		const score = (Number(mid) * wMid + Number(fin) * wFin) / 100;
+
+		// Eğer büt girilmişse final yerine büt kullanılır (ağırlığı aynı)
+		const effectiveFinal = (makeup !== null && makeup !== undefined) ? makeup : (fin ?? 0);
+		const score = (Number(mid) * wMid + Number(effectiveFinal) * wFin) / 100;
 		g.letter_grade = letterFromScore(score);
 	}
 
@@ -1423,6 +1431,7 @@
 								<th class="px-4 py-3 text-left">No</th>
 								<th class="px-4 py-3 text-center w-28">Vize</th>
 								<th class="px-4 py-3 text-center w-28">Final</th>
+								<th class="px-4 py-3 text-center w-28">Büt</th>
 								<th class="px-4 py-3 text-center min-w-[7rem]">Harf</th>
 								<th class="px-4 py-3 text-center">Durum</th>
 								<th class="px-4 py-3 text-center w-24">İşlem</th>
@@ -1455,6 +1464,19 @@
 											disabled={g.is_finalized}
 											on:input={() => recalcLetter(g.enrollment_id)}
 											class="w-full rounded-lg border border-black/10 bg-white px-2 py-1 text-center text-sm outline-none focus:ring-2 focus:ring-sky-400/40 dark:border-white/10 dark:bg-white/5"
+										/>
+									</td>
+									<td class="px-4 py-2.5">
+										<input
+											type="number"
+											min="0"
+											max="100"
+											step="0.5"
+											bind:value={gradeEdits[g.enrollment_id].makeup}
+											disabled={g.is_finalized}
+											on:input={() => recalcLetter(g.enrollment_id)}
+											class="w-full rounded-lg border-2 border-amber-200 bg-amber-50/30 px-2 py-1 text-center text-sm font-bold outline-none focus:border-amber-500 focus:ring-0 dark:border-amber-900/40 dark:bg-amber-900/10 dark:text-amber-200"
+											placeholder="—"
 										/>
 									</td>
 									<td class="px-4 py-2.5 text-center">

@@ -84,6 +84,7 @@
 		vizeWeight: number;
 		final: number | null;
 		finalWeight: number;
+		makeup: number | null;
 		harf: string;
 		gradePoint: number;
 	}[] = [];
@@ -104,7 +105,12 @@
 		mockCourses = mockCourses.map((c) => {
 			const v = c.vize ?? 0;
 			const f = c.final ?? 0;
-			const total = (v * c.vizeWeight) / 100 + (f * c.finalWeight) / 100;
+			const m = c.makeup;
+			
+			// Eğer büt girilmişse final yerine büt kullanılır (ağırlığı aynı)
+			const effectiveFinal = (m !== null && m !== undefined) ? m : f;
+			const total = (v * c.vizeWeight) / 100 + (effectiveFinal * c.finalWeight) / 100;
+			
 			const res = calculateHarf(total);
 			return { ...c, harf: res.harf, gradePoint: res.point };
 		});
@@ -139,6 +145,7 @@
 					vizeWeight: 40,
 					final: null,
 					finalWeight: 60,
+					makeup: null,
 					harf: 'F',
 					gradePoint: 0
 				}));
@@ -156,6 +163,7 @@
 				vizeWeight: 40,
 				final: null,
 				finalWeight: 60,
+				makeup: null,
 				harf: 'F',
 				gradePoint: 0
 			}
@@ -1928,6 +1936,7 @@
 								<th class="px-4 py-3 text-left">Ders</th>
 								<th class="px-4 py-3 text-center">Vize</th>
 								<th class="px-4 py-3 text-center">Final</th>
+								<th class="px-4 py-3 text-center">Büt</th>
 								<th class="px-4 py-3 text-center">Harf</th>
 								<th class="px-4 py-3 text-center">Durum</th>
 							</tr>
@@ -1941,8 +1950,9 @@
 										class="px-4 py-3 font-mono text-xs font-semibold text-slate-600 dark:text-slate-300"
 										>{g.course_code}</td
 									>
-									<td class="px-4 py-3 text-center">{g.midterm ?? '—'}</td>
-									<td class="px-4 py-3 text-center">{g.final ?? '—'}</td>
+									<td class="px-4 py-3 text-center font-medium">{g.midterm ?? '—'}</td>
+									<td class="px-4 py-3 text-center font-medium">{g.final ?? '—'}</td>
+									<td class="px-4 py-3 text-center font-medium text-amber-600 dark:text-amber-400">{g.makeup ?? '—'}</td>
 									<td class="px-4 py-3 text-center">
 										{#if g.is_published && g.letter_grade}
 											<span
@@ -2033,24 +2043,25 @@
 									<th class="px-4 py-3 text-center">AKTS</th>
 									<th class="px-4 py-3 text-center">Vize (%/Not)</th>
 									<th class="px-4 py-3 text-center">Final (%/Not)</th>
+									<th class="px-4 py-3 text-center">Büt (Not)</th>
 									<th class="px-4 py-3 text-center">Harf</th>
 									<th class="px-4 py-3 text-right">İşlem</th>
 								</tr>
 							</thead>
 							<tbody>
 								{#each mockCourses as c, i}
-									<tr class="border-t border-black/5 dark:border-white/10 hover:bg-slate-50/30 transition-colors">
+									<tr class="border-t border-black/5 dark:border-white/10 hover:bg-slate-50/50 transition-all duration-200">
 										<td class="px-4 py-3">
 											<div class="flex flex-col">
 												<input
 													type="text"
 													bind:value={c.code}
-													class="w-20 border-none bg-transparent p-0 font-mono text-xs font-bold text-slate-500 focus:ring-0"
+													class="w-20 border-none bg-transparent p-0 font-mono text-xs font-bold text-sky-600 focus:ring-0 dark:text-sky-400"
 												/>
 												<input
 													type="text"
 													bind:value={c.name}
-													class="mt-0.5 border-none bg-transparent p-0 text-sm font-medium focus:ring-0"
+													class="mt-0.5 border-none bg-transparent p-0 text-sm font-semibold text-slate-700 focus:ring-0 dark:text-slate-200"
 												/>
 											</div>
 										</td>
@@ -2059,42 +2070,57 @@
 												type="number"
 												bind:value={c.akts}
 												on:input={updateMockCalculations}
-												class="w-12 border-none bg-transparent p-0 text-center text-sm font-semibold focus:ring-0"
+												class="w-12 border-none bg-transparent p-0 text-center text-sm font-bold text-slate-600 focus:ring-0 dark:text-slate-300"
 											/>
 										</td>
 										<td class="px-4 py-3 text-center">
-											<div class="flex items-center justify-center gap-1">
-												<input
-													type="number"
-													bind:value={c.vizeWeight}
-													on:input={updateMockCalculations}
-													class="w-8 border-none bg-transparent p-0 text-right text-xs text-slate-400 focus:ring-0"
-												/>
-												<span class="text-slate-300">%</span>
+											<div class="flex items-center justify-center gap-1.5">
+												<div class="flex items-center rounded-md bg-slate-100/50 px-1.5 py-1 dark:bg-white/5 ring-1 ring-black/5 dark:ring-white/10">
+													<input
+														type="number"
+														bind:value={c.vizeWeight}
+														on:input={updateMockCalculations}
+														class="w-7 border-none bg-transparent p-0 text-right text-[10px] font-bold text-slate-400 focus:ring-0"
+													/>
+													<span class="text-[10px] font-bold text-slate-300">%</span>
+												</div>
 												<input
 													type="number"
 													bind:value={c.vize}
 													on:input={updateMockCalculations}
 													placeholder="0"
-													class="w-10 rounded border border-black/10 bg-slate-50 px-1 py-0.5 text-center text-sm font-bold focus:border-sky-500 focus:ring-1 focus:ring-sky-500 dark:bg-white/10"
+													class="w-12 rounded-lg border-2 border-slate-200 bg-white px-1.5 py-1 text-center text-sm font-black text-slate-800 shadow-sm transition-all focus:border-sky-500 focus:ring-0 dark:border-white/10 dark:bg-slate-800 dark:text-white dark:focus:border-sky-400"
 												/>
 											</div>
 										</td>
 										<td class="px-4 py-3 text-center">
-											<div class="flex items-center justify-center gap-1">
-												<input
-													type="number"
-													bind:value={c.finalWeight}
-													on:input={updateMockCalculations}
-													class="w-8 border-none bg-transparent p-0 text-right text-xs text-slate-400 focus:ring-0"
-												/>
-												<span class="text-slate-300">%</span>
+											<div class="flex items-center justify-center gap-1.5">
+												<div class="flex items-center rounded-md bg-slate-100/50 px-1.5 py-1 dark:bg-white/5 ring-1 ring-black/5 dark:ring-white/10">
+													<input
+														type="number"
+														bind:value={c.finalWeight}
+														on:input={updateMockCalculations}
+														class="w-7 border-none bg-transparent p-0 text-right text-[10px] font-bold text-slate-400 focus:ring-0"
+													/>
+													<span class="text-[10px] font-bold text-slate-300">%</span>
+												</div>
 												<input
 													type="number"
 													bind:value={c.final}
 													on:input={updateMockCalculations}
 													placeholder="0"
-													class="w-10 rounded border border-black/10 bg-slate-50 px-1 py-0.5 text-center text-sm font-bold focus:border-sky-500 focus:ring-1 focus:ring-sky-500 dark:bg-white/10"
+													class="w-12 rounded-lg border-2 border-slate-200 bg-white px-1.5 py-1 text-center text-sm font-black text-slate-800 shadow-sm transition-all focus:border-sky-500 focus:ring-0 dark:border-white/10 dark:bg-slate-800 dark:text-white dark:focus:border-sky-400"
+												/>
+											</div>
+										</td>
+										<td class="px-4 py-3 text-center">
+											<div class="flex items-center justify-center">
+												<input
+													type="number"
+													bind:value={c.makeup}
+													on:input={updateMockCalculations}
+													placeholder="—"
+													class="w-12 rounded-lg border-2 border-amber-200 bg-amber-50/30 px-1.5 py-1 text-center text-sm font-black text-amber-900 shadow-sm transition-all focus:border-amber-500 focus:ring-0 dark:border-amber-900/40 dark:bg-amber-900/10 dark:text-amber-200 dark:focus:border-amber-400"
 												/>
 											</div>
 										</td>
@@ -2121,7 +2147,7 @@
 									</tr>
 								{:else}
 									<tr>
-										<td colspan="6" class="px-4 py-12 text-center">
+										<td colspan="7" class="px-4 py-12 text-center">
 											<div class="text-slate-400 text-sm">Hesaplanacak ders bulunamadı.</div>
 											<button
 												on:click={initMockFromEnrollments}

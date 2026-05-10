@@ -1354,6 +1354,7 @@ export type AcademicGradeRow = {
 	enrollment_id: string;
 	midterm: number | null;
 	final: number | null;
+	makeup: number | null;
 	letter_grade: string | null;
 	is_finalized: boolean;
 };
@@ -1385,6 +1386,7 @@ export const putDouSectionGrades = (
 		enrollment_id: string;
 		midterm?: number;
 		final?: number;
+		makeup?: number;
 		/** Boş string veya null: harf notunu sil (PUT gövdesinde alan varsa) */
 		letter_grade?: string | null;
 	}[]

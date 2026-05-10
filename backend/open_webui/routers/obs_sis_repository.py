@@ -2325,7 +2325,7 @@ def section_grade_rows(db: Session, section_id: str) -> list[dict[str, Any]]:
         db.execute(
             text(f"""
         SELECT ce.id AS enrollment_id, sp.student_number, u.name,
-               g.midterm, g.final, g.letter_grade, g.is_finalized
+               g.midterm, g.final, g.makeup, g.letter_grade, g.is_finalized
         FROM obs_course_enrollments ce
         JOIN obs_student_profiles sp ON ce.student_id = sp.id
         LEFT JOIN {USER_TBL} u ON u.id = sp.user_id
@@ -2344,6 +2344,7 @@ def section_grade_rows(db: Session, section_id: str) -> list[dict[str, Any]]:
             "enrollment_id": _str_id(r["enrollment_id"]),
             "midterm": _num(r.get("midterm")),
             "final": _num(r.get("final")),
+            "makeup": _num(r.get("makeup")),
             "letter_grade": r.get("letter_grade"),
             "is_finalized": bool(r.get("is_finalized")),
         }
@@ -2401,7 +2402,7 @@ def recompute_section_letter_grades_rg(db: Session, section_id: str) -> None:
     rows = db.execute(
         text(
             """
-            SELECT g.enrollment_id AS eid, g.midterm AS mid, g."final" AS fin, g.is_finalized AS finz
+            SELECT g.enrollment_id AS eid, g.midterm AS mid, g."final" AS fin, g.makeup AS mup, g.is_finalized AS finz
             FROM obs_grade_entries g
             JOIN obs_course_enrollments ce ON ce.id = g.enrollment_id
             WHERE ce.course_section_id = :sid
@@ -2413,11 +2414,13 @@ def recompute_section_letter_grades_rg(db: Session, section_id: str) -> None:
     for r in rows:
         if bool(r.get("finz")):
             continue
-        mid, fin = r.get("mid"), r.get("fin")
-        if mid is None or fin is None:
+        mid, fin, mup = r.get("mid"), r.get("fin"), r.get("mup")
+        if mid is None or (fin is None and mup is None):
             continue
         try:
-            sc = (float(mid) * w_mid + float(fin) * w_fin) / 100.0
+            # Eğer büt girilmişse final yerine büt kullanılır (ağırlığı aynı)
+            eff_fin = mup if mup is not None else (fin if fin is not None else 0)
+            sc = (float(mid) * w_mid + float(eff_fin) * w_fin) / 100.0
         except (TypeError, ValueError):
             continue
         lg = _letter_from_score(sc)
@@ -2492,6 +2495,7 @@ def upsert_grades(
             continue
         mid = item.get("midterm")
         fin = item.get("final")
+        mup = item.get("makeup")
         exists = db.execute(
             text("SELECT id, is_finalized FROM obs_grade_entries WHERE enrollment_id = :eid"),
             {"eid": eid},
@@ -2507,9 +2511,10 @@ def upsert_grades(
                 isinstance(item.get("letter_grade"), str)
                 and not str(item.get("letter_grade") or "").strip()
             ):
-                if mid is not None and fin is not None:
+                if mid is not None and (fin is not None or mup is not None):
                     try:
-                        score = (float(mid) * w_mid + float(fin) * w_fin) / 100.0
+                        eff_fin2 = mup if mup is not None else (fin if fin is not None else 0)
+                        score = (float(mid) * w_mid + float(eff_fin2) * w_fin) / 100.0
                         computed_lg = _letter_from_score(score)
                     except (TypeError, ValueError):
                         computed_lg = None
@@ -2519,8 +2524,9 @@ def upsert_grades(
             set_parts = [
                 '"midterm" = COALESCE(:m, "midterm")',
                 '"final" = COALESCE(:f, "final")',
+                '"makeup" = COALESCE(:mup, "makeup")',
             ]
-            params: dict[str, Any] = {"eid": eid, "m": mid, "f": fin}
+            params: dict[str, Any] = {"eid": eid, "m": mid, "f": fin, "mup": mup}
             if computed_lg is not None:
                 set_parts.insert(2, "letter_grade = :lg")
                 params["lg"] = computed_lg
@@ -2546,9 +2552,10 @@ def upsert_grades(
                 isinstance(item.get("letter_grade"), str)
                 and not str(item.get("letter_grade") or "").strip()
             ):
-                if mid is not None and fin is not None:
+                if mid is not None and (fin is not None or mup is not None):
                     try:
-                        score2 = (float(mid) * w_mid + float(fin) * w_fin) / 100.0
+                        eff_fin3 = mup if mup is not None else (fin if fin is not None else 0)
+                        score2 = (float(mid) * w_mid + float(eff_fin3) * w_fin) / 100.0
                         lg_insert = _letter_from_score(score2)
                     except (TypeError, ValueError):
                         lg_insert = None
