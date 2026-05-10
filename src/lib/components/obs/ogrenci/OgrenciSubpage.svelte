@@ -74,6 +74,98 @@
 	let sentMsgs: DouMessage[] = [];
 	let docRequests: DouDocumentRequest[] = [];
 	let availableCourses: AvailableCourse[] = [];
+
+	// --- NOT HESAPLAMA STATE ---
+	let mockCourses: {
+		code: string;
+		name: string;
+		akts: number;
+		vize: number | null;
+		vizeWeight: number;
+		final: number | null;
+		finalWeight: number;
+		harf: string;
+		gradePoint: number;
+	}[] = [];
+
+	function calculateHarf(score: number): { harf: string; point: number } {
+		if (score >= 95) return { harf: 'A+', point: 4.0 };
+		if (score >= 90) return { harf: 'A', point: 3.75 };
+		if (score >= 85) return { harf: 'B+', point: 3.5 };
+		if (score >= 75) return { harf: 'B', point: 3.0 };
+		if (score >= 65) return { harf: 'C+', point: 2.5 };
+		if (score >= 55) return { harf: 'C', point: 2.0 };
+		if (score >= 45) return { harf: 'D+', point: 1.5 };
+		if (score >= 40) return { harf: 'D', point: 1.0 };
+		return { harf: 'F', point: 0.0 };
+	}
+
+	function updateMockCalculations() {
+		mockCourses = mockCourses.map((c) => {
+			const v = c.vize ?? 0;
+			const f = c.final ?? 0;
+			const total = (v * c.vizeWeight) / 100 + (f * c.finalWeight) / 100;
+			const res = calculateHarf(total);
+			return { ...c, harf: res.harf, gradePoint: res.point };
+		});
+	}
+
+	$: mockAno = (() => {
+		if (mockCourses.length === 0) return 0;
+		const totalPoints = mockCourses.reduce((acc, c) => acc + c.gradePoint * c.akts, 0);
+		const totalAkts = mockCourses.reduce((acc, c) => acc + c.akts, 0);
+		return totalAkts > 0 ? totalPoints / totalAkts : 0;
+	})();
+
+	$: projectedAgno = (() => {
+		const currentGpa = cumulativeGpa ?? 0;
+		const currentAkts = transcriptTotalAkts ?? 0;
+		const newAkts = mockCourses.reduce((acc, c) => acc + c.akts, 0);
+		const newPoints = mockCourses.reduce((acc, c) => acc + c.gradePoint * c.akts, 0);
+
+		if (currentAkts + newAkts === 0) return currentGpa;
+		return (currentGpa * currentAkts + newPoints) / (currentAkts + newAkts);
+	})();
+
+	function initMockFromEnrollments() {
+		if (enrollments.length > 0) {
+			mockCourses = enrollments
+				.filter((e) => e.status === 'active')
+				.map((e) => ({
+					code: e.course_code,
+					name: e.course_name,
+					akts: e.akts,
+					vize: null,
+					vizeWeight: 40,
+					final: null,
+					finalWeight: 60,
+					harf: 'F',
+					gradePoint: 0
+				}));
+		}
+	}
+
+	function addMockCourse() {
+		mockCourses = [
+			...mockCourses,
+			{
+				code: 'YENI',
+				name: 'Yeni Ders',
+				akts: 5,
+				vize: null,
+				vizeWeight: 40,
+				final: null,
+				finalWeight: 60,
+				harf: 'F',
+				gradePoint: 0
+			}
+		];
+	}
+
+	function removeMockCourse(index: number) {
+		mockCourses = mockCourses.filter((_, i) => i !== index);
+	}
+
 	let curriculum: {
 		program?: string;
 		overall_progress_pct?: number;
@@ -375,6 +467,24 @@
 			if (apiKey === 'curriculum') {
 				const r = await getDouCurriculumStatus(token).catch(() => null);
 				curriculum = (r as typeof curriculum) ?? null;
+			}
+			if (apiKey === 'not-hesaplama') {
+				const [enrRes, gpaRes, transRes] = await Promise.allSettled([
+					getDouStudentEnrollments(token, undefined, 'active'),
+					getDouStudentRegistrationLimits(token),
+					getDouStudentTranscript(token)
+				]);
+				if (enrRes.status === 'fulfilled') {
+					enrollments = enrRes.value.enrollments;
+					initMockFromEnrollments();
+				}
+				if (gpaRes.status === 'fulfilled') {
+					registrationLimits = gpaRes.value;
+					cumulativeGpa = gpaRes.value.gpa_computed ?? gpaRes.value.gpa ?? gpaRes.value.gpa_profile ?? 0;
+				}
+				if (transRes.status === 'fulfilled') {
+					transcriptTotalAkts = (transRes.value as { total_akts?: number })?.total_akts ?? 0;
+				}
 			}
 		} catch (e: unknown) {
 			loadErr = e instanceof Error ? e.message : 'API hatası.';
@@ -1861,6 +1971,185 @@
 							{/each}
 						</tbody>
 					</table>
+				</div>
+			</div>
+
+			<!-- ================================================================ -->
+			<!-- NOT HESAPLAMA                                                     -->
+			<!-- ================================================================ -->
+		{:else if apiKey === 'not-hesaplama'}
+			<div class="space-y-6">
+				<!-- Özet Kartları -->
+				<div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+					<div
+						class="rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5"
+					>
+						<div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+							Dönem Ortalaması (ANO)
+						</div>
+						<div class="mt-2 text-3xl font-black text-sky-600 dark:text-sky-400">
+							{mockAno.toFixed(2)}
+						</div>
+						<div class="mt-1 text-[10px] text-slate-400">Hesaplanan Tahmini Değer</div>
+					</div>
+					<div
+						class="rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5"
+					>
+						<div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+							Hedef Genel Ortalama (AGNO)
+						</div>
+						<div class="mt-2 text-3xl font-black text-emerald-600 dark:text-emerald-400">
+							{projectedAgno.toFixed(2)}
+						</div>
+						<div class="mt-1 text-[10px] text-slate-400">Mevcut: {cumulativeGpa?.toFixed(2) ?? '0.00'}</div>
+					</div>
+					<div class="flex flex-col gap-2">
+						<button
+							on:click={initMockFromEnrollments}
+							class="flex h-full items-center justify-center rounded-xl border border-black/10 bg-slate-50 text-xs font-bold text-slate-600 hover:bg-slate-100 dark:border-white/10 dark:bg-white/5 dark:text-slate-300 dark:hover:bg-white/10"
+						>
+							🔄 Aktif Derslerimi Getir
+						</button>
+						<button
+							on:click={addMockCourse}
+							class="flex h-full items-center justify-center rounded-xl bg-slate-800 text-xs font-bold text-white hover:bg-slate-700 dark:bg-sky-600 dark:hover:bg-sky-500"
+						>
+							➕ Yeni Ders Ekle
+						</button>
+					</div>
+				</div>
+
+				<!-- Hesaplama Tablosu -->
+				<div
+					class="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
+				>
+					<div class="overflow-x-auto">
+						<table class="w-full text-sm">
+							<thead
+								class="bg-slate-50 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:bg-white/5 dark:text-slate-400"
+							>
+								<tr>
+									<th class="px-4 py-3 text-left">Ders Kodu / Adı</th>
+									<th class="px-4 py-3 text-center">AKTS</th>
+									<th class="px-4 py-3 text-center">Vize (%/Not)</th>
+									<th class="px-4 py-3 text-center">Final (%/Not)</th>
+									<th class="px-4 py-3 text-center">Harf</th>
+									<th class="px-4 py-3 text-right">İşlem</th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each mockCourses as c, i}
+									<tr class="border-t border-black/5 dark:border-white/10 hover:bg-slate-50/30 transition-colors">
+										<td class="px-4 py-3">
+											<div class="flex flex-col">
+												<input
+													type="text"
+													bind:value={c.code}
+													class="w-20 border-none bg-transparent p-0 font-mono text-xs font-bold text-slate-500 focus:ring-0"
+												/>
+												<input
+													type="text"
+													bind:value={c.name}
+													class="mt-0.5 border-none bg-transparent p-0 text-sm font-medium focus:ring-0"
+												/>
+											</div>
+										</td>
+										<td class="px-4 py-3 text-center">
+											<input
+												type="number"
+												bind:value={c.akts}
+												on:input={updateMockCalculations}
+												class="w-12 border-none bg-transparent p-0 text-center text-sm font-semibold focus:ring-0"
+											/>
+										</td>
+										<td class="px-4 py-3 text-center">
+											<div class="flex items-center justify-center gap-1">
+												<input
+													type="number"
+													bind:value={c.vizeWeight}
+													on:input={updateMockCalculations}
+													class="w-8 border-none bg-transparent p-0 text-right text-xs text-slate-400 focus:ring-0"
+												/>
+												<span class="text-slate-300">%</span>
+												<input
+													type="number"
+													bind:value={c.vize}
+													on:input={updateMockCalculations}
+													placeholder="0"
+													class="w-10 rounded border border-black/10 bg-slate-50 px-1 py-0.5 text-center text-sm font-bold focus:border-sky-500 focus:ring-1 focus:ring-sky-500 dark:bg-white/10"
+												/>
+											</div>
+										</td>
+										<td class="px-4 py-3 text-center">
+											<div class="flex items-center justify-center gap-1">
+												<input
+													type="number"
+													bind:value={c.finalWeight}
+													on:input={updateMockCalculations}
+													class="w-8 border-none bg-transparent p-0 text-right text-xs text-slate-400 focus:ring-0"
+												/>
+												<span class="text-slate-300">%</span>
+												<input
+													type="number"
+													bind:value={c.final}
+													on:input={updateMockCalculations}
+													placeholder="0"
+													class="w-10 rounded border border-black/10 bg-slate-50 px-1 py-0.5 text-center text-sm font-bold focus:border-sky-500 focus:ring-1 focus:ring-sky-500 dark:bg-white/10"
+												/>
+											</div>
+										</td>
+										<td class="px-4 py-3 text-center">
+											<span
+												class="inline-block min-w-[2.5rem] rounded-full px-2 py-0.5 text-xs font-black {GRADE_COLOR[
+													c.harf
+												] ?? 'bg-slate-100 text-slate-600'}"
+											>
+												{c.harf}
+											</span>
+										</td>
+										<td class="px-4 py-3 text-right">
+											<button
+												on:click={() => removeMockCourse(i)}
+												class="text-slate-300 hover:text-red-500 transition-colors"
+												title="Dersi Sil"
+											>
+												<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+													<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+												</svg>
+											</button>
+										</td>
+									</tr>
+								{:else}
+									<tr>
+										<td colspan="6" class="px-4 py-12 text-center">
+											<div class="text-slate-400 text-sm">Hesaplanacak ders bulunamadı.</div>
+											<button
+												on:click={initMockFromEnrollments}
+												class="mt-3 text-xs font-bold text-sky-600 hover:underline"
+											>
+												Aktif Derslerimi Getir
+											</button>
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				</div>
+
+				<!-- Bilgi Notu -->
+				<div class="rounded-xl bg-amber-50/50 p-4 dark:bg-amber-950/10 border border-amber-100 dark:border-amber-900/30">
+					<div class="flex gap-3">
+						<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-amber-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+						</svg>
+						<div class="text-xs text-amber-800 dark:text-amber-200 leading-normal">
+							<p class="font-bold mb-1">Not Hesaplama Hakkında Bilgilendirme</p>
+							Bu araç, Doğuş Üniversitesi Ön Lisans ve Lisans Eğitim-Öğretim ve Sınav Yönetmeliği (Madde 34 ve 35) baz alınarak hazırlanmıştır. 
+							Harf notu baremleri (A+, A, B+...) yönetmelikteki puan aralıklarına göre otomatik hesaplanır. 
+							AGNO tahmini, transkriptinizdeki toplam AKTS ve mevcut GNO verileriniz kullanılarak hesaplanır.
+						</div>
+					</div>
 				</div>
 			</div>
 

@@ -17,6 +17,7 @@ export const OGRENCI_PAGES = {
 	'/obs/ogrenci/mesajlar-gonderilen': { title: 'Gönderilen Mesajlar', apiKey: 'sent' },
 	'/obs/ogrenci/belge-talebi': { title: 'Belge Talebi', apiKey: 'doc-request' },
 	'/obs/ogrenci/duyurular': { title: 'Duyurular', apiKey: 'announcements' },
+	'/obs/ogrenci/not-hesaplama': { title: 'Not Hesaplama', apiKey: 'not-hesaplama' },
 	'/obs/ogrenci/sifre-degistir': { title: 'Şifre Değiştir', apiKey: 'change-pw' }
 } as const;
 
