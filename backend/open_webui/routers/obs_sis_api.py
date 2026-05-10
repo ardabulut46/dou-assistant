@@ -598,13 +598,21 @@ async def student_draft_enrollments(
     user=Depends(get_verified_user),
     obs_db: Session = Depends(get_obs_session),
 ):
-    rows, err = repo.upsert_draft_enrollments(
-        obs_db,
-        user.id,
-        body.section_ids,
-        body.mode,
-        body.exclude_drop_enrollment_ids or None,
-    )
+    try:
+        rows, err = repo.upsert_draft_enrollments(
+            obs_db,
+            user.id,
+            body.section_ids,
+            body.mode,
+            body.exclude_drop_enrollment_ids or None,
+        )
+    except Exception as exc:
+        obs_db.rollback()
+        log.exception("upsert_draft_enrollments HATA user=%s", user.id)
+        raise HTTPException(
+            status_code=400,
+            detail=f"[DEBUG-500] {type(exc).__name__}: {str(exc)[:400]}",
+        )
     if err:
         raise HTTPException(status_code=400, detail=err)
     if not rows and body.section_ids:

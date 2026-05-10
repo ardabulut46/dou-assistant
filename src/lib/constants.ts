@@ -14,8 +14,10 @@ export function getWebuiBackendOrigin(): string {
 		const v = String(import.meta.env.VITE_OPEN_WEBUI_BACKEND_URL).trim();
 		if (v) return v.replace(/\/$/, '');
 	}
+	// DEV modunda Vite proxy üzerinden git (CORS sorununu önler).
+	// Vite vite.config.ts içinde /api, /student, /academic, /ws vb. yolları 127.0.0.1:8080'e proxy eder.
 	if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
-		return 'http://127.0.0.1:8080';
+		return '';
 	}
 	if (typeof window !== 'undefined' && window.location) {
 		const { hostname: rawHost, port, protocol } = window.location;
