@@ -1020,57 +1020,61 @@ html.dou-obs-ai .dou-ai-main-shell > :not(.dou-ai-brand-watermark):not(.dou-ai-s
 	z-index: 2;
 }
 
-/* Sohbet alanı — beyaza yakın zemin */
-html.dou-obs-ai #chat-container {
+/* Sohbet alanı — light: beyaz, dark/oled: temadan al (su filigranını örter) */
+html.dou-obs-ai:not(.dark) #chat-container {
 	background-color: #ffffff;
 }
 
 html.dark.dou-obs-ai #chat-container {
-	background-color: color-mix(in srgb, var(--dou-ai-p50) 92%, black);
+	/* var(--color-gray-900) = #171717 normal dark, #000000 oled-dark */
+	background-color: var(--color-gray-900, #171717);
 }
 
-/* Üst navbar — kurumsal kırmızı (eskiden sol menü tonları) */
+
+/* Üst navbar — light: şeffaf/beyaz cam; dark/oled: temadan al */
 html.dou-obs-ai #dou-ai-chat-navbar {
-	border-bottom: 1px solid color-mix(in srgb, black 28%, var(--dou-ai-p20));
-	background: linear-gradient(
-		180deg,
-		#7f1d1d 0%,
-		var(--dou-ai-p20) 52%,
-		#b91c1c 100%
-	) !important;
-	backdrop-filter: blur(10px);
-	box-shadow: 0 1px 0 rgb(0 0 0 / 0.22);
-	color: rgb(254 242 242);
+	border-bottom: 1px solid rgb(0 0 0 / 0.07);
+	background: rgba(255, 255, 255, 0.88) !important;
+	backdrop-filter: blur(12px);
+	-webkit-backdrop-filter: blur(12px);
+	box-shadow: 0 1px 0 rgb(0 0 0 / 0.06);
+	color: rgb(30 41 59);
 }
 
 html.dark.dou-obs-ai #dou-ai-chat-navbar {
-	border-bottom-color: color-mix(in srgb, black 35%, var(--dou-ai-p20));
-	background: linear-gradient(180deg, #450a0a 0%, #7f1d1d 48%, #991b1b 100%) !important;
+	border-bottom: 1px solid rgb(255 255 255 / 0.06);
+	/* var(--color-gray-900) = #171717 dark, #000000 oled — follows theme automatically */
+	background: color-mix(in srgb, var(--color-gray-900, #171717) 92%, transparent) !important;
+	backdrop-filter: blur(12px);
+	-webkit-backdrop-filter: blur(12px);
 	box-shadow: 0 1px 0 rgb(0 0 0 / 0.35);
-	color: rgb(254 242 242);
+	color: rgb(241 245 249);
 }
 
+
+/* Light mode navbar text — dark slate */
 html.dou-obs-ai #dou-ai-chat-navbar .text-gray-600,
 html.dou-obs-ai #dou-ai-chat-navbar .text-gray-400,
 html.dou-obs-ai #dou-ai-chat-navbar .text-gray-700,
 html.dou-obs-ai #dou-ai-chat-navbar .text-gray-800,
 html.dou-obs-ai #dou-ai-chat-navbar .text-gray-900 {
-	color: rgb(254 226 226) !important;
+	color: rgb(51 65 85) !important;
 }
 
+/* Dark mode navbar text — light slate */
 html.dark.dou-obs-ai #dou-ai-chat-navbar .text-gray-600,
 html.dark.dou-obs-ai #dou-ai-chat-navbar .text-gray-400,
 html.dark.dou-obs-ai #dou-ai-chat-navbar .text-gray-700 {
-	color: rgb(254 215 215) !important;
+	color: rgb(203 213 225) !important;
 }
 
 html.dou-obs-ai #dou-ai-chat-navbar svg {
-	color: rgb(254 226 226);
+	color: rgb(51 65 85);
 	stroke: currentColor;
 }
 
 html.dark.dou-obs-ai #dou-ai-chat-navbar svg {
-	color: rgb(254 215 215);
+	color: rgb(203 213 225);
 }
 
 html.dou-obs-ai #dou-ai-chat-navbar button:hover,
@@ -1082,7 +1086,7 @@ html.dou-obs-ai #dou-ai-chat-navbar a.rounded-lg.border {
 
 html.dou-obs-ai #dou-ai-chat-navbar button.rounded-xl:hover,
 html.dou-obs-ai #dou-ai-chat-navbar button.rounded-lg:hover {
-	background-color: rgb(255 255 255 / 0.12) !important;
+	background-color: rgb(0 0 0 / 0.06) !important;
 }
 
 html.dark.dou-obs-ai #dou-ai-chat-navbar button.rounded-xl:hover,
@@ -1119,52 +1123,79 @@ html.dou-obs-ai #navbar-bg-gradient-to-b {
 	display: none !important;
 }
 
-/* Yan menü — lacivert / slate (eskiden üst navbar) */
+/* Yan menü — light: beyaz cam; dark/oled: koyu şeffaf */
 html.dou-obs-ai #sidebar {
 	z-index: 10 !important;
-	background: linear-gradient(180deg, rgb(15 23 42) 0%, rgb(30 41 59) 48%, rgb(15 23 42) 100%)
+	background: linear-gradient(180deg, rgb(248 250 252) 0%, rgb(241 245 249) 48%, rgb(248 250 252) 100%)
 		!important;
-	border-right-color: rgb(51 65 85 / 0.45) !important;
+	border-right-color: rgb(0 0 0 / 0.08) !important;
+	box-shadow: inset -1px 0 0 rgb(0 0 0 / 0.04);
+	color: rgb(30 41 59) !important;
+}
+
+/* Dark: use semi-transparent so OLED vars (pure black) show through */
+html.dark.dou-obs-ai #sidebar {
+	background:
+		linear-gradient(
+			180deg,
+			color-mix(in srgb, var(--color-gray-900, #171717) 94%, transparent) 0%,
+			color-mix(in srgb, var(--color-gray-900, #171717) 96%, transparent) 52%,
+			color-mix(in srgb, var(--color-gray-900, #171717) 90%, transparent) 100%
+		) !important;
+	border-right-color: rgb(51 65 85 / 0.35) !important;
 	box-shadow: inset -1px 0 0 rgb(255 255 255 / 0.06);
 	color: rgb(241 245 249) !important;
 }
 
-html.dark.dou-obs-ai #sidebar {
-	background: linear-gradient(180deg, rgb(15 23 42) 0%, rgb(17 24 39) 52%, rgb(10 15 28) 100%)
-		!important;
-	border-right-color: rgb(51 65 85 / 0.35) !important;
+/* Light mode sidebar text — dark slate */
+html.dou-obs-ai:not(.dark) #sidebar .text-gray-600,
+html.dou-obs-ai:not(.dark) #sidebar .text-gray-800,
+html.dou-obs-ai:not(.dark) #sidebar .text-gray-900 {
+	color: rgb(51 65 85) !important;
 }
 
-html.dou-obs-ai #sidebar .text-gray-600,
-html.dou-obs-ai #sidebar .text-gray-800,
-html.dou-obs-ai #sidebar .text-gray-900 {
+/* Dark mode sidebar text — light slate */
+html.dark.dou-obs-ai #sidebar .text-gray-600,
+html.dark.dou-obs-ai #sidebar .text-gray-800,
+html.dark.dou-obs-ai #sidebar .text-gray-900 {
 	color: rgb(203 213 225) !important;
 }
 
-html.dou-obs-ai #sidebar .dark\:text-gray-200,
-html.dou-obs-ai #sidebar .dark\:text-gray-400 {
+html.dou-obs-ai:not(.dark) #sidebar .dark\:text-gray-200,
+html.dou-obs-ai:not(.dark) #sidebar .dark\:text-gray-400 {
+	color: rgb(71 85 105) !important;
+}
+
+html.dark.dou-obs-ai #sidebar .dark\:text-gray-200,
+html.dark.dou-obs-ai #sidebar .dark\:text-gray-400 {
 	color: rgb(148 163 184) !important;
 }
 
-html.dou-obs-ai #sidebar-webui-name {
+html.dou-obs-ai:not(.dark) #sidebar-webui-name {
+	color: rgb(15 23 42) !important;
+	text-shadow: none;
+}
+
+html.dark.dou-obs-ai #sidebar-webui-name {
 	color: rgb(248 250 252) !important;
 	text-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
 }
 
-html.dou-obs-ai #sidebar .dou-ai-sidebar-userline {
-	color: rgb(203 213 225) !important;
-	text-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
+html.dou-obs-ai:not(.dark) #sidebar .dou-ai-sidebar-userline {
+	color: rgb(51 65 85) !important;
+	text-shadow: none;
 }
 
 html.dark.dou-obs-ai #sidebar .dou-ai-sidebar-userline {
 	color: rgb(226 232 240) !important;
+	text-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
 }
 
-/* Yan menü hover — slate üzerinde cam */
-html.dou-obs-ai #sidebar .rounded-2xl:hover,
-html.dou-obs-ai #sidebar .rounded-xl:hover {
-	background-color: rgb(255 255 255 / 0.08) !important;
-	box-shadow: inset 3px 0 0 rgb(56 189 248 / 0.65);
+/* Yan menü hover — light: soft gray; dark: cam */
+html.dou-obs-ai:not(.dark) #sidebar .rounded-2xl:hover,
+html.dou-obs-ai:not(.dark) #sidebar .rounded-xl:hover {
+	background-color: rgb(0 0 0 / 0.05) !important;
+	box-shadow: inset 3px 0 0 rgb(185 28 28 / 0.5);
 }
 
 html.dark.dou-obs-ai #sidebar .rounded-2xl:hover,
@@ -1173,9 +1204,9 @@ html.dark.dou-obs-ai #sidebar .rounded-xl:hover {
 	box-shadow: inset 3px 0 0 rgb(56 189 248 / 0.5);
 }
 
-html.dou-obs-ai #sidebar-new-chat-button:hover {
-	background-color: rgb(255 255 255 / 0.12) !important;
-	color: rgb(248 250 252) !important;
+html.dou-obs-ai:not(.dark) #sidebar-new-chat-button:hover {
+	background-color: rgb(0 0 0 / 0.05) !important;
+	color: rgb(15 23 42) !important;
 }
 
 html.dark.dou-obs-ai #sidebar-new-chat-button:hover {
@@ -1189,14 +1220,33 @@ html.dou-obs-ai #sidebar .sidebar-bg-gradient-to-b {
 	display: none !important;
 }
 
-/* Kullanıcı kutusu — slate üzerinde cam */
-html.dou-obs-ai #sidebar .hover\:bg-gray-100\/50:hover,
-html.dou-obs-ai #sidebar .dark\:hover\:bg-gray-900\/50:hover {
+/* Kullanıcı kutusu hover */
+/* Chat item menu gradient (3-dot shadow) — strip the bg-linear-to-l fade */
+html.dou-obs-ai #sidebar #sidebar-chat-item-menu {
+	background: none !important;
+	background-image: none !important;
+	padding-left: 0.25rem !important;
+}
+
+/* Kullanıcı kutusu hover */
+
+html.dou-obs-ai:not(.dark) #sidebar .hover\:bg-gray-100\/50:hover,
+html.dou-obs-ai:not(.dark) #sidebar .dark\:hover\:bg-gray-900\/50:hover {
+	background-color: rgb(0 0 0 / 0.05) !important;
+}
+
+html.dou-obs-ai:not(.dark) #sidebar .hover\:bg-gray-100:hover,
+html.dou-obs-ai:not(.dark) #sidebar .dark\:hover\:bg-gray-850:hover {
+	background-color: rgb(0 0 0 / 0.05) !important;
+}
+
+html.dark.dou-obs-ai #sidebar .hover\:bg-gray-100\/50:hover,
+html.dark.dou-obs-ai #sidebar .dark\:hover\:bg-gray-900\/50:hover {
 	background-color: rgb(255 255 255 / 0.08) !important;
 }
 
-html.dou-obs-ai #sidebar .hover\:bg-gray-100:hover,
-html.dou-obs-ai #sidebar .dark\:hover\:bg-gray-850:hover {
+html.dark.dou-obs-ai #sidebar .hover\:bg-gray-100:hover,
+html.dark.dou-obs-ai #sidebar .dark\:hover\:bg-gray-850:hover {
 	background-color: rgb(255 255 255 / 0.08) !important;
 }
 

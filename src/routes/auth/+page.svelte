@@ -267,6 +267,14 @@
 							{#if loginStep === 'role' && !(mode === 'signup')}
 								<div class="w-full">
 									<div class="mb-4">
+										<!-- Doğuş Üniversitesi Logo -->
+										<div class="flex justify-center mb-5">
+											<img
+												src="{WEBUI_BASE_URL}/static/splash.png"
+												alt="Doğuş Üniversitesi"
+												class="w-28 h-28 rounded-full bg-white object-contain p-1 shadow-md"
+											/>
+										</div>
 										<div class="text-2xl font-medium">Doğuş Üniversitesi</div>
 										<div class="mt-1 text-sm text-gray-600 dark:text-gray-400">
 											Öğrenci Bilgi Sistemi
@@ -681,12 +689,12 @@
 				<div class="flex space-x-2">
 					<div class=" self-center">
 						<img
-							id="logo"
-							crossorigin="anonymous"
-							src="{WEBUI_BASE_URL}/static/favicon.png"
-							class=" w-6 rounded-full"
-							alt=""
-						/>
+					id="logo"
+					crossorigin="anonymous"
+					src="{WEBUI_BASE_URL}/static/splash.png"
+					class=" w-10 h-10 rounded-full bg-white object-contain p-0.5 shadow-sm"
+					alt="DouGPT"
+				/>
 					</div>
 				</div>
 			</div>

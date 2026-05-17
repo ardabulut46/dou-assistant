@@ -125,7 +125,8 @@
 									>
 										<img
 											src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${model?.id}&lang=${$i18n.language}`}
-											class=" size-9 @sm:size-10 rounded-full border-[1px] border-gray-100 dark:border-none"
+											class=" size-20 @sm:size-24 rounded-full bg-white p-0.5 shadow-sm"
+											alt={models[modelIdx]?.name ?? ''}
 											aria-hidden="true"
 											draggable="false"
 										/>
