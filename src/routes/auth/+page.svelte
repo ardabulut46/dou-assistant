@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { browser } from '$app/environment';
 	import DOMPurify from 'dompurify';
 	import { marked } from 'marked';
 
@@ -25,7 +26,7 @@
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import OnBoarding from '$lib/components/OnBoarding.svelte';
 	import SensitiveInput from '$lib/components/common/SensitiveInput.svelte';
-	import { obsAreaHome, resolveObsArea } from '$lib/obs/obsAccess';
+	import { OBS_PORTAL_ROLE_PICK_KEY, obsAreaHome, resolveObsArea } from '$lib/obs/obsAccess';
 
 	const i18n = getContext('i18n');
 
@@ -33,10 +34,24 @@
 
 	let mode = $config?.features.enable_ldap ? 'ldap' : 'signin';
 
-	// OBS-style login role selection (UI only; backend role comes from session)
+	// OBS giriş: seçilen portal (sunucudaki OBS alanıyla eşleştirilir, sessionStorage + OAuth için)
 	type LoginRole = 'admin' | 'akademisyen' | 'ogrenci';
 	let loginStep: 'role' | 'form' = 'role';
 	let selectedLoginRole: LoginRole | null = null;
+
+	function isObsPortalPick(s: string | null): s is LoginRole {
+		return s === 'admin' || s === 'akademisyen' || s === 'ogrenci';
+	}
+
+	function clearObsPortalPick() {
+		if (!browser) return;
+		sessionStorage.removeItem(OBS_PORTAL_ROLE_PICK_KEY);
+	}
+
+	function persistObsPortalPick(role: LoginRole) {
+		if (!browser) return;
+		sessionStorage.setItem(OBS_PORTAL_ROLE_PICK_KEY, role);
+	}
 
 	let form = null;
 
@@ -49,10 +64,29 @@
 
 	const setSessionUser = async (sessionUser, redirectPath: string | null = null) => {
 		if (sessionUser) {
+			const token = sessionUser.token ?? null;
+
+			if (browser && token) {
+				const pending = sessionStorage.getItem(OBS_PORTAL_ROLE_PICK_KEY);
+				if (isObsPortalPick(pending)) {
+					const area = await resolveObsArea(token, sessionUser.role ?? null);
+					if (area !== pending) {
+						toast.error(
+							'Seçtiğiniz giriş türü bu hesabın rolüyle eşleşmiyor. Öğrenci, akademisyen veya admin girişini hesabınıza uygun olanı seçerek deneyin.'
+						);
+						clearObsPortalPick();
+						loginStep = 'role';
+						selectedLoginRole = null;
+						return;
+					}
+					clearObsPortalPick();
+				}
+			}
+
 			console.log(sessionUser);
 			toast.success($i18n.t(`You're now logged in.`));
-			if (sessionUser.token) {
-				localStorage.token = sessionUser.token;
+			if (token) {
+				localStorage.token = token;
 			}
 			$socket.emit('user-join', { auth: { token: sessionUser.token } });
 			await user.set(sessionUser);
@@ -89,6 +123,7 @@
 	};
 
 	const signUpHandler = async () => {
+		clearObsPortalPick();
 		if ($config?.features?.enable_signup_password_confirmation) {
 			if (password !== confirmPassword) {
 				toast.error($i18n.t('Passwords do not match.'));
@@ -204,6 +239,7 @@
 		setLogoImage();
 
 		if (($config?.features.auth_trusted_header ?? false) || $config?.features.auth === false) {
+			clearObsPortalPick();
 			await signInHandler();
 		} else {
 			onboarding = $config?.onboarding ?? false;
@@ -222,6 +258,7 @@
 	getStartedHandler={() => {
 		onboarding = false;
 		mode = $config?.features.enable_ldap ? 'ldap' : 'signup';
+		clearObsPortalPick();
 	}}
 />
 
@@ -293,6 +330,7 @@
 												class="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 dark:hover:bg-gray-900 transition border-b border-gray-700/10 dark:border-gray-100/10"
 												on:click={() => {
 													selectedLoginRole = 'ogrenci';
+													persistObsPortalPick('ogrenci');
 													loginStep = 'form';
 												}}
 											>
@@ -303,6 +341,7 @@
 												class="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 dark:hover:bg-gray-900 transition border-b border-gray-700/10 dark:border-gray-100/10"
 												on:click={() => {
 													selectedLoginRole = 'akademisyen';
+													persistObsPortalPick('akademisyen');
 													loginStep = 'form';
 												}}
 											>
@@ -313,6 +352,7 @@
 												class="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 dark:hover:bg-gray-900 transition"
 												on:click={() => {
 													selectedLoginRole = 'admin';
+													persistObsPortalPick('admin');
 													loginStep = 'form';
 												}}
 											>
@@ -371,6 +411,7 @@
 													on:click={() => {
 														loginStep = 'role';
 														selectedLoginRole = null;
+														clearObsPortalPick();
 													}}
 												>
 													← Rol seçimine dön
@@ -499,6 +540,7 @@
 															on:click={() => {
 																if (mode === 'signin') {
 																	mode = 'signup';
+																	clearObsPortalPick();
 																} else {
 																	mode = 'signin';
 																}

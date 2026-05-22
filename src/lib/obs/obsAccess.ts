@@ -1,5 +1,8 @@
 import { devGetObsRole } from '$lib/apis/douAcademic';
 
+/** Auth sayfasında seçilen OBS portalı (giriş türü ile sunucu rolü eşleşmesi için). */
+export const OBS_PORTAL_ROLE_PICK_KEY = 'obsPortalRolePick';
+
 export type ObsArea = 'ogrenci' | 'akademisyen' | 'admin';
 
 /** Sunucudaki obs_role / Open WebUI rolünden panel alanını üretir. */

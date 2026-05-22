@@ -4,6 +4,7 @@
 	import { onDestroy, onMount } from 'svelte';
 	import { user } from '$lib/stores';
 	import { userSignOut } from '$lib/apis/auths';
+	import { OBS_PORTAL_ROLE_PICK_KEY } from '$lib/obs/obsAccess';
 	import {
 		getDouInbox,
 		getDouAcademicApprovalRequests,
@@ -569,8 +570,10 @@
 			// @ts-expect-error Dinamik import ile store sıfırlama (tip paketi dışı)
 			import('$lib/stores').then(({ user: u }) => u.set(null));
 			localStorage.removeItem('token');
+			sessionStorage.removeItem(OBS_PORTAL_ROLE_PICK_KEY);
 			location.href = res?.redirect_url ?? '/auth';
 		} catch {
+			sessionStorage.removeItem(OBS_PORTAL_ROLE_PICK_KEY);
 			location.href = '/auth';
 		}
 	}

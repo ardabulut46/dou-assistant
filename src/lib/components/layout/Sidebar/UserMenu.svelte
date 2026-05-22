@@ -25,6 +25,7 @@
 	import SignOut from '$lib/components/icons/SignOut.svelte';
 	import FaceSmile from '$lib/components/icons/FaceSmile.svelte';
 	import UserStatusModal from './UserStatusModal.svelte';
+	import { OBS_PORTAL_ROLE_PICK_KEY } from '$lib/obs/obsAccess';
 	import Emoji from '$lib/components/common/Emoji.svelte';
 	import XMark from '$lib/components/icons/XMark.svelte';
 	import { updateUserStatus } from '$lib/apis/users';
@@ -349,6 +350,7 @@
 					const res = await userSignOut();
 					user.set(null);
 					localStorage.removeItem('token');
+					sessionStorage.removeItem(OBS_PORTAL_ROLE_PICK_KEY);
 
 					location.href = res?.redirect_url ?? '/auth';
 					show = false;

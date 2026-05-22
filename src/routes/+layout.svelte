@@ -51,6 +51,7 @@
 
 	import { executeToolServer, getBackendConfig, getVersion } from '$lib/apis';
 	import { getSessionUser, userSignOut } from '$lib/apis/auths';
+	import { OBS_PORTAL_ROLE_PICK_KEY } from '$lib/obs/obsAccess';
 	import { getAllTags, getChatList } from '$lib/apis/chats';
 	import { chatCompletion } from '$lib/apis/openai';
 
@@ -706,6 +707,7 @@
 			const res = await userSignOut();
 			user.set(null);
 			localStorage.removeItem('token');
+			sessionStorage.removeItem(OBS_PORTAL_ROLE_PICK_KEY);
 
 			location.href = res?.redirect_url ?? '/auth';
 		}
