@@ -4,7 +4,11 @@
 	import { onDestroy, onMount } from 'svelte';
 	import { user } from '$lib/stores';
 	import { userSignOut } from '$lib/apis/auths';
-	import { getDouInbox, getDouAcademicApprovalRequests } from '$lib/apis/douAcademic';
+	import {
+		getDouInbox,
+		getDouAcademicApprovalRequests,
+		markDouMessageRead
+	} from '$lib/apis/douAcademic';
 
 	export let title = 'Öğrenci Bilgi Sistemi';
 	export let subtitle = 'Doğuş Üniversitesi';
@@ -172,10 +176,21 @@
 		text: string;
 		time: string;
 		read: boolean;
+		/** Gelen kutusu kaydı — sunucuya PATCH /messages/:id/read */
+		messageId?: string;
 	};
 
 	let notifOpen = false;
 	let notifications: Notif[] = [];
+	/** Tüm gelen kutusundaki okunmamış mesaj sayısı (çan rakamı için). */
+	let unreadInboxTotal = 0;
+	/** "Tümünü okundu" sonrası panelde okumuş iletileri gösterme; çanı yeniden açınca sıfır. */
+	let bellHideReadMsgsUntilReopen = false;
+
+	const MAX_BELL_MESSAGES = 50;
+	const BELL_POLL_MS = 55_000;
+
+	let bellPollInterval: ReturnType<typeof setInterval> | null = null;
 
 	async function loadNotifications() {
 		if (!browser) return;
@@ -184,25 +199,33 @@
 
 		const fresh: Notif[] = [];
 
-		// Gelen kutusu → okunmamış mesajlar bildirim olarak
 		const inboxRes = await getDouInbox(token).catch(() => null);
-		if (inboxRes?.messages) {
-			for (const m of inboxRes.messages) {
-				if (!m.is_read) {
-					fresh.unshift({
-						id: `notif-msg-${m.id}`,
-						type: 'message',
-						text: `${m.sender_name ?? 'Biri'}: ${m.subject}`,
-						time: m.sent_at
-							? new Date(m.sent_at).toLocaleTimeString('tr-TR', {
-									hour: '2-digit',
-									minute: '2-digit'
-								})
-							: '',
-						read: false
-					});
-				}
-			}
+		const msgsRaw = inboxRes?.messages ?? [];
+		unreadInboxTotal = msgsRaw.filter((m) => !m.is_read).length;
+
+		let ordered = [...msgsRaw].sort((a, b) => {
+			const ta = a.sent_at ? new Date(a.sent_at).getTime() : 0;
+			const tb = b.sent_at ? new Date(b.sent_at).getTime() : 0;
+			return tb - ta;
+		});
+		if (bellHideReadMsgsUntilReopen) {
+			ordered = ordered.filter((m) => !m.is_read);
+		}
+
+		for (const m of ordered.slice(0, MAX_BELL_MESSAGES)) {
+			fresh.push({
+				id: `notif-msg-${m.id}`,
+				type: 'message',
+				messageId: m.id,
+				text: `${m.sender_name ?? 'Biri'}: ${m.subject}`,
+				time: m.sent_at
+					? new Date(m.sent_at).toLocaleTimeString('tr-TR', {
+							hour: '2-digit',
+							minute: '2-digit'
+						})
+					: '',
+				read: !!m.is_read
+			});
 		}
 
 		// Akademisyen ise → bekleyen onay talepleri bildirim olarak
@@ -225,10 +248,37 @@
 		notifications = fresh;
 	}
 
-	$: unreadCount = notifications.filter((n) => !n.read).length;
+	$: unreadBellApproval = notifications.some((n) => n.type === 'approval');
+	$: unreadCount = unreadInboxTotal + (unreadBellApproval ? 1 : 0);
 
-	function markAllRead() {
-		notifications = notifications.map((n) => ({ ...n, read: true }));
+	/** Gelen kutusu mesajlarını sunucuda okundu yapar; toplu sonrası panelden mesaj satırlarını düşürür (çanı tekrar açınca geçmiş gelir). */
+	async function markAllRead() {
+		if (!browser) return;
+		const token = localStorage.token ?? null;
+		const inboxFresh = await getDouInbox(token).catch(() => null);
+		const unreadIds =
+			inboxFresh?.messages?.filter((m) => !m.is_read).map((m) => m.id) ?? [];
+
+		if (token && unreadIds.length) {
+			await Promise.allSettled(unreadIds.map((id) => markDouMessageRead(token, id)));
+		}
+		bellHideReadMsgsUntilReopen = true;
+		await loadNotifications();
+	}
+
+	async function onNotifRowClick(n: Notif, notifHref: string | null) {
+		if (!browser) return;
+		const token = localStorage.token ?? null;
+		if (token && n.type === 'message' && n.messageId && !n.read) {
+			try {
+				await markDouMessageRead(token, n.messageId);
+			} catch {
+				/* yapılmış veya oturum */
+			}
+		}
+		notifOpen = false;
+		if (notifHref) await goto(notifHref);
+		await loadNotifications();
 	}
 
 	const notifIcon: Record<string, string> = {
@@ -291,11 +341,18 @@
 		events.forEach((e) => window.addEventListener(e, resetIdle, { passive: true }));
 		resetIdle();
 		loadNotifications();
+		bellPollInterval = setInterval(() => {
+			void loadNotifications();
+		}, BELL_POLL_MS);
 	});
 
 	onDestroy(() => {
 		if (idleTimer) clearTimeout(idleTimer);
 		if (warnTimer) clearTimeout(warnTimer);
+		if (bellPollInterval !== null) {
+			clearInterval(bellPollInterval);
+			bellPollInterval = null;
+		}
 	});
 </script>
 
@@ -425,9 +482,13 @@
 						<!-- Bildirim çanı -->
 						<div class="relative">
 							<button
-								on:click={() => {
-									notifOpen = !notifOpen;
-									if (notifOpen) markAllRead();
+								on:click={async () => {
+									const opening = !notifOpen;
+									notifOpen = opening;
+									if (opening) {
+										bellHideReadMsgsUntilReopen = false;
+										await loadNotifications();
+									}
 								}}
 								type="button"
 								class="relative flex size-9 items-center justify-center rounded-lg border border-black/10 bg-white text-slate-600 transition-colors hover:bg-slate-50 dark:border-white/10 dark:bg-white/5 dark:text-slate-300 dark:hover:bg-white/10"
@@ -468,46 +529,50 @@
 									>
 										<span class="text-sm font-bold">Bildirimler</span>
 										<button
-											on:click={markAllRead}
+											on:click={() => void markAllRead()}
 											type="button"
 											class="text-xs text-sky-500 hover:text-sky-400">Tümünü okundu işaretle</button
 										>
 									</div>
-									{#each notifications as n}
-										{@const notifHref =
-											n.type === 'message'
-												? role === 'akademisyen'
-													? '/obs/akademisyen/mesajlar-gelen'
-													: '/obs/ogrenci/mesajlar-gelen'
-												: n.type === 'approval'
-													? '/obs/akademisyen/onay-talepleri'
-													: n.type === 'grade'
-														? '/obs/ogrenci/not-listesi'
-														: null}
-										<button
-											on:click={() => {
-												notifOpen = false;
-												if (notifHref) goto(notifHref);
-											}}
-											type="button"
-											class="flex w-full items-start gap-3 border-b border-black/5 px-4 py-3 text-left transition-colors last:border-0 dark:border-white/5
-												{n.read ? 'opacity-60' : 'bg-sky-50/50 dark:bg-sky-950/20'}
-												{notifHref ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-white/5' : 'cursor-default'}"
-										>
-											<span class="mt-0.5 text-base">{notifIcon[n.type] ?? 'ℹ️'}</span>
-											<div class="min-w-0 flex-1">
-												<div class="text-xs font-medium leading-snug">{n.text}</div>
-												<div class="mt-0.5 text-[10px] text-slate-400">{n.time}</div>
+									<div
+										class="max-h-[min(22rem,calc(100dvh-10rem))] overflow-y-auto overflow-x-hidden overscroll-contain"
+									>
+										{#each notifications as n}
+											{@const notifHref =
+												n.type === 'message'
+													? role === 'akademisyen'
+														? '/obs/akademisyen/mesajlar-gelen'
+														: '/obs/ogrenci/mesajlar-gelen'
+													: n.type === 'approval'
+														? '/obs/akademisyen/onay-talepleri'
+														: n.type === 'grade'
+															? '/obs/ogrenci/not-listesi'
+															: null}
+											<button
+												on:click={() => void onNotifRowClick(n, notifHref)}
+												type="button"
+												class="flex w-full items-start gap-3 border-b border-black/5 px-4 py-3 text-left transition-colors dark:border-white/5
+													{n.read ? 'opacity-60' : 'bg-sky-50/50 dark:bg-sky-950/20'}
+													{notifHref ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-white/5' : 'cursor-default'}"
+											>
+												<span class="mt-0.5 text-base">{notifIcon[n.type] ?? 'ℹ️'}</span>
+												<div class="min-w-0 flex-1">
+													<div class="text-xs font-medium leading-snug">{n.text}</div>
+													<div class="mt-0.5 text-[10px] text-slate-400">{n.time}</div>
+												</div>
+												{#if !n.read}<span class="mt-1 size-2 shrink-0 rounded-full bg-sky-500"
+													></span>{/if}
+											</button>
+										{:else}
+											<div class="px-4 py-6 text-center text-sm text-slate-400">
+												Bildirim yok.
 											</div>
-											{#if !n.read}<span class="mt-1 size-2 shrink-0 rounded-full bg-sky-500"
-												></span>{/if}
-										</button>
-									{:else}
-										<div class="px-4 py-6 text-center text-sm text-slate-400">Bildirim yok.</div>
-									{/each}
+										{/each}
+									</div>
 									<!-- Tüm bildirimleri yenile -->
 									<button
 										on:click={() => {
+											bellHideReadMsgsUntilReopen = false;
 											loadNotifications();
 											notifOpen = false;
 										}}
