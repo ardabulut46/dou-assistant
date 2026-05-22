@@ -296,8 +296,63 @@
 	const BELL_POLL_MS = 55_000;
 
 	let bellPollInterval: ReturnType<typeof setInterval> | null = null;
+	/** İlk bildirim yüklemesinde (aynı OBS oturumu) bir kez ıslık çalınıp çalınmayacağı bayrağı */
+	let bellIntroWhistlePlayed = false;
 
-	async function loadNotifications() {
+	/** Rozet sayısı > 0 iken OBS’ye ilk girişte tek seferlik ıslık (polling’de tekrarlanmaz). */
+	function playBellIntroWhistle() {
+		if (!browser) return;
+		const AC =
+			typeof AudioContext !== 'undefined'
+				? AudioContext
+				: (typeof (
+						globalThis as typeof globalThis & { webkitAudioContext?: typeof AudioContext }
+				  ).webkitAudioContext !== 'undefined'
+					? (globalThis as typeof globalThis & { webkitAudioContext: typeof AudioContext })
+							.webkitAudioContext
+					: null);
+		if (!AC) return;
+		try {
+			const ctx = new AC();
+			const master = ctx.createGain();
+			master.gain.value = 0.6;
+			master.connect(ctx.destination);
+
+			const runChirp = (t0: number, f0: number, f1: number) => {
+				const osc = ctx.createOscillator();
+				const g = ctx.createGain();
+				osc.connect(g);
+				g.connect(master);
+				osc.type = 'triangle';
+				osc.frequency.setValueAtTime(f0, t0);
+				osc.frequency.exponentialRampToValueAtTime(f1, t0 + 0.07);
+				const eps = 0.0008;
+				g.gain.setValueAtTime(eps, t0);
+				g.gain.linearRampToValueAtTime(0.88, t0 + 0.018);
+				g.gain.exponentialRampToValueAtTime(eps, t0 + 0.085);
+				osc.start(t0);
+				osc.stop(t0 + 0.09);
+			};
+
+			void ctx.resume().then(() => {
+				const t = ctx.currentTime + 0.02;
+				runChirp(t, 2150, 3100);
+				runChirp(t + 0.1, 2550, 3600);
+			});
+
+			window.setTimeout(() => {
+				try {
+					ctx.close();
+				} catch {
+					/* yok */
+				}
+			}, 400);
+		} catch {
+			/* oturum sessiz başarısız / autoplay kısıtı */
+		}
+	}
+
+	async function loadNotifications(opts?: { dingOnUnread?: boolean }) {
 		if (!browser) return;
 		const token = localStorage.token ?? null;
 		if (!token) return;
@@ -419,8 +474,17 @@
 		}
 
 		notifications = merged;
-	}
 
+		if (opts?.dingOnUnread && !bellIntroWhistlePlayed) {
+			const hasApprovalRow = merged.some((n) => n.type === 'approval');
+			const totalUnread =
+				unreadInboxTotal + (hasApprovalRow ? 1 : 0) + unseenAnnCount + unreadAttendanceWarnTotal;
+			if (totalUnread > 0) {
+				bellIntroWhistlePlayed = true;
+				queueMicrotask(() => playBellIntroWhistle());
+			}
+		}
+	}
 	$: unreadBellApproval = notifications.some((n) => n.type === 'approval');
 	$: unreadCount =
 		unreadInboxTotal +
@@ -519,7 +583,7 @@
 		const events = ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll'];
 		events.forEach((e) => window.addEventListener(e, resetIdle, { passive: true }));
 		resetIdle();
-		loadNotifications();
+		void loadNotifications({ dingOnUnread: true });
 		bellPollInterval = setInterval(() => {
 			void loadNotifications();
 		}, BELL_POLL_MS);
