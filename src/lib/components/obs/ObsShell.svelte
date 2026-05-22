@@ -11,6 +11,7 @@
 		getDouStudentAnnouncements,
 		getDouAcademicAnnouncements,
 		getDouAdminAnnouncements,
+		getDouStudentAttendance,
 		type DouAnnouncement
 	} from '$lib/apis/douAcademic';
 
@@ -172,6 +173,10 @@
 	$: aiAskHref = `/?back=${encodeURIComponent(normalizedActive)}`;
 
 	const OBS_ANN_SEEN_LS_KEY = 'dou_obs_ann_seen_ids';
+	const OBS_ATT_WARN_FP_LS_KEY = 'dou_obs_attendance_low_fp';
+
+	/** Çan rozeti için markAllRead’de yazılacak son fingerprint (bir yüklemede hesaplanır). */
+	let lastAttendanceLowFingerprint = '';
 
 	function loadAnnSeenSet(): Set<string> {
 		if (!browser) return new Set();
@@ -198,6 +203,31 @@
 		const s = loadAnnSeenSet();
 		for (const id of ids) s.add(id);
 		persistAnnSeenSet(s);
+	}
+
+	function loadAttendanceWarnSeenFingerprint(): string {
+		if (!browser) return '';
+		try {
+			return (localStorage.getItem(OBS_ATT_WARN_FP_LS_KEY) ?? '').trim();
+		} catch {
+			return '';
+		}
+	}
+
+	function persistAttendanceWarnFingerprint(fp: string) {
+		if (!browser || !fp) return;
+		try {
+			localStorage.setItem(OBS_ATT_WARN_FP_LS_KEY, fp);
+		} catch {
+			/* yok */
+		}
+	}
+
+	function attendanceLowCoursesFingerprint(rows: { course_code: string; attendance_pct: number }[]) {
+		return rows
+			.map((r) => `${String(r.course_code ?? '').trim()}:${Math.round(Number(r.attendance_pct) * 10) / 10}`)
+			.sort()
+			.join('|');
 	}
 
 	async function fetchActiveAnnouncementsForRole(token: string | null): Promise<DouAnnouncement[]> {
@@ -257,6 +287,8 @@
 	let unreadInboxTotal = 0;
 	/** Aktif duyurulardan henüz “görüldü” işaretlenmemiş olanlar (localStorage'a göre, çan rakamı). */
 	let unreadAnnouncementsTotal = 0;
+	/** Devamsızlık %70 altı uyarısı — fingerprint ile; çan rakamına +1 olabilir. */
+	let unreadAttendanceWarnTotal = 0;
 	/** "Tümünü okundu" sonrası panelde okumuş iletileri gösterme; çanı yeniden açınca sıfır. */
 	let bellHideReadMsgsUntilReopen = false;
 
@@ -269,6 +301,9 @@
 		if (!browser) return;
 		const token = localStorage.token ?? null;
 		if (!token) return;
+
+		lastAttendanceLowFingerprint = '';
+		unreadAttendanceWarnTotal = 0;
 
 		const fresh: Notif[] = [];
 		const seenAnn = loadAnnSeenSet();
@@ -328,6 +363,38 @@
 		}
 		unreadAnnouncementsTotal = unseenAnnCount;
 
+		/** Öğrenci: en az bir derste katılım %70 altıysa bildirim (aynı parmak izi görüldü sayılmışsa rozette sayılmaz). */
+		if (role === 'ogrenci') {
+			const attRes = await getDouStudentAttendance(token).catch(() => null);
+			const lowCourses = (attRes?.attendance ?? []).filter((r) => r.attendance_pct < 70);
+			if (lowCourses.length) {
+				lastAttendanceLowFingerprint = attendanceLowCoursesFingerprint(lowCourses);
+				const seenFp = loadAttendanceWarnSeenFingerprint();
+				const attRead = seenFp === lastAttendanceLowFingerprint;
+				unreadAttendanceWarnTotal = attRead ? 0 : 1;
+				const preview = lowCourses
+					.slice(0, 3)
+					.map((r) => `${String(r.course_code || '').trim()} %${r.attendance_pct}`)
+					.join(', ');
+				const more =
+					lowCourses.length > 3 ? ` ve ${lowCourses.length - 3} ders daha` : '';
+				fresh.push({
+					id: 'notif-attendance-low',
+					type: 'attendance',
+					text: `${lowCourses.length} derste katılım oranı %70'in altında (${preview}${more}). Devamsızlık Durumu ekranından kontrol edin.`,
+					time: 'Uyarı',
+					sortMs: Date.now() + 86_200_000,
+					read: attRead
+				});
+			} else if (browser) {
+				try {
+					localStorage.removeItem(OBS_ATT_WARN_FP_LS_KEY);
+				} catch {
+					/* yok */
+				}
+			}
+		}
+
 		fresh.sort((x, y) => y.sortMs - x.sortMs);
 		let merged = fresh.slice(0, MAX_BELL_MESSAGES);
 
@@ -356,7 +423,10 @@
 
 	$: unreadBellApproval = notifications.some((n) => n.type === 'approval');
 	$: unreadCount =
-		unreadInboxTotal + (unreadBellApproval ? 1 : 0) + unreadAnnouncementsTotal;
+		unreadInboxTotal +
+		(unreadBellApproval ? 1 : 0) +
+		unreadAnnouncementsTotal +
+		unreadAttendanceWarnTotal;
 
 	/** Gelen kutusu mesajlarını sunucuda okundu yapar; toplu sonrası panelden mesaj satırlarını düşürür (çanı tekrar açınca geçmiş gelir). */
 	async function markAllRead() {
@@ -364,6 +434,7 @@
 		const token = localStorage.token ?? null;
 		/* Tüm aktif duyuruları görüldü say (panele sığmayanlar dahil) */
 		await markAllActiveAnnouncementsSeen(token);
+		persistAttendanceWarnFingerprint(lastAttendanceLowFingerprint);
 
 		const inboxFresh = await getDouInbox(token).catch(() => null);
 		const unreadIds =
@@ -381,6 +452,9 @@
 		const token = localStorage.token ?? null;
 		if (n.type === 'announcement' && n.announcementId) {
 			markAnnouncementIdsSeen([n.announcementId]);
+		}
+		if (n.type === 'attendance') {
+			persistAttendanceWarnFingerprint(lastAttendanceLowFingerprint);
 		}
 		if (token && n.type === 'message' && n.messageId && !n.read) {
 			try {
@@ -651,15 +725,17 @@
 														? '/obs/akademisyen/onay-talepleri'
 														: n.type === 'grade'
 															? '/obs/ogrenci/not-listesi'
-															: n.type === 'announcement'
-																? role === 'ogrenci'
-																	? '/obs/ogrenci/duyurular'
-																	: role === 'akademisyen'
-																		? '/obs/akademisyen/duyuru-olustur'
-																		: role === 'admin'
-																			? '/obs/admin/duyuru-global'
-																			: null
-																: null}
+															: n.type === 'attendance'
+																? '/obs/ogrenci/devamsizlik-durumu'
+																: n.type === 'announcement'
+																	? role === 'ogrenci'
+																		? '/obs/ogrenci/duyurular'
+																		: role === 'akademisyen'
+																			? '/obs/akademisyen/duyuru-olustur'
+																			: role === 'admin'
+																				? '/obs/admin/duyuru-global'
+																				: null
+																	: null}
 											<button
 												on:click={() => void onNotifRowClick(n, notifHref)}
 												type="button"
