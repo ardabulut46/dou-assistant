@@ -14,7 +14,6 @@
 		deleteDouSectionGrade,
 		finalizeDouSectionGrades,
 		putDouSectionGradeWeights,
-		unfinalizeDouSectionGrade,
 		getDouSectionExams,
 		getDouAcademicClassrooms,
 		createDouSectionExam,
@@ -949,19 +948,6 @@
 		}
 	}
 
-	async function unfinalizeRow(enrollmentId: string) {
-		if (!browser || !confirm('Bu öğrencinin kesinleşmiş notunu tekrar düzenlenebilir yapmak istiyor musunuz?'))
-			return;
-		const token = localStorage.token ?? null;
-		if (!token || !selectedSection) return;
-		gradeErr = null;
-		try {
-			await unfinalizeDouSectionGrade(token, selectedSection, enrollmentId);
-			await loadPage();
-		} catch (e: unknown) {
-			gradeErr = e instanceof Error ? e.message : 'Readonly kaldırılamadı.';
-		}
-	}
 
 	async function saveAttendance() {
 		const token = localStorage.token ?? null;
@@ -1506,13 +1492,7 @@
 												{gradeDeletingId === g.enrollment_id ? '…' : 'Notu sil'}
 											</button>
 										{:else}
-											<button
-												type="button"
-												on:click={() => unfinalizeRow(g.enrollment_id)}
-												class="text-xs font-semibold text-violet-600 hover:underline dark:text-violet-400"
-											>
-												Readonly kaldır
-											</button>
+											<span class="text-xs text-slate-400">—</span>
 										{/if}
 									</td>
 								</tr>
