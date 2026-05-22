@@ -2352,7 +2352,7 @@
 						<div
 							class="mb-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
 						>
-							✓ Duyuru kaydedildi.
+							Duyuru kaydedildi.
 						</div>
 					{/if}
 					{#if annErr}
@@ -2386,18 +2386,18 @@
 						<div>
 							<div class="mb-1.5 text-xs font-semibold text-slate-500">Hedef Kitle</div>
 							<div class="grid grid-cols-2 gap-2">
-								{#each [{ v: 'section', lbl: 'Şubedeki Öğrenciler', icon: '📚' }, { v: 'advisees', lbl: 'Danışmanlık Öğrencilerim', icon: '🎓' }, { v: 'student', lbl: 'Belirli Bir Öğrenci', icon: '👤' }, { v: 'all', lbl: 'Tüm Öğrenciler', icon: '📢' }] as opt}
+								{#each [{ v: 'section', lbl: 'Şubedeki Öğrenciler' }, { v: 'advisees', lbl: 'Danışmanlık Öğrencilerim' }, { v: 'student', lbl: 'Belirli Bir Öğrenci' }, { v: 'all', lbl: 'Tüm Öğrenciler' }] as opt}
 									<button
 										type="button"
 										on:click={() => {
 											annForm.audience_type = opt.v as typeof annForm.audience_type;
 										}}
-										class="flex items-center gap-2 rounded-lg border px-3 py-2.5 text-xs font-medium transition-colors
+										class="flex w-full items-center justify-center rounded-lg border px-3 py-2.5 text-xs font-medium transition-colors
 										{annForm.audience_type === opt.v
 											? 'border-sky-400 bg-sky-50 text-sky-700 dark:border-sky-500 dark:bg-sky-900/30 dark:text-sky-300'
 											: 'border-black/10 bg-white text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10'}"
 									>
-										<span>{opt.icon}</span>{opt.lbl}
+										{opt.lbl}
 									</button>
 								{/each}
 							</div>
@@ -2519,11 +2519,7 @@
 								type="button"
 								class="w-full rounded-lg bg-sky-500 py-2.5 text-sm font-bold text-white hover:bg-sky-400 disabled:opacity-50 transition-colors sm:flex-1"
 							>
-								{annSaving
-									? 'Gönderiliyor…'
-									: editingAnnId
-										? '💾 Kaydet'
-										: '📢 Duyuruyu Yayınla'}
+								{annSaving ? 'Gönderiliyor…' : editingAnnId ? 'Kaydet' : 'Duyuruyu Yayınla'}
 							</button>
 						</div>
 					</div>
@@ -2590,7 +2586,7 @@
 					on:click={openAcademicNewMessage}
 					class="flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-sky-400"
 				>
-					✏ Yeni Mesaj
+					Yeni Mesaj
 				</button>
 			</div>
 			<p class="mb-4 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
@@ -2618,7 +2614,7 @@
 						<div class="mt-1 text-xs text-slate-400">
 							{apiKey === 'inbox'
 								? (m.sender_name ?? m.sender_type)
-								: `→ ${m.receiver_name ?? m.receiver_type}`} · {m.sent_at}
+								: `Alıcı: ${m.receiver_name ?? m.receiver_type}`} · {m.sent_at}
 						</div>
 						<p class="mt-2 text-sm text-slate-600 dark:text-slate-300">{m.body}</p>
 					</div>

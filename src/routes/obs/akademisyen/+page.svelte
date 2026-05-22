@@ -45,33 +45,33 @@
 			href: '/obs/akademisyen/subelerim',
 			title: 'Şubelerim',
 			desc: 'Verdiğim dersler',
-			icon: '📚'
+			icon: ''
 		},
 		{
 			href: '/obs/akademisyen/not-girisi',
 			title: 'Not Girişi',
 			desc: 'Öğrenci notlarını gir',
-			icon: '📝'
+			icon: ''
 		},
 		{
 			href: '/obs/akademisyen/yoklama-girisi',
 			title: 'Yoklama Girişi',
 			desc: 'Haftalık yoklama',
-			icon: '✅'
+			icon: ''
 		},
 		{
 			href: '/obs/akademisyen/danismanlik-ogrencilerim',
 			title: 'Danışmanlık',
 			desc: 'Öğrenci listesi',
-			icon: '🎓'
+			icon: ''
 		},
 		{
 			href: '/obs/akademisyen/onay-talepleri',
 			title: 'Onay Talepleri',
 			desc: `${pendingApprovals} bekliyor`,
-			icon: '⏳'
+			icon: ''
 		},
-		{ href: '/obs/akademisyen/mesajlar-gelen', title: 'Mesajlar', desc: 'Gelen kutusu', icon: '✉️' }
+		{ href: '/obs/akademisyen/mesajlar-gelen', title: 'Mesajlar', desc: 'Gelen kutusu', icon: '' }
 	];
 </script>
 
@@ -140,7 +140,9 @@
 					href={lnk.href}
 					class="group flex items-start gap-3 rounded-xl border border-black/10 bg-white p-4 shadow-sm transition hover:-translate-y-px hover:shadow-md dark:border-white/10 dark:bg-white/5"
 				>
-					<span class="text-xl leading-none">{lnk.icon}</span>
+					{#if (lnk.icon ?? '').trim()}
+						<span class="text-xl leading-none">{lnk.icon}</span>
+					{/if}
 					<div class="min-w-0">
 						<div
 							class="text-sm font-semibold group-hover:text-sky-600 dark:group-hover:text-sky-400 transition-colors"

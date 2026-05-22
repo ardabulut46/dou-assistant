@@ -41,73 +41,73 @@
 		{
 			href: '/obs/admin/kullanici-yonetimi',
 			title: 'Kullanıcı Yönetimi',
-			icon: '👤',
+			icon: '',
 			desc: 'Kullanıcı oluştur, düzenle, rol ata'
 		},
 		{
 			href: '/obs/admin/danisman-atama',
 			title: 'Danışman Atama',
-			icon: '🧑‍🏫',
+			icon: '',
 			desc: 'Öğrencilere danışman ata / değiştir'
 		},
 		{
 			href: '/obs/admin/rol-yonetimi',
 			title: 'Rol Yönetimi',
-			icon: '🔑',
+			icon: '',
 			desc: 'Permission atama ve kaldırma'
 		},
 		{
 			href: '/obs/admin/bolum-yonetimi',
 			title: 'Bölüm Yönetimi',
-			icon: '🏛️',
+			icon: '',
 			desc: 'Fakülte ve bölüm tanımları'
 		},
 		{
 			href: '/obs/admin/donem-yonetimi',
 			title: 'Dönem Yönetimi',
-			icon: '📅',
+			icon: '',
 			desc: 'Dönem açma, aktif yapma'
 		},
 		{
 			href: '/obs/admin/ders-katalogu',
 			title: 'Ders Kataloğu',
-			icon: '📚',
+			icon: '',
 			desc: 'Ders tanımı ve kataloğu'
 		},
 		{
 			href: '/obs/admin/sube-acma',
 			title: 'Şube Açma',
-			icon: '🗂️',
+			icon: '',
 			desc: 'Akademisyen atama, kontenjan'
 		},
 		{
 			href: '/obs/admin/derslik-yonetimi',
 			title: 'Derslik Yönetimi',
-			icon: '🏫',
+			icon: '',
 			desc: 'Fiziksel ve online derslikler'
 		},
 		{
 			href: '/obs/admin/akademik-takvim',
 			title: 'Akademik Takvim',
-			icon: '🗓️',
+			icon: '',
 			desc: 'Not girişi, yoklama pencereleri'
 		},
 		{
 			href: '/obs/admin/kayit-kurallari',
 			title: 'Kayıt Kuralları',
-			icon: '⚙️',
+			icon: '',
 			desc: 'AKTS limit, GPA eşiği, deadline'
 		},
 		{
 			href: '/obs/admin/duyuru-global',
 			title: 'Global Duyuru',
-			icon: '📢',
+			icon: '',
 			desc: 'Tüm kullanıcılara duyuru'
 		},
 		{
 			href: '/obs/admin/audit-kayitlari',
 			title: 'Audit Kayıtları',
-			icon: '🔍',
+			icon: '',
 			desc: 'İşlem geçmişi ve loglama'
 		}
 	];
@@ -155,7 +155,9 @@
 					href={m.href}
 					class="group flex items-start gap-3 rounded-xl border border-black/10 bg-white p-4 shadow-sm transition hover:-translate-y-px hover:shadow-md dark:border-white/10 dark:bg-white/5"
 				>
-					<span class="text-2xl leading-none">{m.icon}</span>
+					{#if (m.icon ?? '').trim()}
+						<span class="text-2xl leading-none">{m.icon}</span>
+					{/if}
 					<div class="min-w-0">
 						<div
 							class="text-sm font-semibold group-hover:text-sky-600 dark:group-hover:text-sky-400 transition-colors"

@@ -2221,7 +2221,7 @@
 							{roles.find((r) => r.id === selectedRoleId)?.name ?? 'Rol Seç'} — İzinler
 						</div>
 						{#if rolesSaved}<span class="text-xs text-emerald-600 dark:text-emerald-400"
-								>Kaydedildi ✓</span
+								>Kaydedildi.</span
 							>{/if}
 					</div>
 					<div class="grid grid-cols-2 gap-2">
@@ -2826,7 +2826,7 @@
 							class="rounded-lg border border-black/10 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/10"
 							disabled={studentAdvisorsLoading}
 						>
-							{studentAdvisorsLoading ? 'Yükleniyor…' : '↺ Yenile'}
+							{studentAdvisorsLoading ? 'Yükleniyor…' : 'Yenile'}
 						</button>
 					</div>
 
@@ -3133,7 +3133,7 @@
 							<div
 								class="mb-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
 							>
-								✓ Kayıt başarılı.
+								Kayıt başarılı.
 							</div>
 						{/if}
 						{#if sectionErr}

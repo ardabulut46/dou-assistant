@@ -394,15 +394,6 @@
 		await loadNotifications();
 	}
 
-	const notifIcon: Record<string, string> = {
-		grade: '📊',
-		message: '✉️',
-		attendance: '⚠️',
-		info: 'ℹ️',
-		approval: '✅',
-		announcement: '📣'
-	};
-
 	// ---------------------------------------------------------------------------
 	// Idle timeout (20 dakika)
 	// ---------------------------------------------------------------------------
@@ -475,7 +466,7 @@
 	<div
 		class="fixed top-0 left-0 right-0 z-[100] flex items-center justify-between bg-amber-500 px-6 py-2.5 text-sm font-semibold text-white shadow-lg"
 	>
-		<span>⏰ 2 dakika hareketsizlik algılandı — oturum kapanmak üzere.</span>
+		<span>2 dakika hareketsizlik algılandı — oturum kapanmak üzere.</span>
 		<button
 			on:click={resetIdle}
 			type="button"
@@ -523,7 +514,6 @@
 						href={aiAskHref}
 						class="flex w-full items-center gap-2 rounded-lg bg-sky-500/15 px-3 py-2 text-[13px] font-semibold text-sky-300 ring-1 ring-sky-500/25 transition-colors hover:bg-sky-500/25"
 					>
-						<span aria-hidden="true">✨</span>
 						<span>AI Asistan</span>
 					</a>
 				</div>
@@ -677,7 +667,6 @@
 													{n.read ? 'opacity-60' : 'bg-sky-50/50 dark:bg-sky-950/20'}
 													{notifHref ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-white/5' : 'cursor-default'}"
 											>
-												<span class="mt-0.5 text-base">{notifIcon[n.type] ?? 'ℹ️'}</span>
 												<div class="min-w-0 flex-1">
 													<div class="text-xs font-medium leading-snug">{n.text}</div>
 													<div class="mt-0.5 text-[10px] text-slate-400">{n.time}</div>

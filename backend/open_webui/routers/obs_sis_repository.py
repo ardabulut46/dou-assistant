@@ -2450,7 +2450,11 @@ def unfinalize_grade_entry(db: Session, section_id: str, enrollment_id: str) -> 
         text(
             """
             UPDATE obs_grade_entries
-            SET is_finalized = false, finalized_at = NULL, finalized_by = NULL, updated_at = NOW()
+            SET is_finalized = false,
+                is_published = false,
+                finalized_at = NULL,
+                finalized_by = NULL,
+                updated_at = NOW()
             WHERE enrollment_id = :eid
             """
         ),
@@ -2610,6 +2614,54 @@ def delete_grade_entry(
     return True, ""
 
 
+def _resolve_grade_notification_sender_uid(
+    db: Session,
+    section_id: str,
+    finalized_by_webui_uid: Optional[str],
+) -> Optional[str]:
+    """Gelen kutusu mesajında gönderen: kesinleştiren akademisyen Open WebUI user.id veya şube hocası."""
+    u = (_str_id(finalized_by_webui_uid) if finalized_by_webui_uid else "") or ""
+    if u.strip():
+        return u.strip()
+    row = db.execute(
+        text(
+            """
+            SELECT ap.user_id
+            FROM obs_course_sections cs
+            LEFT JOIN obs_academic_profiles ap ON ap.id = cs.instructor_id
+            WHERE cs.id = :sid
+            LIMIT 1
+            """
+        ),
+        {"sid": section_id},
+    ).first()
+    return (_str_id(row[0]) or "").strip() if row else None
+
+
+def _grade_finalize_inbox_targets(
+    db: Session, section_id: str
+) -> list[dict[str, Any]]:
+    """Bu işlem öncesi kesinleşmemiş (is_finalized hariç True) aktif kayıtlar — kutuya bildirim gidecek liste."""
+    rows = db.execute(
+        text(
+            """
+            SELECT sp.user_id AS student_uid, c.code AS course_code,
+                   c.name AS course_name, cs.section_no, g.is_finalized, g.letter_grade
+            FROM obs_grade_entries g
+            INNER JOIN obs_course_enrollments ce ON ce.id = g.enrollment_id
+            INNER JOIN obs_student_profiles sp ON sp.id = ce.student_id
+            INNER JOIN obs_course_sections cs ON cs.id = ce.course_section_id
+            INNER JOIN obs_courses c ON c.id = cs.course_id
+            WHERE ce.course_section_id = :sid
+              AND ce.status = 'active'
+              AND sp.user_id IS NOT NULL
+            """
+        ),
+        {"sid": section_id},
+    ).mappings().all()
+    return [dict(r) for r in rows if not bool(r.get("is_finalized"))]
+
+
 def finalize_section_grades(
     db: Session,
     section_id: str,
@@ -2626,6 +2678,8 @@ def finalize_section_grades(
     """
     recompute_section_letter_grades_rg(db, section_id)
 
+    notify_targets = _grade_finalize_inbox_targets(db, section_id)
+
     set_fb = ""
     params: dict[str, Any] = {"sid": section_id}
     if finalized_by_user_id:
@@ -2637,6 +2691,7 @@ def finalize_section_grades(
             f"""
             UPDATE obs_grade_entries
             SET is_finalized = true,
+                is_published = true,
                 finalized_at = CURRENT_TIMESTAMP,
                 updated_at = CURRENT_TIMESTAMP
                 {set_fb}
@@ -2651,6 +2706,44 @@ def finalize_section_grades(
         params,
     )
     db.commit()
+
+    sender_uid = _resolve_grade_notification_sender_uid(
+        db, section_id, finalized_by_user_id
+    )
+    if not sender_uid or not notify_targets:
+        return
+
+    seen_receivers: set[str] = set()
+    for r in notify_targets:
+        recv = (_str_id(r.get("student_uid")) or "").strip()
+        if not recv or recv in seen_receivers:
+            continue
+        seen_receivers.add(recv)
+        code = (str(r.get("course_code") or "").strip()) or "(ders)"
+        cname = (str(r.get("course_name") or "").strip()) or code
+        sn = r.get("section_no")
+        sec_txt = ""
+        if sn is not None and str(sn).strip():
+            sec_txt = f" — Şube {str(sn).strip()}"
+        lg_raw = r.get("letter_grade")
+        lg_s = (str(lg_raw).strip() if lg_raw is not None else "") or ""
+        line_grade = f"\nHarf notu: {lg_s}" if lg_s else ""
+        subject = f"Not kesinleştirildi: {code}"
+        body = (
+            f"{cname}{sec_txt}\n"
+            "Bu derse ilişkin notlarınız kesinleştirildi."
+            f"{line_grade}\n\n"
+            "Detay için OBS › Notlar / Transkript ekranından kontrol edebilirsiniz."
+        )
+        try:
+            insert_message(db, sender_uid, recv, subject, body)
+        except Exception:
+            log.exception(
+                "Not kesinleştirme sonrası gelen kutusu bildirimi yazılamadı "
+                "section_id=%s receiver=%s",
+                section_id,
+                recv,
+            )
 
 
 def record_attendance(

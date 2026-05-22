@@ -44,46 +44,46 @@
 			href: '/obs/ogrenci/alinan-dersler',
 			title: 'Alınan Dersler',
 			desc: 'Dönem ders listesi',
-			icon: '📚'
+			icon: ''
 		},
 		{
 			href: '/obs/ogrenci/not-listesi',
 			title: 'Not Listesi',
 			desc: 'Vize, final ve harf notları',
-			icon: '📊'
+			icon: ''
 		},
 		{
 			href: '/obs/ogrenci/sinav-takvimi',
 			title: 'Sınav Takvimi',
 			desc: 'Yaklaşan sınavlar',
-			icon: '📅'
+			icon: ''
 		},
 		{
 			href: '/obs/ogrenci/ders-programi',
 			title: 'Ders Programı',
 			desc: 'Haftalık çizelge',
-			icon: '🗓️'
+			icon: ''
 		},
 		{
 			href: '/obs/ogrenci/devamsizlik-durumu',
 			title: 'Devamsızlık',
 			desc: 'Devam oranları',
-			icon: '✅'
+			icon: ''
 		},
-		{ href: '/obs/ogrenci/mesajlar-gelen', title: 'Mesajlar', desc: 'Gelen kutusu', icon: '✉️' },
+		{ href: '/obs/ogrenci/mesajlar-gelen', title: 'Mesajlar', desc: 'Gelen kutusu', icon: '' },
 		{
 			href: '/obs/ogrenci/duyurular',
 			title: 'Duyurular',
 			desc: 'Bölüm ve genel duyurular',
-			icon: '📢'
+			icon: ''
 		},
 		{
 			href: '/obs/ogrenci/belge-talebi',
 			title: 'Belge Talebi',
 			desc: 'Transkript, öğrenci belgesi',
-			icon: '📄'
+			icon: ''
 		},
-		{ href: '/obs/ogrenci/transkript', title: 'Transkript', desc: 'Tüm dönemler', icon: '🎓' }
+		{ href: '/obs/ogrenci/transkript', title: 'Transkript', desc: 'Tüm dönemler', icon: '' }
 	];
 </script>
 
@@ -140,7 +140,9 @@
 					href={lnk.href}
 					class="group flex items-start gap-3 rounded-xl border border-black/10 bg-white p-4 shadow-sm transition hover:-translate-y-px hover:shadow-md dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/8"
 				>
-					<span class="text-xl leading-none">{lnk.icon}</span>
+					{#if (lnk.icon ?? '').trim()}
+						<span class="text-xl leading-none">{lnk.icon}</span>
+					{/if}
 					<div class="min-w-0">
 						<div
 							class="text-sm font-semibold text-slate-800 group-hover:text-sky-600 dark:text-slate-100 dark:group-hover:text-sky-400 transition-colors"

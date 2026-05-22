@@ -1011,7 +1011,7 @@
 							{@const toplamAkts =
 								(profile as unknown as Record<string, number>).total_akts_required ?? 120}
 							<div class="mt-5 grid grid-cols-4 gap-3">
-								{#each [{ lbl: 'AGNO', val: agno.toFixed(2), sub: 'Kümülatif', color: agno >= 3.0 ? 'text-emerald-600 dark:text-emerald-400' : agno >= 2.0 ? 'text-sky-600 dark:text-sky-400' : 'text-red-500' }, { lbl: 'DNO', val: dno.toFixed(2), sub: 'Bu Dönem', color: dno >= 3.0 ? 'text-emerald-600 dark:text-emerald-400' : dno >= 2.0 ? 'text-sky-600 dark:text-sky-400' : 'text-red-500' }, { lbl: 'AKTS', val: tamamAkts.toString(), sub: `/ ${toplamAkts}`, color: 'text-slate-800 dark:text-slate-100' }, { lbl: 'Durum', val: profile.status === 'active' ? 'Aktif' : (profile.status ?? 'Aktif'), sub: profile.is_financially_eligible ? '✓ Mali Uygun' : '✗ Borç Var', color: profile.status === 'active' ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500' }] as st}
+								{#each [{ lbl: 'AGNO', val: agno.toFixed(2), sub: 'Kümülatif', color: agno >= 3.0 ? 'text-emerald-600 dark:text-emerald-400' : agno >= 2.0 ? 'text-sky-600 dark:text-sky-400' : 'text-red-500' }, { lbl: 'DNO', val: dno.toFixed(2), sub: 'Bu Dönem', color: dno >= 3.0 ? 'text-emerald-600 dark:text-emerald-400' : dno >= 2.0 ? 'text-sky-600 dark:text-sky-400' : 'text-red-500' }, { lbl: 'AKTS', val: tamamAkts.toString(), sub: `/ ${toplamAkts}`, color: 'text-slate-800 dark:text-slate-100' }, { lbl: 'Durum', val: profile.status === 'active' ? 'Aktif' : (profile.status ?? 'Aktif'), sub: profile.is_financially_eligible ? 'Mali uygun' : 'Borç var', color: profile.status === 'active' ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500' }] as st}
 									<div
 										class="rounded-xl border border-black/8 bg-slate-50 px-4 py-3 dark:border-white/8 dark:bg-white/5"
 									>
@@ -1047,7 +1047,7 @@
 							<div
 								class="mt-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
 							>
-								✓ Profil güncellendi.
+								Profil güncellendi.
 							</div>
 						{/if}
 					</div>
@@ -1954,11 +1954,11 @@
 									<td class="px-4 py-3 text-center font-medium">{g.final ?? '—'}</td>
 									<td class="px-4 py-3 text-center font-medium text-amber-600 dark:text-amber-400">{g.makeup ?? '—'}</td>
 									<td class="px-4 py-3 text-center">
-										{#if g.is_published && g.letter_grade}
+										{#if (g.is_published || g.is_finalized) && (g.letter_grade ?? '').toString().trim()}
 											<span
 												class="rounded-full px-2.5 py-0.5 text-xs font-bold {GRADE_COLOR[
-													g.letter_grade
-												] ?? 'bg-slate-100 text-slate-600'}">{g.letter_grade}</span
+													String(g.letter_grade).trim()
+												] ?? 'bg-slate-100 text-slate-600'}">{String(g.letter_grade).trim()}</span
 											>
 										{:else}<span class="text-slate-300">—</span>{/if}
 									</td>
@@ -2018,13 +2018,13 @@
 							on:click={initMockFromEnrollments}
 							class="flex h-full items-center justify-center rounded-xl border border-black/10 bg-slate-50 text-xs font-bold text-slate-600 hover:bg-slate-100 dark:border-white/10 dark:bg-white/5 dark:text-slate-300 dark:hover:bg-white/10"
 						>
-							🔄 Aktif Derslerimi Getir
+							Aktif Derslerimi Getir
 						</button>
 						<button
 							on:click={addMockCourse}
 							class="flex h-full items-center justify-center rounded-xl bg-slate-800 text-xs font-bold text-white hover:bg-slate-700 dark:bg-sky-600 dark:hover:bg-sky-500"
 						>
-							➕ Yeni Ders Ekle
+							Yeni Ders Ekle
 						</button>
 					</div>
 				</div>
@@ -2588,7 +2588,7 @@
 					type="button"
 					class="flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-400 transition-colors"
 				>
-					✏ Yeni Mesaj
+					Yeni Mesaj
 				</button>
 			</div>
 
@@ -2619,7 +2619,7 @@
 						<div class="mt-1 text-xs text-slate-400">
 							{apiKey === 'inbox'
 								? (m.sender_name ?? m.sender_type)
-								: `→ ${m.receiver_name ?? m.receiver_type}`} · {m.sent_at}
+								: `Alıcı: ${m.receiver_name ?? m.receiver_type}`} · {m.sent_at}
 						</div>
 						<p class="mt-2 text-sm text-slate-600 dark:text-slate-300 leading-relaxed">{m.body}</p>
 					</div>
@@ -2861,9 +2861,9 @@
 			on:click={() => (showCompose = true)}
 			type="button"
 			title="Mesaj Yaz"
-			class="fixed bottom-6 right-6 z-40 flex h-11 w-11 items-center justify-center rounded-full bg-sky-500 text-white shadow-lg hover:bg-sky-400 transition-all hover:scale-105"
+			class="fixed bottom-6 right-6 z-40 flex h-11 w-11 items-center justify-center rounded-full bg-sky-500 text-sm font-bold leading-none text-white shadow-lg hover:bg-sky-400 transition-all hover:scale-105"
 		>
-			✏
+			+
 		</button>
 	{/if}
 
