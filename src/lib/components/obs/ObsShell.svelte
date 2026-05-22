@@ -7,7 +7,11 @@
 	import {
 		getDouInbox,
 		getDouAcademicApprovalRequests,
-		markDouMessageRead
+		markDouMessageRead,
+		getDouStudentAnnouncements,
+		getDouAcademicAnnouncements,
+		getDouAdminAnnouncements,
+		type DouAnnouncement
 	} from '$lib/apis/douAcademic';
 
 	export let title = 'Öğrenci Bilgi Sistemi';
@@ -167,23 +171,92 @@
 
 	$: aiAskHref = `/?back=${encodeURIComponent(normalizedActive)}`;
 
+	const OBS_ANN_SEEN_LS_KEY = 'dou_obs_ann_seen_ids';
+
+	function loadAnnSeenSet(): Set<string> {
+		if (!browser) return new Set();
+		try {
+			const raw = localStorage.getItem(OBS_ANN_SEEN_LS_KEY);
+			const arr = raw ? (JSON.parse(raw) as unknown) : [];
+			return new Set(Array.isArray(arr) ? arr.map(String) : []);
+		} catch {
+			return new Set();
+		}
+	}
+
+	function persistAnnSeenSet(seen: Set<string>) {
+		if (!browser) return;
+		try {
+			localStorage.setItem(OBS_ANN_SEEN_LS_KEY, JSON.stringify([...seen]));
+		} catch {
+			/* yok */
+		}
+	}
+
+	function markAnnouncementIdsSeen(ids: string[]) {
+		if (!ids.length) return;
+		const s = loadAnnSeenSet();
+		for (const id of ids) s.add(id);
+		persistAnnSeenSet(s);
+	}
+
+	async function fetchActiveAnnouncementsForRole(token: string | null): Promise<DouAnnouncement[]> {
+		if (!token) return [];
+		if (role === 'ogrenci') {
+			const r = await getDouStudentAnnouncements(token).catch(() => null);
+			return (r?.announcements ?? []).filter((x) => x.is_active);
+		}
+		if (role === 'akademisyen') {
+			const r = await getDouAcademicAnnouncements(token).catch(() => null);
+			return (r?.announcements ?? []).filter((x) => x.is_active);
+		}
+		if (role === 'admin') {
+			const r = await getDouAdminAnnouncements(token).catch(() => null);
+			return (r?.announcements ?? []).filter((x) => x.is_active);
+		}
+		return [];
+	}
+
+	async function markAllActiveAnnouncementsSeen(token: string | null) {
+		const list = await fetchActiveAnnouncementsForRole(token);
+		markAnnouncementIdsSeen(list.map((a) => a.id));
+	}
+
+	function annAudienceLabel(at: string): string {
+		const a = (at || '').toLowerCase();
+		const map: Record<string, string> = {
+			all: 'Genel',
+			student: 'Kişisel',
+			section: 'Şube',
+			department: 'Bölüm',
+			advisees: 'Danışmanlık öğrencileri'
+		};
+		return map[a] ?? a;
+	}
+
 	// ---------------------------------------------------------------------------
 	// Bildirimler — inbox + approval'dan dinamik
 	// ---------------------------------------------------------------------------
 	type Notif = {
 		id: string;
-		type: 'grade' | 'message' | 'attendance' | 'info' | 'approval';
+		type: 'grade' | 'message' | 'attendance' | 'info' | 'approval' | 'announcement';
 		text: string;
 		time: string;
+		/** Sıralama: en yeni üstte */
+		sortMs: number;
 		read: boolean;
 		/** Gelen kutusu kaydı — sunucuya PATCH /messages/:id/read */
 		messageId?: string;
+		/** Duyuru satırı — okundu yerel (localStorage) */
+		announcementId?: string;
 	};
 
 	let notifOpen = false;
 	let notifications: Notif[] = [];
 	/** Tüm gelen kutusundaki okunmamış mesaj sayısı (çan rakamı için). */
 	let unreadInboxTotal = 0;
+	/** Aktif duyurulardan henüz “görüldü” işaretlenmemiş olanlar (localStorage'a göre, çan rakamı). */
+	let unreadAnnouncementsTotal = 0;
 	/** "Tümünü okundu" sonrası panelde okumuş iletileri gösterme; çanı yeniden açınca sıfır. */
 	let bellHideReadMsgsUntilReopen = false;
 
@@ -198,6 +271,7 @@
 		if (!token) return;
 
 		const fresh: Notif[] = [];
+		const seenAnn = loadAnnSeenSet();
 
 		const inboxRes = await getDouInbox(token).catch(() => null);
 		const msgsRaw = inboxRes?.messages ?? [];
@@ -213,6 +287,7 @@
 		}
 
 		for (const m of ordered.slice(0, MAX_BELL_MESSAGES)) {
+			const sortMs = m.sent_at ? new Date(m.sent_at).getTime() : 0;
 			fresh.push({
 				id: `notif-msg-${m.id}`,
 				type: 'message',
@@ -224,37 +299,72 @@
 							minute: '2-digit'
 						})
 					: '',
+				sortMs,
 				read: !!m.is_read
 			});
 		}
 
-		// Akademisyen ise → bekleyen onay talepleri bildirim olarak
+		const annList = await fetchActiveAnnouncementsForRole(token);
+
+		let unseenAnnCount = 0;
+		for (const a of annList) {
+			const seenRow = seenAnn.has(a.id);
+			if (!seenRow) unseenAnnCount += 1;
+			const ts = a.published_at || a.created_at;
+			const sortMs = ts ? new Date(ts).getTime() : 0;
+			const timeStr = ts
+				? new Date(ts).toLocaleString('tr-TR', { dateStyle: 'short', timeStyle: 'short' })
+				: '';
+			const scope = annAudienceLabel(a.audience_type);
+			fresh.push({
+				id: `notif-ann-${a.id}`,
+				type: 'announcement',
+				announcementId: a.id,
+				text: `[${scope}] ${a.title}`,
+				time: timeStr,
+				sortMs,
+				read: seenRow
+			});
+		}
+		unreadAnnouncementsTotal = unseenAnnCount;
+
+		fresh.sort((x, y) => y.sortMs - x.sortMs);
+		let merged = fresh.slice(0, MAX_BELL_MESSAGES);
+
+		// Akademisyen ise → bekleyen onay talepleri bildirim olarak (her zaman üstte)
 		if (role === 'akademisyen') {
 			const aprRes = await getDouAcademicApprovalRequests(token).catch(() => null);
 			if (aprRes?.requests) {
 				const pending = aprRes.requests.filter((r: { status: string }) => r.status === 'pending');
 				if (pending.length) {
-					fresh.unshift({
+					const nowMs = Date.now();
+					merged.unshift({
 						id: 'notif-approvals',
 						type: 'approval',
 						text: `${pending.length} bekleyen ders onay talebi var`,
 						time: 'şimdi',
+						sortMs: nowMs + 86400000,
 						read: false
 					});
+					if (merged.length > MAX_BELL_MESSAGES) merged = merged.slice(0, MAX_BELL_MESSAGES);
 				}
 			}
 		}
 
-		notifications = fresh;
+		notifications = merged;
 	}
 
 	$: unreadBellApproval = notifications.some((n) => n.type === 'approval');
-	$: unreadCount = unreadInboxTotal + (unreadBellApproval ? 1 : 0);
+	$: unreadCount =
+		unreadInboxTotal + (unreadBellApproval ? 1 : 0) + unreadAnnouncementsTotal;
 
 	/** Gelen kutusu mesajlarını sunucuda okundu yapar; toplu sonrası panelden mesaj satırlarını düşürür (çanı tekrar açınca geçmiş gelir). */
 	async function markAllRead() {
 		if (!browser) return;
 		const token = localStorage.token ?? null;
+		/* Tüm aktif duyuruları görüldü say (panele sığmayanlar dahil) */
+		await markAllActiveAnnouncementsSeen(token);
+
 		const inboxFresh = await getDouInbox(token).catch(() => null);
 		const unreadIds =
 			inboxFresh?.messages?.filter((m) => !m.is_read).map((m) => m.id) ?? [];
@@ -269,6 +379,9 @@
 	async function onNotifRowClick(n: Notif, notifHref: string | null) {
 		if (!browser) return;
 		const token = localStorage.token ?? null;
+		if (n.type === 'announcement' && n.announcementId) {
+			markAnnouncementIdsSeen([n.announcementId]);
+		}
 		if (token && n.type === 'message' && n.messageId && !n.read) {
 			try {
 				await markDouMessageRead(token, n.messageId);
@@ -286,7 +399,8 @@
 		message: '✉️',
 		attendance: '⚠️',
 		info: 'ℹ️',
-		approval: '✅'
+		approval: '✅',
+		announcement: '📣'
 	};
 
 	// ---------------------------------------------------------------------------
@@ -547,7 +661,15 @@
 														? '/obs/akademisyen/onay-talepleri'
 														: n.type === 'grade'
 															? '/obs/ogrenci/not-listesi'
-															: null}
+															: n.type === 'announcement'
+																? role === 'ogrenci'
+																	? '/obs/ogrenci/duyurular'
+																	: role === 'akademisyen'
+																		? '/obs/akademisyen/duyuru-olustur'
+																		: role === 'admin'
+																			? '/obs/admin/duyuru-global'
+																			: null
+																: null}
 											<button
 												on:click={() => void onNotifRowClick(n, notifHref)}
 												type="button"
