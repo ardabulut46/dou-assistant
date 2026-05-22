@@ -9,6 +9,7 @@ import sys
 import time
 import random
 import re
+import stat as stat_module
 from uuid import uuid4
 
 
@@ -2682,11 +2683,37 @@ def swagger_ui_html(*args, **kwargs):
 
 applications.get_swagger_ui_html = swagger_ui_html
 
+
+class SPAStaticFiles(StaticFiles):
+    """SvelteKit client routes (/auth, /obs/…) have no matching file under build/.
+
+    Starlette's StaticFiles(html=True) serves index.html only for '/' and existing
+    directories; unknown paths yield 404. Browser refresh on those URLs must fall
+    back to the SPA shell (index.html).
+    """
+
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if (
+                exc.status_code == status.HTTP_404_NOT_FOUND
+                and scope["method"] in ("GET", "HEAD")
+                and self.html
+            ):
+                full_path, st = await anyio.to_thread.run_sync(
+                    self.lookup_path, "index.html"
+                )
+                if st is not None and stat_module.S_ISREG(st.st_mode):
+                    return self.file_response(full_path, st, scope)
+            raise exc
+
+
 if os.path.exists(FRONTEND_BUILD_DIR):
     mimetypes.add_type("text/javascript", ".js")
     app.mount(
         "/",
-        StaticFiles(directory=FRONTEND_BUILD_DIR, html=True),
+        SPAStaticFiles(directory=FRONTEND_BUILD_DIR, html=True),
         name="spa-static-files",
     )
 else:
