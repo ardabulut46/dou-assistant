@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import unicodedata
 import uuid
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -23,6 +24,219 @@ def _str_id(v: Any) -> Optional[str]:
     if v is None:
         return None
     return str(v)
+
+
+def _norm_term_date_iso(d: Any) -> Optional[str]:
+    """Süre eşlemesi için yalın tarih anahtarı (NULL = henüz yok)."""
+    if d is None:
+        return None
+    if isinstance(d, datetime):
+        return d.date().isoformat()
+    if isinstance(d, date):
+        return d.isoformat()
+    if isinstance(d, str) and len(d.strip()) >= 10:
+        return d.strip()[:10]
+    return None
+
+
+def _norm_term_uuid_key(v: Any) -> str:
+    return str(v or "").replace("{", "").replace("}", "").replace("-", "").lower()
+
+
+def _norm_term_label(nm: Any) -> str:
+    """Süre adı karşılaştırması: NFKC + casefold + boşluk sadeleştirme (Türkçe I/ı gibi farklar için .lower() yetmez)."""
+    s = unicodedata.normalize("NFKC", str(nm or "")).strip().casefold()
+    return " ".join(s.split()) if s else ""
+
+
+def _norm_term_label_loose(nm: Any) -> str:
+    """Unicode tire (en/em dash vb.) dahil süre görünür ad anahtarı — panel ile şube adı uyuşmazlığı."""
+    base = _norm_term_label(nm)
+    if not base:
+        return ""
+    for dash in ("\u2013", "\u2014", "\u2212", "\uff0d"):
+        base = base.replace(dash, "-")
+    return base
+
+
+def candidate_term_ids_for_dropdown(db: Session, term_id: str) -> list[str]:
+    """`/terms` seçili `obs_terms.id`'si için `obs_course_sections.term_id`'de görünebilecek tüm süre UUID'leri.
+
+    Tekil PK kopyası, eski/import veri uyumsuzlukları ve boş tarih alanlarında ad tabanlı yedek eşlemeyi içerir."""
+    raw = str(term_id or "").strip()
+    if not raw:
+        return []
+    rows = (
+        db.execute(text("SELECT id, name, start_date FROM obs_terms")).mappings().all()
+    )
+    sel = None
+    rk = _norm_term_uuid_key(raw)
+    for r in rows:
+        rid = _str_id(r.get("id")) or ""
+        if not rid:
+            continue
+        if rid == raw or _norm_term_uuid_key(rid) == rk:
+            sel = r
+            break
+    if sel is None:
+        log.warning(
+            "[OBS] candidate_term_ids: obs_terms'te seçilen süre PK yok raw=%s | satır=%s",
+            raw,
+            len(rows),
+        )
+        return [raw]
+    canon_lbl = _norm_term_label_loose(sel.get("name"))
+    canon_sd = _norm_term_date_iso(sel.get("start_date"))
+    strict: list[str] = []
+    loose: list[str] = []
+    for r in rows:
+        rid = _str_id(r.get("id"))
+        if not rid:
+            continue
+        lbl = _norm_term_label_loose(r.get("name"))
+        if lbl != canon_lbl:
+            continue
+        loose.append(rid)
+        sd = _norm_term_date_iso(r.get("start_date"))
+        if sd == canon_sd or (canon_sd is None and sd is None):
+            strict.append(rid)
+    use = strict or loose or [_str_id(sel.get("id")) or raw]
+    out: list[str] = []
+    seen: set[str] = set()
+    for x in use:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
+def _candidate_term_ids_for_normalized_start_date(
+    db: Session, target_iso: Optional[str]
+) -> list[str]:
+    """Tüm `obs_terms` içinde normalize edilmiş `start_date == target_iso` olan PK'lar."""
+    if not target_iso:
+        return []
+    rows = db.execute(text("SELECT id, start_date FROM obs_terms")).mappings().all()
+    out: list[str] = []
+    seen: set[str] = set()
+    for r in rows:
+        if _norm_term_date_iso(r.get("start_date")) != target_iso:
+            continue
+        rid = _str_id(r.get("id")) or ""
+        if rid and rid not in seen:
+            seen.add(rid)
+            out.append(rid)
+    return out
+
+
+def _candidate_term_ids_same_start_date_cohort(db: Session, term_id: str) -> list[str]:
+    """Seçilen süre satırının `obs_terms.start_date` değeriyle aynı başlangıç tarihindeki süre PK'leri."""
+    raw = str(term_id or "").strip()
+    if not raw:
+        return []
+    sd = db.execute(
+        text(
+            """
+            SELECT start_date FROM obs_terms
+            WHERE LOWER(TRIM(CAST(id AS text))) = LOWER(TRIM(:tid))
+            LIMIT 1
+            """
+        ),
+        {"tid": raw},
+    ).scalar()
+    return _candidate_term_ids_for_normalized_start_date(db, _norm_term_date_iso(sd))
+
+
+def candidate_term_ids_for_student_dropdown(
+    db: Session, student_profile_id: Optional[str], term_id: str
+) -> list[str]:
+    """Süre filtresi: süre takvimi UUID öbeği + start_date kümesi + öğrencinin derslerinde çıkan tarih/ad yedekleri."""
+    raw_tid = str(term_id or "").strip()
+    lbl_row = db.execute(
+        text(
+            """
+            SELECT name FROM obs_terms
+            WHERE LOWER(TRIM(CAST(id AS text))) = LOWER(TRIM(:tid))
+            LIMIT 1
+            """
+        ),
+        {"tid": raw_tid},
+    ).scalar()
+    canon = _norm_term_label_loose(lbl_row or "") if lbl_row else ""
+
+    chunks: list[str] = []
+    chunks.extend(candidate_term_ids_for_dropdown(db, raw_tid))
+    chunks.extend(_candidate_term_ids_same_start_date_cohort(db, raw_tid))
+
+    # Dropdown satırındaki tarih yanlış/NULL olabilir: öğrencinin süre kayıtlarından tarih çıkar.
+    if student_profile_id and canon:
+        enrol_dates = db.execute(
+            text(
+                """
+                SELECT DISTINCT ot.start_date AS sd, ot.name AS nm
+                FROM obs_course_enrollments ce
+                JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+                LEFT JOIN obs_terms ot ON ot.id = cs.term_id
+                WHERE ce.student_id = :spid
+                """
+            ),
+            {"spid": student_profile_id},
+        ).mappings().all()
+        sd_used: set[str] = set()
+        for er in enrol_dates:
+            if _norm_term_label_loose(er.get("nm")) != canon:
+                continue
+            dsi = _norm_term_date_iso(er.get("sd"))
+            if not dsi or dsi in sd_used:
+                continue
+            sd_used.add(dsi)
+            chunks.extend(_candidate_term_ids_for_normalized_start_date(db, dsi))
+
+    merged: list[str] = []
+    seen_m: set[str] = set()
+    for x in chunks:
+        sx = str(x).strip()
+        if sx and sx not in seen_m:
+            seen_m.add(sx)
+            merged.append(sx)
+
+    if not student_profile_id or not canon:
+        return merged
+
+    extra_rows = db.execute(
+        text(
+            """
+            SELECT DISTINCT cs.term_id AS tid, ot.name AS nm
+            FROM obs_course_enrollments ce
+            JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+            LEFT JOIN obs_terms ot ON ot.id = cs.term_id
+            WHERE ce.student_id = :spid
+            """
+        ),
+        {"spid": student_profile_id},
+    ).mappings().all()
+    out = [*merged]
+    for er in extra_rows:
+        if _norm_term_label_loose(er.get("nm")) != canon:
+            continue
+        tid = _str_id(er.get("tid"))
+        if tid and tid not in seen_m:
+            seen_m.add(tid)
+            out.append(tid)
+    return out
+
+
+def _sql_cs_term_id_in_bindings(candidates: list[str]) -> tuple[str, dict[str, Any]]:
+    """`cs.term_id IN (...)`."""
+    if not candidates:
+        return "", {}
+    binds: dict[str, Any] = {}
+    ph: list[str] = []
+    for i, c in enumerate(candidates):
+        key = f"tcand{i}"
+        binds[key] = c
+        ph.append(f":{key}")
+    return " AND cs.term_id IN (" + ",".join(ph) + ")", binds
 
 
 def _fmt_date(d: Any) -> Optional[str]:
@@ -756,13 +970,29 @@ def compute_weighted_agno_totals(
 
 
 def resolve_student_profile_id(db: Session, webui_user_id: str) -> Optional[str]:
-    """Aynı user_id için birden fazla kart varsa güncel olanı seç (panel ile tutarlılık)."""
+    """Aynı `user_id` ile birden fazla kartta en mantıklı `obs_student_profiles.id`.
+
+    Öncelik: öğrenci numarası (`student_number`) dolu satır → daha çok OBS kaydı
+    (enrollment) → `updated_at` / `created_at` / PK.
+    """
     row = db.execute(
         text(
             """
-            SELECT id FROM obs_student_profiles
-            WHERE user_id = :u
-            ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
+            SELECT sp.id
+            FROM obs_student_profiles sp
+            WHERE sp.user_id = :u
+            ORDER BY
+                CASE
+                    WHEN length(trim(coalesce(CAST(sp.student_number AS TEXT), ''))) > 0
+                    THEN 1 ELSE 0
+                END DESC,
+                (
+                    SELECT COUNT(*) FROM obs_course_enrollments ce
+                    WHERE ce.student_id = sp.id
+                ) DESC,
+                sp.updated_at DESC NULLS LAST,
+                sp.created_at DESC NULLS LAST,
+                sp.id DESC
             LIMIT 1
             """
         ),
@@ -836,6 +1066,10 @@ def _allocate_auto_student_number(db: Session, hint: str) -> str:
 def get_student_profile_api(
     db: Session, webui_user_id: str
 ) -> Optional[dict[str, Any]]:
+    """`/me/profile` ile notların aynı `obs_student_profiles` satırını kullanması gerekir."""
+    pid = resolve_student_profile_id(db, webui_user_id)
+    if not pid:
+        return None
     row = (
         db.execute(
             text(f"""
@@ -849,9 +1083,9 @@ def get_student_profile_api(
         FROM obs_student_profiles sp
         LEFT JOIN obs_departments d ON sp.department_id = d.id
         LEFT JOIN {USER_TBL} u ON u.id = sp.user_id
-        WHERE sp.user_id = :uid
+        WHERE sp.id = :pid
         """),
-            {"uid": webui_user_id},
+            {"pid": pid},
         )
         .mappings()
         .first()
@@ -1461,15 +1695,21 @@ def list_enrollments(
     webui_user_id: str,
     term_id: Optional[str],
     statuses: Optional[tuple[str, ...]] = ("active",),
+    *,
+    include_completed_semesters: bool = False,
 ) -> tuple[Optional[str], list[dict[str, Any]]]:
     spid = resolve_student_profile_id(db, webui_user_id)
     if not spid:
         return None, []
     allowed = {"draft", "pending", "pending_drop", "active", "dropped", "rejected"}
-    st = tuple(s for s in (statuses or ("active",)) if s in allowed)
-    if not st:
-        st = ("active",)
-    in_clause = ", ".join(f"'{x}'" for x in st)
+    if include_completed_semesters:
+        status_clause = "(ce.status IS NULL OR ce.status NOT IN ('draft', 'rejected'))"
+    else:
+        st = tuple(s for s in (statuses or ("active",)) if s in allowed)
+        if not st:
+            st = ("active",)
+        in_clause = ", ".join(f"'{x}'" for x in st)
+        status_clause = f"ce.status IN ({in_clause})"
     q = f"""
         SELECT ce.id AS enrollment_id, ce.status, COALESCE(ce.enrollment_reason, '') AS enrollment_reason,
                c.id AS course_id, c.code AS course_code, c.name AS course_name, c.credits, c.akts,
@@ -1484,12 +1724,14 @@ def list_enrollments(
         LEFT JOIN obs_classrooms cr ON cs.classroom_id = cr.id
         LEFT JOIN obs_academic_profiles ap ON cs.instructor_id = ap.id
         LEFT JOIN "user" ins_u ON ins_u.id = ap.user_id
-        WHERE ce.student_id = :spid AND ce.status IN ({in_clause})
+        WHERE ce.student_id = :spid AND ({status_clause})
         """
     params: dict[str, Any] = {"spid": spid}
     if term_id:
-        q += " AND cs.term_id = :tid"
-        params["tid"] = term_id
+        cand_ids = candidate_term_ids_for_student_dropdown(db, spid, term_id)
+        tcl, binds = _sql_cs_term_id_in_bindings(cand_ids)
+        q += tcl
+        params.update(binds)
     rows = db.execute(text(q), params).mappings().all()
     out = []
     for r in rows:
@@ -1532,11 +1774,14 @@ def list_enrollments(
 
 
 def schedule_from_enrollments(
-    rows: list[dict[str, Any]], term_id: str
+    rows: list[dict[str, Any]],
+    *,
+    only_term_id: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     sched = []
     for r in rows:
-        if r.get("term_id") != term_id and term_id:
+        rtid = _str_id(r.get("term_id")) or ""
+        if only_term_id and rtid != str(only_term_id):
             continue
         sched.append(
             {
@@ -1571,8 +1816,10 @@ def list_student_exams(
         """
     params: dict[str, Any] = {"spid": spid}
     if term_id:
-        q += " AND cs.term_id = :tid"
-        params["tid"] = term_id
+        cand_ids = candidate_term_ids_for_student_dropdown(db, spid, term_id)
+        tcl, binds = _sql_cs_term_id_in_bindings(cand_ids)
+        q += tcl
+        params.update(binds)
     rows = db.execute(text(q), params).mappings().all()
     return [
         {
@@ -1589,12 +1836,42 @@ def list_student_exams(
     ]
 
 
+def _pg_norm_term_visible_name(col: str) -> str:
+    """Python `_norm_term_label_loose` ile yakın: Unicode tireleri '-' yap, whitespace TOPARLA, küçült."""
+    dash_chain = (
+        f"REPLACE(REPLACE(REPLACE(REPLACE({col}::text, CHR(8211), '-'), "
+        f"CHR(8212), '-'), CHR(8722), '-'), CHR(65293), '-')"
+    )
+    return (
+        f"LOWER(TRIM(REGEXP_REPLACE({dash_chain}, '[[:space:]]+', ' ', 'g')))"
+    )
+
+
+def _sql_grade_term_equivalent_clause_postgresql() -> tuple[str, str]:
+    """Seçilen süre ile aynı görünür adlı tüm `obs_terms` PK'leri (PG)."""
+    a = _pg_norm_term_visible_name("ot2.name")
+    b = _pg_norm_term_visible_name("sel.name")
+    return (
+        f"""
+        AND cs.term_id IN (
+            SELECT ot2.id
+            FROM obs_terms ot2
+            INNER JOIN obs_terms sel
+                ON {a} = {b}
+               AND sel.id = CAST(:grade_sel_term AS uuid)
+        )
+        """,
+        "grade_sel_term",
+    )
+
+
 def list_student_grades(
     db: Session, webui_user_id: str, term_id: Optional[str]
 ) -> list[dict[str, Any]]:
     spid = resolve_student_profile_id(db, webui_user_id)
     if not spid:
         return []
+    # Ham SQL ile aynı: ce–cs–courses–terms–grade_entries zinciri (t.id = cs.term_id)
     q = """
         SELECT ce.id AS enrollment_id, c.code AS course_code, c.name AS course_name,
                cs.term_id, ot.name AS term_name,
@@ -1604,15 +1881,58 @@ def list_student_grades(
         FROM obs_course_enrollments ce
         JOIN obs_course_sections cs ON ce.course_section_id = cs.id
         JOIN obs_courses c ON cs.course_id = c.id
-        LEFT JOIN obs_terms ot ON ot.id = cs.term_id
+        JOIN obs_terms ot ON ot.id = cs.term_id
         LEFT JOIN obs_grade_entries g ON g.enrollment_id = ce.id
-        WHERE ce.student_id = :spid AND ce.status IN ('active', 'pending_drop')
+        WHERE ce.student_id = :spid
         """
+    bind = db.get_bind()
     params: dict[str, Any] = {"spid": spid}
-    if term_id:
-        q += " AND cs.term_id = :tid"
-        params["tid"] = term_id
+
+    cand_for_log: Optional[list[str]] = None
+    term_raw = str(term_id or "").strip()
+
+    if term_raw:
+        if bind.dialect.name == "postgresql":
+            clause, pkey = _sql_grade_term_equivalent_clause_postgresql()
+            q += clause
+            params[pkey] = term_raw
+        else:
+            cand_for_log = candidate_term_ids_for_student_dropdown(db, spid, term_raw)
+            tcl, binds = _sql_cs_term_id_in_bindings(cand_for_log)
+            q += tcl
+            params.update(binds)
+
     rows = db.execute(text(q), params).mappings().all()
+
+    if term_raw and not rows and bind.dialect.name == "postgresql":
+        cand_for_log = candidate_term_ids_for_student_dropdown(db, spid, term_raw)
+        if cand_for_log:
+            tcl_fb, binds_fb = _sql_cs_term_id_in_bindings(cand_for_log)
+            q_fb = q.split("WHERE ce.student_id")[0]
+            q_fb += """WHERE ce.student_id = :spid""" + tcl_fb
+            fb_params: dict[str, Any] = {"spid": spid}
+            fb_params.update(binds_fb)
+            rows = db.execute(text(q_fb), fb_params).mappings().all()
+            if rows:
+                log.info(
+                    "[OBS grades] süre görünür ad PG eşleşmesi boştu; UUID aday kümesi ile %s satır (spid=%s term_rq=%s)",
+                    len(rows),
+                    spid,
+                    term_raw,
+                )
+
+    if term_raw and not rows:
+        cand_for_log = cand_for_log or candidate_term_ids_for_student_dropdown(
+            db, spid, term_raw
+        )
+        log.warning(
+            "[OBS grades] sıfır satır | spid=%s term_rq=%s dialect=%s aday_UUID_n=%s aday_UUID=%s",
+            spid,
+            term_raw,
+            getattr(bind.dialect, "name", "?"),
+            len(cand_for_log or []),
+            cand_for_log,
+        )
     return [
         {
             "enrollment_id": _str_id(r["enrollment_id"]),

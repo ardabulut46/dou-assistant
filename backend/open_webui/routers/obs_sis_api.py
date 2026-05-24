@@ -445,12 +445,28 @@ async def student_me_schedule(
     user=Depends(get_verified_user),
     obs_db: Session = Depends(get_obs_session),
 ):
-    spid, rows = repo.list_enrollments(obs_db, user.id, term_id, ("active", "pending_drop"))
+    spid, rows = repo.list_enrollments(
+        obs_db,
+        user.id,
+        term_id,
+        ("active", "pending_drop", "dropped"),
+        include_completed_semesters=True,
+    )
     if spid is None:
         return {"student_user_id": user.id, "term_id": term_id or "", "schedule": []}
-    tid = term_id or (rows[0]["term_id"] if rows else "")
-    sched = repo.schedule_from_enrollments(rows, tid) if tid else []
-    return {"student_user_id": user.id, "term_id": tid, "schedule": sched}
+    response_tid = term_id or (rows[0]["term_id"] if rows else "")
+    if not rows:
+        sched = []
+    elif term_id:
+        # SQL seçili dönemle filtrelendi; satır bazlı term_id seçim id'si ile farklı olabilir (paralel UUID)
+        sched = repo.schedule_from_enrollments(rows)
+    else:
+        sched = (
+            repo.schedule_from_enrollments(rows, only_term_id=response_tid)
+            if response_tid
+            else []
+        )
+    return {"student_user_id": user.id, "term_id": response_tid, "schedule": sched}
 
 
 @student_router.get("/me/exams")
@@ -829,8 +845,17 @@ async def prep_schedule(
 ):
     _prep_guard(obs_db, user.id)
     _, rows = repo.list_enrollments(obs_db, user.id, term_id, ("active", "pending_drop"))
-    tid = term_id or (rows[0]["term_id"] if rows else "")
-    sched = repo.schedule_from_enrollments(rows, tid) if tid else []
+    response_tid = term_id or (rows[0]["term_id"] if rows else "")
+    if not rows:
+        sched = []
+    elif term_id:
+        sched = repo.schedule_from_enrollments(rows)
+    else:
+        sched = (
+            repo.schedule_from_enrollments(rows, only_term_id=response_tid)
+            if response_tid
+            else []
+        )
     return {"student_user_id": user.id, "schedule": sched}
 
 

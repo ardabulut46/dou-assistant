@@ -433,11 +433,18 @@
 	let pwOk: string | null = null;
 	let pwBusy = false;
 
+	function normTermKey(id: unknown): string {
+		return String(id ?? '')
+			.trim()
+			.toLowerCase()
+			.replace(/[{}]/g, '');
+	}
+
 	$: gradesGrouped = ((): { key: string; label: string; rows: DouGradeEntry[] }[] => {
 		if (!grades?.length) return [];
 		const by = new Map<string, DouGradeEntry[]>();
 		for (const g of grades) {
-			const id = String(g.term_id ?? '');
+			const id = normTermKey(g.term_id);
 			if (!by.has(id)) by.set(id, []);
 			by.get(id)!.push(g);
 		}
@@ -448,35 +455,60 @@
 		const out: { key: string; label: string; rows: DouGradeEntry[] }[] = [];
 		const seen = new Set<string>();
 		for (const t of termOrder) {
-			const bid = String(t.id);
+			const bid = normTermKey(t.id);
 			const rs = by.get(bid);
 			if (!rs?.length) continue;
 			out.push({
-				key: bid,
+				key: String(t.id),
 				label: (t.name ?? '').trim() || (rs[0]?.term_name ?? '').trim() || bid.slice(0, 8),
 				rows: rs
 			});
 			seen.add(bid);
 		}
-		for (const [bid, rows] of by.entries()) {
-			if (seen.has(bid) || !rows.length) continue;
+		for (const [bid, grpRows] of by.entries()) {
+			if (seen.has(bid) || !grpRows.length) continue;
 			out.push({
 				key: bid,
-				label: (rows[0]?.term_name ?? '').trim() || bid.slice(0, 8),
-				rows
+				label: (grpRows[0]?.term_name ?? '').trim() || bid.slice(0, 8),
+				rows: grpRows
 			});
 		}
 		return out;
 	})();
 
-	async function reloadAttendanceForTerm() {
+	/** Notlar sekmesi: varsayılan dönemi, öğrencinin gerçek kayıtlarındaki en güncel `term_id` ile hizala. */
+	function pickGradeDefaultTermFromEnrollments(
+		enr: DouEnrollment[],
+		tl: DouTerm[]
+	): string {
+		const ids = new Set((tl ?? []).map((t) => t.id));
+		const termStart = new Map<string, number>(
+			(tl ?? []).map((t) => [t.id, new Date(t.starts_at || 0).getTime()])
+		);
+		let bestTid = '';
+		let bestTs = Number.NEGATIVE_INFINITY;
+		for (const e of enr ?? []) {
+			const tid = e.term_id;
+			if (!tid || !ids.has(tid)) continue;
+			const ts = termStart.get(tid);
+			const n = typeof ts === 'number' && !Number.isNaN(ts) ? ts : 0;
+			if (n >= bestTs) {
+				bestTs = n;
+				bestTid = tid;
+			}
+		}
+		return bestTid;
+	}
+
+	async function reloadAttendanceForTerm(termIdExplicit?: string) {
 		if (!browser) return;
 		const token = localStorage.token ?? null;
 		if (!token) return;
 		loading = true;
 		loadErr = null;
 		try {
-			const r = await getDouStudentAttendance(token, selectedAttendanceTermId || undefined);
+			const tidRaw = termIdExplicit ?? selectedAttendanceTermId;
+			const r = await getDouStudentAttendance(token, tidRaw || undefined);
 			attendance = r?.attendance ?? [];
 		} catch (e: unknown) {
 			loadErr = e instanceof Error ? e.message : 'Devamsızlık yüklenemedi.';
@@ -485,37 +517,51 @@
 		}
 	}
 
-	async function reloadGradesForTerm() {
+	async function reloadGradesForTerm(termIdExplicit?: string) {
 		if (!browser) return;
 		const token = localStorage.token ?? null;
 		if (!token) return;
 		loading = true;
 		loadErr = null;
 		try {
-			const tid =
-				selectedGradesTermId && terms.some((x) => x.id === selectedGradesTermId)
-					? selectedGradesTermId
-					: undefined;
+			const raw = String(termIdExplicit ?? selectedGradesTermId ?? '').trim();
+			const tid = raw || undefined;
+			const termLabel =
+				tid && terms?.length ? terms.find((t) => t.id === tid)?.name ?? tid : '(tümü / parametresiz)';
+			console.log('[OBS Not Listesi] Dönem değişti — yükleme', {
+				selectedTermId: tid ?? '(yok)',
+				termLabel,
+				apiPath: `/student/me/grades${tid ? `?term_id=${encodeURIComponent(tid)}` : ''}`
+			});
 			const r = await getDouStudentGrades(token, tid);
 			grades = r?.grades ?? [];
+			console.log('[OBS Not Listesi] Yanıt', {
+				gradeCount: grades.length,
+				rowsPreview: grades.slice(0, 8).map((g) => ({
+					code: g.course_code,
+					term_id: g.term_id,
+					vize: g.midterm,
+					final: g.final,
+					harf: g.letter_grade
+				}))
+			});
 		} catch (e: unknown) {
 			loadErr = e instanceof Error ? e.message : 'Notlar yüklenemedi.';
+			console.warn('[OBS Not Listesi] Hata', loadErr);
 		} finally {
 			loading = false;
 		}
 	}
 
-	async function reloadScheduleForTerm() {
+	async function reloadScheduleForTerm(termIdExplicit?: string) {
 		if (!browser) return;
 		const token = localStorage.token ?? null;
 		if (!token) return;
 		loading = true;
 		loadErr = null;
 		try {
-			const tid =
-				selectedScheduleTermId && terms.some((x) => x.id === selectedScheduleTermId)
-					? selectedScheduleTermId
-					: undefined;
+			const raw = String(termIdExplicit ?? selectedScheduleTermId ?? '').trim();
+			const tid = raw || undefined;
 			const r = await getDouStudentSchedule(token, tid);
 			schedule = r?.schedule ?? [];
 		} catch (e: unknown) {
@@ -631,11 +677,27 @@
 				}
 			}
 			if (apiKey === 'grades') {
-				const tr = await getDouTerms(token).catch(() => []);
-				terms = tr ?? [];
+				const [trRes, enrRes] = await Promise.all([
+					getDouTerms(token),
+					getDouStudentEnrollments(
+						token,
+						undefined,
+						'active,pending,pending_drop,draft'
+					).catch(() => null)
+				]);
+				terms = trRes ?? [];
+				const enrollList = enrRes?.enrollments ?? [];
 				if (terms.length) {
-					const def =
-						terms.find((t) => t.is_active)?.id ?? terms[terms.length - 1]?.id ?? '';
+					const calendarActiveId = terms.find((t) => t.is_active)?.id ?? '';
+					const tailId = terms[terms.length - 1]?.id ?? '';
+					const defLegacy = calendarActiveId || tailId;
+					const fromEnr = pickGradeDefaultTermFromEnrollments(enrollList, terms);
+					const activeHasEnrollment =
+						!!calendarActiveId &&
+						enrollList.some((e) => e.term_id === calendarActiveId);
+					const def = activeHasEnrollment
+						? calendarActiveId
+						: fromEnr || defLegacy;
 					if (
 						!selectedGradesTermId ||
 						!terms.some((x) => x.id === selectedGradesTermId)
@@ -2164,8 +2226,12 @@
 							Akademik dönem
 						</span>
 						<select
-							bind:value={selectedScheduleTermId}
-							on:change={() => reloadScheduleForTerm()}
+							value={selectedScheduleTermId}
+							on:change={(e) => {
+								const v = e.currentTarget.value;
+								selectedScheduleTermId = v;
+								void reloadScheduleForTerm(v);
+							}}
 							disabled={!terms.length}
 							class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm font-medium outline-none dark:border-white/10 dark:bg-white/5 dark:text-slate-100 disabled:opacity-50"
 						>
@@ -2230,8 +2296,12 @@
 							Akademik dönem
 						</span>
 						<select
-							bind:value={selectedGradesTermId}
-							on:change={() => reloadGradesForTerm()}
+							value={selectedGradesTermId}
+							on:change={(e) => {
+								const v = e.currentTarget.value;
+								selectedGradesTermId = v;
+								void reloadGradesForTerm(v);
+							}}
 							disabled={!terms.length}
 							class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm font-medium outline-none dark:border-white/10 dark:bg-white/5 dark:text-slate-100 disabled:opacity-50"
 						>
@@ -2896,8 +2966,12 @@
 							Akademik dönem
 						</span>
 						<select
-							bind:value={selectedAttendanceTermId}
-							on:change={() => reloadAttendanceForTerm()}
+							value={selectedAttendanceTermId}
+							on:change={(e) => {
+								const v = e.currentTarget.value;
+								selectedAttendanceTermId = v;
+								void reloadAttendanceForTerm(v);
+							}}
 							disabled={!terms.length}
 							class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm font-medium outline-none dark:border-white/10 dark:bg-white/5 dark:text-slate-100 disabled:opacity-50"
 						>
