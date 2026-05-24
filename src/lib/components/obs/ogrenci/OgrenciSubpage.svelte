@@ -284,8 +284,8 @@
 	$: activeTerm = terms.find((t) => t.is_active) ?? terms[terms.length - 1];
 	$: isWindowOpen = (() => {
 		if (!activeTerm) return true; // Henüz yüklenmediyse gösterme
-		if (apiKey === 'ders-kayit') return activeTerm.registration_open;
-		if (apiKey === 'ders-ekle') return activeTerm.add_drop_open;
+		if (apiKey === 'ders-kayit') return activeTerm.registration_open !== false;
+		if (apiKey === 'ders-ekle') return activeTerm.add_drop_open === true;
 		return true;
 	})();
 

@@ -39,6 +39,10 @@
 		loading = false;
 	});
 
+	/** Yönetim ile uyumlu: `registration_open` yalnızca false ise kapalı (null = açık kabul). */
+	$: regKayitUyariAcik = activeTerm != null && activeTerm.registration_open !== false;
+	$: ekleBirakUyariAcik = activeTerm != null && activeTerm.add_drop_open === true;
+
 	const quickLinks = [
 		{
 			href: '/obs/ogrenci/alinan-dersler',
@@ -110,6 +114,64 @@
 				{/if}
 			</span>
 		</div>
+	{/if}
+
+	<!-- Ders kayıt / ekle-bırak bildirim şeridi (admin pencerelerle aynı mantık) -->
+	{#if !loading && activeTerm}
+		{#if regKayitUyariAcik}
+			<div
+				class="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-3 text-sm shadow-sm dark:border-emerald-900/35 dark:bg-emerald-950/25"
+			>
+				<span class="text-lg" aria-hidden="true">📋</span>
+				<div class="min-w-0 flex-1 text-slate-800 dark:text-emerald-50">
+					<strong class="font-semibold">Ders Kayıt penceresi açık.</strong>
+					<span class="text-slate-600 dark:text-emerald-100/90">
+						{activeTerm.name} — son gün:
+						<strong>{activeTerm.registration_end ?? '—'}</strong>
+					</span>
+				</div>
+				<a
+					href="/obs/ogrenci/ders-kayit"
+					class="shrink-0 rounded-lg bg-emerald-700 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-600"
+					>Ders kayıta git</a
+				>
+			</div>
+		{/if}
+		{#if ekleBirakUyariAcik}
+			<div
+				class="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-sky-200 bg-sky-50 px-5 py-3 text-sm shadow-sm dark:border-sky-900/40 dark:bg-sky-950/30"
+			>
+				<span class="text-lg" aria-hidden="true">↔️</span>
+				<div class="min-w-0 flex-1 text-slate-800 dark:text-sky-50">
+					<strong class="font-semibold">Ders ekle–bırak dönemi açık.</strong>
+					<span class="text-slate-600 dark:text-sky-100/90">
+						{activeTerm.name} — son gün:
+						<strong>{activeTerm.add_drop_end ?? '—'}</strong>
+					</span>
+				</div>
+				<a
+					href="/obs/ogrenci/ders-ekle-birak"
+					class="shrink-0 rounded-lg bg-sky-600 px-4 py-2 text-xs font-bold text-white hover:bg-sky-500"
+					>Ekle / bırak</a
+				>
+			</div>
+		{/if}
+		{#if !regKayitUyariAcik && !ekleBirakUyariAcik}
+			<div
+				class="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-amber-200/90 bg-amber-50/90 px-5 py-3 text-sm dark:border-amber-900/35 dark:bg-amber-950/20"
+			>
+				<span class="text-lg" aria-hidden="true">🗓️</span>
+				<div class="min-w-0 flex-1 text-slate-700 dark:text-amber-50/95">
+					<strong class="font-semibold text-slate-900 dark:text-amber-50"
+						>Ders kayıt ve ders ekle–bırak pencereleri kapalı.</strong
+					>
+					<span class="mt-0.5 block text-xs text-slate-600 dark:text-amber-100/80">
+						{activeTerm.name} için yönetim tarafından süreç açılmadı veya süre dışındasınız. Açıldığında burada
+						duyuru görünür; gelen kutunuzdan da bilgilendirilirsiniz.
+					</span>
+				</div>
+			</div>
+		{/if}
 	{/if}
 
 	<!-- Özet kartlar -->

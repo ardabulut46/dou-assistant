@@ -1252,6 +1252,144 @@ def _message_row(r: Any) -> dict[str, Any]:
     }
 
 
+def _registration_gate_effective_open(val: Any) -> bool:
+    """Admin listesi ile uyum: `registration_open` yalnızca False ise kapalı (null dahil ≠ False → açık)."""
+    return val is not False
+
+
+def _add_drop_gate_effective_open(val: Any) -> bool:
+    """Ekle–bırak: yönetimde yalnızca True iken «açık»."""
+    return val is True
+
+
+def _snapshot_term_registration_flags(
+    db: Session, term_id: str
+) -> Optional[dict[str, Any]]:
+    row = (
+        db.execute(
+            text("""
+                SELECT id, name, registration_open, add_drop_open,
+                       registration_start, registration_end, add_drop_start, add_drop_end
+                FROM obs_terms WHERE id = :tid LIMIT 1
+                """),
+            {"tid": term_id},
+        )
+        .mappings()
+        .first()
+    )
+    return dict(row) if row else None
+
+
+def _broadcast_messages_to_all_students(
+    db: Session, sender_user_id: str, subject: str, body: str
+) -> int:
+    """obs_student_profiles.user_id için gelen kutusu mesajı; hatalı satırlar atlanır."""
+    rows = (
+        db.execute(
+            text("""
+                SELECT DISTINCT user_id FROM obs_student_profiles
+                WHERE user_id IS NOT NULL AND LENGTH(TRIM(user_id)) > 0
+                """)
+        )
+        .fetchall()
+    )
+    n_ok = 0
+    for (uid,) in rows:
+        u = _str_id(uid)
+        if not u:
+            continue
+        try:
+            insert_message(db, sender_user_id, u, subject, body)
+            n_ok += 1
+        except Exception:
+            log.exception("[OBS] Toplu OBS mesajı gönderilemedi (alıcı=%s)", u[:12])
+    log.info("[OBS] Dönem penceresi duyurusu gönderildi: %s öğrenci", n_ok)
+    return n_ok
+
+
+def _maybe_notify_registration_window_changes(
+    db: Session,
+    *,
+    prev: Optional[dict[str, Any]],
+    curr: Optional[dict[str, Any]],
+    acting_user_id: Optional[str],
+) -> None:
+    if not acting_user_id or not prev or not curr:
+        return
+    tn = str(curr.get("name") or "").strip() or str(curr.get("id") or "")
+
+    pr, cr = prev.get("registration_open"), curr.get("registration_open")
+    p_reg = _registration_gate_effective_open(pr)
+    c_reg = _registration_gate_effective_open(cr)
+
+    pd, cd = prev.get("add_drop_open"), curr.get("add_drop_open")
+    p_ad = _add_drop_gate_effective_open(pd)
+    c_ad = _add_drop_gate_effective_open(cd)
+
+    def rng(label: str, start: Any, end: Any) -> str:
+        sa = _fmt_date(start) or "—"
+        eb = _fmt_date(end) or "—"
+        return f"Takvim ({label}): {sa} → {eb}\n"
+
+    msgs: list[tuple[str, str]] = []
+    if p_reg != c_reg:
+        if c_reg:
+            msgs.append(
+                (
+                    "[OBS] Ders kayıt penceresi açıldı",
+                    f"{tn}\n\nDers Kayıt penceresi aktif oldu. OBS üzerinden ders seçebilirsiniz.\n"
+                    "Sayfa: /obs/ogrenci/ders-kayit\n\n"
+                    + rng(
+                        "kayıt",
+                        curr.get("registration_start"),
+                        curr.get("registration_end"),
+                    ),
+                )
+            )
+        else:
+            msgs.append(
+                (
+                    "[OBS] Ders kayıt penceresi kapatıldı",
+                    f"{tn}\n\nDers Kayıt penceresi kapatıldı. Güncellenmiş bir liste "
+                    "göndermediyseniz veya süre içinde işlem yapılmadıysa sistem yönetimiyle görüşün.\n\n"
+                    + rng(
+                        "kayıt",
+                        curr.get("registration_start"),
+                        curr.get("registration_end"),
+                    ),
+                )
+            )
+
+    if p_ad != c_ad:
+        if c_ad:
+            msgs.append(
+                (
+                    "[OBS] Ders ekle-bırak penceresi açıldı",
+                    f"{tn}\n\nDers ekle / bırak dönemi aktif oldu.\nSayfa: /obs/ogrenci/ders-ekle-birak\n\n"
+                    + rng(
+                        "ekle-bırak",
+                        curr.get("add_drop_start"),
+                        curr.get("add_drop_end"),
+                    ),
+                )
+            )
+        else:
+            msgs.append(
+                (
+                    "[OBS] Ders ekle-bırak penceresi kapatıldı",
+                    f"{tn}\n\nDers ekle / bırak penceresi kapatıldı.\n\n"
+                    + rng(
+                        "ekle-bırak",
+                        curr.get("add_drop_start"),
+                        curr.get("add_drop_end"),
+                    ),
+                )
+            )
+
+    for subj, bod in msgs:
+        _broadcast_messages_to_all_students(db, acting_user_id, subj, bod)
+
+
 def insert_message(
     db: Session,
     sender_user_id: str,
@@ -4169,11 +4307,17 @@ def admin_update_term_registration_windows(
     add_drop_open: Optional[bool],
     add_drop_start: Optional[str],
     add_drop_end: Optional[str],
+    *,
+    acting_user_id: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     def dval(s: Optional[str]) -> Any:
         if s is None or str(s).strip() == "":
             return None
         return str(s).strip()
+
+    prev = _snapshot_term_registration_flags(db, term_id)
+    if prev is None:
+        return None
 
     db.execute(
         text("""
@@ -4197,6 +4341,17 @@ def admin_update_term_registration_windows(
         },
     )
     db.commit()
+    curr = _snapshot_term_registration_flags(db, term_id)
+    if curr is not None:
+        try:
+            _maybe_notify_registration_window_changes(
+                db, prev=prev, curr=curr, acting_user_id=acting_user_id
+            )
+        except Exception:
+            log.exception(
+                "[OBS] Kayıt/ekle-bırak penceresi bildirimi atlandı (term_id=%s)", term_id
+            )
+
     rows = list_terms(db)
     for t in rows:
         if t.get("id") == term_id:

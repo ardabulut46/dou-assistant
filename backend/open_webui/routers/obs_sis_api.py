@@ -1856,7 +1856,7 @@ async def admin_patch_term_registration_windows(
     term_id: str,
     body: TermRegistrationWindowsBody,
     obs_db: Session = Depends(get_obs_session),
-    _u=Depends(get_obs_admin_user),
+    user=Depends(get_obs_admin_user),
 ):
     row = repo.admin_update_term_registration_windows(
         obs_db,
@@ -1867,6 +1867,7 @@ async def admin_patch_term_registration_windows(
         body.add_drop_open,
         body.add_drop_start,
         body.add_drop_end,
+        acting_user_id=str(user.id),
     )
     if not row:
         raise HTTPException(status_code=404, detail="Dönem bulunamadı")
