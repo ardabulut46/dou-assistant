@@ -103,6 +103,8 @@ export type DouAdvisor = {
 	department_name?: string;
 	office?: string;
 	phone?: string;
+	/** Danışmanlık / ofis görüşme saatleri (obs_academic_profiles.consulting_hours) */
+	consulting_hours?: string;
 };
 
 export type DouAdvisorResponse = {
@@ -585,6 +587,31 @@ export const getDouAcademicAdvisees = (token: string | null) =>
 	authFetch<{ academic_user_id: string; advisees: unknown[]; _mock?: boolean }>(
 		'/academic/me/advisees',
 		token
+	);
+
+export type DouAcademicConsultingHoursResponse = {
+	academic_user_id: string;
+	consulting_hours: string;
+	profile_exists?: boolean;
+	_mock?: boolean;
+};
+
+/** Danışmanlık sayfasında gösterilen / kaydedilen metin (GET). */
+export const getDouAcademicConsultingHours = (token: string | null) =>
+	authFetch<DouAcademicConsultingHoursResponse>(
+		'/academic/me/consulting-hours',
+		token
+	);
+
+/** Danışmanlık / görüşme saatleri güncelleme (PUT). Profil satırı yoksa OBS tarafında stub açılabilir. */
+export const putDouAcademicConsultingHours = (
+	token: string | null,
+	consultingHours: string
+) =>
+	authFetch<DouAcademicConsultingHoursResponse>(
+		'/academic/me/consulting-hours',
+		token,
+		{ method: 'PUT', body: JSON.stringify({ consulting_hours: consultingHours }) }
 	);
 
 export const getDouAcademicApprovalRequests = (token: string | null, statusFilter?: string) => {
@@ -1614,6 +1641,7 @@ export type DouAcademicProfileCreateInput = {
 	title?: string;
 	office?: string;
 	phone?: string;
+	consulting_hours?: string;
 };
 
 export type DouAdminCreateUserBody = {
@@ -1771,6 +1799,7 @@ export const updateDouAdminAcademicProfile = (
 		department_id: string | null;
 		office: string;
 		phone: string;
+		consulting_hours: string;
 	}>
 ) =>
 	authFetch<Record<string, unknown>>(

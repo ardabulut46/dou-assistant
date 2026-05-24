@@ -1196,6 +1196,39 @@
 							</div>{/if}
 					</div>
 				</div>
+
+				<div
+					class="mt-5 flex gap-4 rounded-xl border border-indigo-100 bg-gradient-to-br from-indigo-50/90 to-white p-4 dark:border-indigo-900/35 dark:from-indigo-950/25 dark:to-white/5"
+				>
+					<div
+						class="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-indigo-100 text-indigo-700 shadow-inner dark:bg-indigo-900/45 dark:text-indigo-100"
+						aria-hidden="true"
+					>
+						<svg class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="1.75"
+								d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+							/>
+						</svg>
+					</div>
+					<div class="min-w-0 flex-1">
+						<div class="text-xs font-bold uppercase tracking-wide text-indigo-800/70 dark:text-indigo-200/80">
+							Danışmanlık / ofis görüşme saatleri
+						</div>
+						<div class="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-slate-800 dark:text-slate-100">
+							{#if advisor.advisor.consulting_hours?.trim()}
+								{advisor.advisor.consulting_hours}
+							{:else}
+								<span class="text-slate-400 dark:text-slate-500"
+									>Danışmanınız henüz bu bilgiyi paylaşmadı.</span
+								>
+							{/if}
+						</div>
+					</div>
+				</div>
+
 				<div class="mt-5 grid grid-cols-2 gap-3">
 					{#each [['E-posta', advisor.advisor.email, true], ['Oda', advisor.advisor.office ?? '—', false], ['Telefon', advisor.advisor.phone ?? '—', false], ['Bölüm', advisor.advisor.department_name ?? '—', false]] as [lbl, val, isEmail]}
 						<div

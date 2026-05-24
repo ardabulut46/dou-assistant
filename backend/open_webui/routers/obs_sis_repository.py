@@ -797,9 +797,10 @@ def ensure_academic_profile_for_user(db: Session, webui_user_id: str) -> str:
         text(
             """
             INSERT INTO obs_academic_profiles (
-                id, user_id, staff_number, title, department_id, office, phone, created_at
+                id, user_id, staff_number, title, department_id, office, phone,
+                consulting_hours, created_at
             ) VALUES (
-                :id, :uid, '', '', :did, '', '', CURRENT_TIMESTAMP
+                :id, :uid, '', '', :did, '', '', '', CURRENT_TIMESTAMP
             )
             """
         ),
@@ -912,7 +913,8 @@ def get_advisor_api(db: Session, webui_user_id: str) -> dict[str, Any]:
             text(f"""
         SELECT sa.valid_from, sa.valid_to, ap.user_id AS academic_user_id,
                u.name AS advisor_name, u.email AS advisor_email, ap.title,
-               ap.department_id, d.name AS department_name, ap.office, ap.phone
+               ap.department_id, d.name AS department_name, ap.office, ap.phone,
+               ap.consulting_hours
         FROM obs_student_advisors sa
         JOIN obs_academic_profiles ap ON sa.advisor_id = ap.id
         LEFT JOIN {USER_TBL} u ON u.id = ap.user_id
@@ -943,6 +945,7 @@ def get_advisor_api(db: Session, webui_user_id: str) -> dict[str, Any]:
         "department_name": row.get("department_name") or "",
         "office": row.get("office") or "",
         "phone": row.get("phone") or "",
+        "consulting_hours": row.get("consulting_hours") or "",
     }
     return {
         "student_user_id": webui_user_id,
@@ -5697,7 +5700,14 @@ def admin_delete_calendar_event(db: Session, event_id: str) -> tuple[bool, str]:
 def admin_update_academic_profile_by_user_id(
     db: Session, user_id: str, updates: dict[str, Any]
 ) -> Optional[dict[str, Any]]:
-    allowed = {"staff_number", "title", "department_id", "office", "phone"}
+    allowed = {
+        "staff_number",
+        "title",
+        "department_id",
+        "office",
+        "phone",
+        "consulting_hours",
+    }
     parts: list[str] = []
     params: dict[str, Any] = {"uid": user_id}
     for k, v in updates.items():
@@ -5721,7 +5731,7 @@ def admin_update_academic_profile_by_user_id(
             text(
                 """
                 SELECT ap.id, ap.user_id, ap.staff_number, ap.title, ap.department_id,
-                       ap.office, ap.phone, ap.created_at
+                       ap.office, ap.phone, ap.consulting_hours, ap.created_at
                 FROM obs_academic_profiles ap WHERE ap.user_id = :uid
                 """
             ),
@@ -5740,6 +5750,7 @@ def admin_update_academic_profile_by_user_id(
         "department_id": _str_id(row.get("department_id")),
         "office": row.get("office") or "",
         "phone": row.get("phone") or "",
+        "consulting_hours": row.get("consulting_hours") or "",
         "created_at": (
             row.get("created_at").isoformat() if row.get("created_at") else None
         ),
@@ -6035,9 +6046,11 @@ def admin_insert_academic_profile(
         text(
             """
             INSERT INTO obs_academic_profiles (
-                id, user_id, staff_number, title, department_id, office, phone, created_at
+                id, user_id, staff_number, title, department_id, office, phone,
+                consulting_hours, created_at
             ) VALUES (
-                :id, :uid, :staff, :title, :did, :office, :phone, CURRENT_TIMESTAMP
+                :id, :uid, :staff, :title, :did, :office, :phone, :consulting_hours,
+                CURRENT_TIMESTAMP
             )
             """
         ),
@@ -6049,10 +6062,72 @@ def admin_insert_academic_profile(
             "did": did,
             "office": _obs_opt_str(data.get("office")) or "",
             "phone": _obs_opt_str(data.get("phone")) or "",
+            "consulting_hours": _obs_opt_str(data.get("consulting_hours")) or "",
         },
     )
     db.commit()
     return aid
+
+
+def get_academic_own_consulting_hours(
+    db: Session, webui_user_id: str
+) -> dict[str, Any]:
+    """Akademisyen paneli: danışmanlık saatleri için mevcut metin."""
+    row = (
+        db.execute(
+            text(
+                "SELECT consulting_hours FROM obs_academic_profiles "
+                "WHERE user_id = :uid LIMIT 1"
+            ),
+            {"uid": webui_user_id},
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        return {
+            "academic_user_id": webui_user_id,
+            "consulting_hours": "",
+            "profile_exists": False,
+        }
+    return {
+        "academic_user_id": webui_user_id,
+        "consulting_hours": row.get("consulting_hours") or "",
+        "profile_exists": True,
+    }
+
+
+def update_academic_own_consulting_hours(
+    db: Session, webui_user_id: str, consulting_hours: str
+) -> dict[str, Any]:
+    """Akademisyen kendi danışmanlık saati metnini günceller; profil yoksa stub açar."""
+    if not resolve_academic_profile_id(db, webui_user_id):
+        ensure_academic_profile_for_user(db, webui_user_id)
+    ch = consulting_hours if consulting_hours is not None else ""
+    db.execute(
+        text(
+            "UPDATE obs_academic_profiles SET consulting_hours = :ch "
+            "WHERE user_id = :uid"
+        ),
+        {"ch": ch or "", "uid": webui_user_id},
+    )
+    db.commit()
+    row = (
+        db.execute(
+            text(
+                "SELECT consulting_hours FROM obs_academic_profiles "
+                "WHERE user_id = :uid LIMIT 1"
+            ),
+            {"uid": webui_user_id},
+        )
+        .mappings()
+        .first()
+    )
+    return {
+        "academic_user_id": webui_user_id,
+        "consulting_hours": (row.get("consulting_hours") if row else "") or "",
+        "profile_exists": True,
+    }
 
 
 def admin_delete_student_profile_by_user_id(

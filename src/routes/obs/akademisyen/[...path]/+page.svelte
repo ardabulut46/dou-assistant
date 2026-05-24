@@ -28,6 +28,8 @@
 		finalizeDouAdviseeSchedule,
 		rejectDouAdviseeSchedule,
 		getDouTerms,
+		getDouAcademicConsultingHours,
+		putDouAcademicConsultingHours,
 		getDouInbox,
 		getDouSent,
 		sendDouMessageApi,
@@ -115,6 +117,11 @@
 	let adviseeSchedErr: string | null = null;
 	let activeTermId = '';
 	let approvals: DouApprovalRequest[] = [];
+	/** Danışmanlık sayfası: öğrenciye gösterilecek görüşme saati metni */
+	let consultingHoursDraft = '';
+	let consultingHoursSaveBusy = false;
+	let consultingHoursSaveErr: string | null = null;
+	let consultingHoursSaveOk = false;
 	let inboxMsgs: DouMessage[] = [];
 	let sentMsgs: DouMessage[] = [];
 	/** Mesaj yaz — danışmanlık listesi */
@@ -534,7 +541,8 @@
 			if (apiKey === 'advisees') {
 				const r = await Promise.allSettled([
 					getDouAcademicAdvisees(token),
-					getDouTerms(token)
+					getDouTerms(token),
+					getDouAcademicConsultingHours(token)
 				]);
 				if (r[0].status === 'fulfilled') advisees = r[0].value.advisees ?? [];
 				else advisees = [];
@@ -543,6 +551,18 @@
 					activeTermId = tl.find((t) => t.is_active)?.id ?? tl[tl.length - 1]?.id ?? '';
 				} else {
 					activeTermId = '';
+				}
+				consultingHoursSaveErr = null;
+				consultingHoursSaveOk = false;
+				if (r[2].status === 'fulfilled') {
+					consultingHoursDraft = r[2].value.consulting_hours ?? '';
+				} else {
+					const reason = r[2].reason;
+					consultingHoursDraft = '';
+					consultingHoursSaveErr =
+						reason instanceof Error
+							? reason.message
+							: 'Danışmanlık saatleri yüklenemedi (Şema güncellenmemiş olabilir: consulting_hours kolonu).';
 				}
 				adviseeDetailUserId = null;
 				adviseeEnrollments = [];
@@ -1155,6 +1175,27 @@
 			adviseeEnrollments = [];
 		} finally {
 			adviseeSchedBusy = false;
+		}
+	}
+
+	async function saveConsultingHours() {
+		const token = localStorage.token ?? null;
+		if (!token) return;
+		consultingHoursSaveBusy = true;
+		consultingHoursSaveErr = null;
+		consultingHoursSaveOk = false;
+		try {
+			const r = await putDouAcademicConsultingHours(token, consultingHoursDraft);
+			consultingHoursDraft = r.consulting_hours ?? consultingHoursDraft;
+			consultingHoursSaveOk = true;
+			setTimeout(() => {
+				consultingHoursSaveOk = false;
+			}, 3500);
+		} catch (e: unknown) {
+			consultingHoursSaveErr =
+				e instanceof Error ? e.message : 'Kaydedilemedi (kolon eksik mi kontrol edin).';
+		} finally {
+			consultingHoursSaveBusy = false;
 		}
 	}
 
@@ -2014,6 +2055,62 @@
 			<!-- DANIŞMANLIK ÖĞRENCİLERİM                                    -->
 			<!-- ============================================================ -->
 		{:else if apiKey === 'advisees'}
+			<div
+				class="mb-4 rounded-xl border border-indigo-100 bg-gradient-to-br from-indigo-50/90 to-white p-5 shadow-sm dark:border-indigo-900/35 dark:from-indigo-950/25 dark:to-white/5"
+			>
+				<div class="flex flex-wrap items-start justify-between gap-3">
+					<div class="flex min-w-0 flex-1 items-start gap-3">
+						<div
+							class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-indigo-100 text-indigo-700 shadow-inner dark:bg-indigo-900/45 dark:text-indigo-100"
+							aria-hidden="true"
+						>
+							<svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+								/>
+							</svg>
+						</div>
+						<div class="min-w-0 flex-1">
+							<h3
+								class="text-xs font-bold uppercase tracking-wide text-indigo-800/70 dark:text-indigo-200/80 sm:text-sm"
+							>
+								Danışmanlık / ofis görüşme saatleri
+							</h3>
+							<p class="mt-1 text-xs text-slate-600 dark:text-slate-400">
+								Aşağıdaki metni danışmanı olduğunuz öğrenciler <strong>Danışman Bilgileri</strong> sayfasında görür;
+								yalnızca siz güncellersiniz (PUT).
+							</p>
+						</div>
+					</div>
+					<button
+						type="button"
+						disabled={consultingHoursSaveBusy}
+						on:click={saveConsultingHours}
+						class="shrink-0 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white hover:bg-indigo-500 disabled:opacity-50"
+					>
+						{consultingHoursSaveBusy ? 'Kaydediliyor…' : 'Kaydet'}
+					</button>
+				</div>
+				<label class="mt-4 block">
+					<span class="sr-only">Görüşme saatleri</span>
+					<textarea
+						bind:value={consultingHoursDraft}
+						rows="4"
+						placeholder="Örn. Salı 14:00–16:00 (Ofis: Z01) · Perşembe yüz yüze randevu için e-posta"
+						class="w-full resize-y rounded-lg border border-indigo-100 bg-white px-3 py-2 text-sm outline-none placeholder:text-slate-400 dark:border-white/15 dark:bg-white/5 dark:text-slate-100"
+					/>
+				</label>
+				{#if consultingHoursSaveErr}
+					<p class="mt-2 text-xs text-red-600 dark:text-red-400">{consultingHoursSaveErr}</p>
+				{/if}
+				{#if consultingHoursSaveOk}
+					<p class="mt-2 text-xs font-medium text-emerald-700 dark:text-emerald-400">Kaydedildi.</p>
+				{/if}
+			</div>
+
 			<div
 				class="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
 			>

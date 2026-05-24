@@ -1366,6 +1366,33 @@ async def academic_me_advisees(
     }
 
 
+class AcademicConsultingHoursBody(BaseModel):
+    """Danışmanlık / görüşme saatleri — serbest metin (örn. Salı 14–16)."""
+
+    consulting_hours: Optional[str] = None
+
+
+@academic_user_router.get("/me/consulting-hours")
+async def academic_me_consulting_hours_get(
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    return repo.get_academic_own_consulting_hours(obs_db, str(user.id))
+
+
+@academic_user_router.put("/me/consulting-hours")
+async def academic_me_consulting_hours_put(
+    body: AcademicConsultingHoursBody,
+    user=Depends(get_verified_user),
+    obs_db: Session = Depends(get_obs_session),
+):
+    return repo.update_academic_own_consulting_hours(
+        obs_db,
+        str(user.id),
+        (body.consulting_hours if body.consulting_hours is not None else "") or "",
+    )
+
+
 @academic_user_router.get("/me/approval-requests")
 async def academic_me_approval_requests(
     status_filter: Optional[str] = Query(None, alias="status"),
@@ -2001,6 +2028,7 @@ class AcademicProfileUpdateBody(BaseModel):
     department_id: Optional[str] = None
     office: Optional[str] = None
     phone: Optional[str] = None
+    consulting_hours: Optional[str] = None
 
 
 @admin_router.put("/academics/{user_id}")
@@ -2695,6 +2723,7 @@ class AcademicProfileCreateBody(BaseModel):
     title: Optional[str] = None
     office: Optional[str] = None
     phone: Optional[str] = None
+    consulting_hours: Optional[str] = None
 
 
 class UserCreate(BaseModel):
