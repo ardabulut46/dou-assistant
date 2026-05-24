@@ -567,11 +567,22 @@ async def student_me_announcements(
 @student_router.get("/available-courses")
 async def student_available_courses(
     term_id: Optional[str] = Query(None),
+    for_add_drop: bool = Query(
+        False,
+        description=(
+            "True ise ekle-bırak: Ders kayıt ile aynı süzüm; ek olarak danışman eksik zorunlu listesindeki "
+            "``course_id`` veya **aynı ders kodu** (``course_code``) için müfredat kartı etiketi sıkı "
+            "filtresi gevşetilir — aynı koda bağlı çift ``obs_courses`` satırı varsa bile şube eşleşsin."
+        ),
+    ),
     user=Depends(get_verified_user),
     obs_db: Session = Depends(get_obs_session),
 ):
-    tid, sections = repo.available_sections(obs_db, user.id, term_id)
-    return {"term_id": tid, "sections": sections}
+    mode = "add_drop" if for_add_drop else "registration"
+    tid, sections, meta = repo.available_sections(
+        obs_db, user.id, term_id, listing_mode=mode
+    )
+    return {"term_id": tid, "sections": sections, **meta}
 
 
 class EnrollmentRequest(BaseModel):

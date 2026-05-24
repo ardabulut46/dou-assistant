@@ -135,11 +135,13 @@ export type DouEnrollment = {
 	language?: string;
 	class_year?: number;
 	type?: string;
+	/** API: obs_courses.is_mandatory + type (zorunlu/required). */
+	is_mandatory_course?: boolean;
 	status: string;
 	/** Taslak satırda: registration | add_drop | advisor_added … */
 	enrollment_reason?: string;
-	registration_priority_tier?: number;
-	registration_priority_label?: string;
+	/** OBS: Müfredatta öğrencinin program yarıyılı kartıyla eşleşiyor mu (ders ekle-bırak AKTS özeti ile uyumlu). */
+	add_drop_curriculum_slot_match?: boolean;
 };
 
 export type DouEnrollmentsResponse = {
@@ -470,6 +472,16 @@ export const getDouStudentProfile = (token: string | null) =>
 export const getDouStudentAdvisor = (token: string | null) =>
 	authFetch<DouAdvisorResponse>('/student/me/advisor', token);
 
+/** Müfredatta eksik görünen zorunlu ders satırı (/registration-limits). */
+export type CurriculumMandatoryBrief = {
+	course_id: string;
+	course_code: string;
+	course_name: string;
+	akts: number;
+	/** obs_courses.curriculum_semester; müfredat kartı sırası (yüksek lisans dahil doğrudan sıra kullanılacaksa null olabilir). */
+	curriculum_semester?: number | null;
+};
+
 export type DouStudentRegistrationLimits = {
 	student_user_id: string;
 	term_id: string;
@@ -494,6 +506,10 @@ export type DouStudentRegistrationLimits = {
 	add_drop_akts_min?: number;
 	/** Ders ekle-bırak: GNO ≥ 2,50 ise 35, aksi 30 (hazırlıkta farklı olabilir). */
 	add_drop_akts_max?: number;
+	/** Program yarıyılı (obs_student_profiles.program_semester_number) için henüz döneme eklenmemiş zorunlular */
+	curriculum_mandatory_remaining?: CurriculumMandatoryBrief[];
+	/** Seçmeli eklemeden önce listedeki zorunlular tamamlanmalı (zorunlu kapısı açık) */
+	curriculum_elective_locked?: boolean;
 };
 
 export const getDouStudentRegistrationLimits = (token: string | null, termId?: string) => {
@@ -1296,14 +1312,58 @@ export type AvailableCourse = {
 	enrolled: number;
 	registration_priority_tier?: number;
 	registration_priority_label?: string;
+	/** obs_courses.type (zorunlu, teknik_secmeli vb.) */
+	type?: string;
+	/** Müfredatta zorunlu mu (type / is_mandatory birleşik). */
+	is_mandatory_course?: boolean;
+	/** obs_courses.curriculum_semester (müfredat yarıyılı indeksi). */
+	curriculum_semester?: number | null;
+	/** Ekle-bırak: seçilen süre için obs_course_sections satırı yok; seçim yapılamaz. */
+	offer_placeholder?: boolean;
 };
 
-export const getDouAvailableCourses = (token: string | null, termId?: string) => {
-	const q = termId ? `?term_id=${encodeURIComponent(termId)}` : '';
-	return authFetch<{ term_id: string | null; sections: AvailableCourse[]; _mock?: boolean }>(
-		`/student/available-courses${q}`,
-		token
-	);
+export const getDouAvailableCourses = (
+	token: string | null,
+	termId?: string,
+	opts?: { forAddDrop?: boolean }
+) => {
+	const params = new URLSearchParams();
+	if (termId) params.set('term_id', termId);
+	if (opts?.forAddDrop) params.set('for_add_drop', 'true');
+	const q = params.toString() ? `?${params}` : '';
+	return authFetch<DouAvailableCoursesResponse>(`/student/available-courses${q}`, token);
+};
+
+export type CoursesPendingSectionsBrief = {
+	course_id: string;
+	course_code?: string;
+	course_name?: string;
+	akts?: number;
+	curriculum_semester?: number | null;
+};
+
+export type DouAvailableCoursesResponse = {
+	term_id: string | null;
+	sections: AvailableCourse[];
+	program_semester_number?: number;
+	department_id?: string;
+	/** Bölüm + program yarıyılı filtresi uygulanıyor mu */
+	curriculum_filter_active?: boolean;
+	/** Süre öbeğinde toplam `obs_course_sections` satırı (öğrenci filtresi yok). */
+	sections_in_terms_total?: number;
+	/** Şube seçme sorgusundan sonra kalan uygun şube satırı (aynı süre grubunda bloklar dahil). */
+	sections_query_rows_student?: number;
+	/** Ekle-bırak: müfredatta eksik zorunlu ama seçilen sürede şube çıkmayan kodlar. */
+	courses_pending_sections?: CoursesPendingSectionsBrief[];
+	/** Ekle-bırak: liste bomboşken kısa açıklama (müfredat vs şube kaynağı ayrımı). */
+	add_drop_sections_empty_hint?: string;
+	/** Ders kayıt: aynı mantık için ipucu / teşhis (sepet ekle-bıraktan ayrı metin). */
+	registration_sections_empty_hint?: string;
+	/** Büyük LISTE sorgusu sonrası gerçek şube satırı. */
+	real_section_rows_emitted?: number;
+	/** Yer tutucu (şubesiz gösterilen) satır sayısı. */
+	offer_placeholder_rows?: number;
+	_mock?: boolean;
 };
 
 export const createDouEnrollmentRequest = (
