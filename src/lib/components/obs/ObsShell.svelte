@@ -438,7 +438,7 @@
 					id: 'notif-attendance-low',
 					type: 'attendance',
 					text: `${lowCourses.length} derste katılım oranı %70'in altında (${preview}${more}). Devamsızlık Durumu ekranından kontrol edin.`,
-					time: 'Uyarı',
+					time: 'Kritik',
 					sortMs: Date.now() + 86_200_000,
 					read: attRead
 				});

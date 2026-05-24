@@ -67,6 +67,41 @@
 	let transcript: unknown[] | null = null;
 	let transcriptTotalAkts: number | null = null;
 	let attendance: DouAttendanceRow[] = [];
+	/** Devamsızlık sekmesi: API `term_id` filtresi */
+	let selectedAttendanceTermId = '';
+	/** Not listesi: seçilen akademik dönem */
+	let selectedGradesTermId = '';
+
+	function floorPct30Quota(weeks: number): number {
+		return weeks > 0 ? Math.floor(weeks * 0.3 + 1e-9) : 0;
+	}
+
+	function attendancePctBarClasses(attendancePct: number, kotaFazlası: number): { pct: string; bar: string } {
+		if (attendancePct < 70 || kotaFazlası >= 2) {
+			return {
+				pct: 'text-red-600 dark:text-red-400',
+				bar: 'bg-red-600'
+			};
+		}
+		if (kotaFazlası >= 1) {
+			return {
+				pct: 'text-rose-600 dark:text-rose-400',
+				bar: 'bg-rose-500'
+			};
+		}
+		return {
+			pct: 'text-emerald-600 dark:text-emerald-400',
+			bar: 'bg-emerald-500'
+		};
+	}
+
+	function absentCellClass(attendancePct: number, kotaFazlası: number): string {
+		if (attendancePct < 70 || kotaFazlası >= 2) {
+			return 'text-red-600 dark:text-red-400';
+		}
+		if (kotaFazlası >= 1) return 'text-rose-600 dark:text-rose-400';
+		return '';
+	}
 	let exams: DouExam[] = [];
 	let schedule: DouScheduleRow[] = [];
 	let announcements: DouAnnouncement[] = [];
@@ -324,6 +359,78 @@
 	let pwOk: string | null = null;
 	let pwBusy = false;
 
+	$: gradesGrouped = ((): { key: string; label: string; rows: DouGradeEntry[] }[] => {
+		if (!grades?.length) return [];
+		const by = new Map<string, DouGradeEntry[]>();
+		for (const g of grades) {
+			const id = String(g.term_id ?? '');
+			if (!by.has(id)) by.set(id, []);
+			by.get(id)!.push(g);
+		}
+		const termOrder = [...terms].sort(
+			(a, b) =>
+				new Date(b.starts_at || 0).getTime() - new Date(a.starts_at || 0).getTime()
+		);
+		const out: { key: string; label: string; rows: DouGradeEntry[] }[] = [];
+		const seen = new Set<string>();
+		for (const t of termOrder) {
+			const bid = String(t.id);
+			const rs = by.get(bid);
+			if (!rs?.length) continue;
+			out.push({
+				key: bid,
+				label: (t.name ?? '').trim() || (rs[0]?.term_name ?? '').trim() || bid.slice(0, 8),
+				rows: rs
+			});
+			seen.add(bid);
+		}
+		for (const [bid, rows] of by.entries()) {
+			if (seen.has(bid) || !rows.length) continue;
+			out.push({
+				key: bid,
+				label: (rows[0]?.term_name ?? '').trim() || bid.slice(0, 8),
+				rows
+			});
+		}
+		return out;
+	})();
+
+	async function reloadAttendanceForTerm() {
+		if (!browser) return;
+		const token = localStorage.token ?? null;
+		if (!token) return;
+		loading = true;
+		loadErr = null;
+		try {
+			const r = await getDouStudentAttendance(token, selectedAttendanceTermId || undefined);
+			attendance = r?.attendance ?? [];
+		} catch (e: unknown) {
+			loadErr = e instanceof Error ? e.message : 'Devamsızlık yüklenemedi.';
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function reloadGradesForTerm() {
+		if (!browser) return;
+		const token = localStorage.token ?? null;
+		if (!token) return;
+		loading = true;
+		loadErr = null;
+		try {
+			const tid =
+				selectedGradesTermId && terms.some((x) => x.id === selectedGradesTermId)
+					? selectedGradesTermId
+					: undefined;
+			const r = await getDouStudentGrades(token, tid);
+			grades = r?.grades ?? [];
+		} catch (e: unknown) {
+			loadErr = e instanceof Error ? e.message : 'Notlar yüklenemedi.';
+		} finally {
+			loading = false;
+		}
+	}
+
 	// ---------------------------------------------------------------------------
 	// Veri yükleme
 	// ---------------------------------------------------------------------------
@@ -430,8 +537,23 @@
 				}
 			}
 			if (apiKey === 'grades') {
-				const r = await getDouStudentGrades(token).catch(() => null);
-				grades = r?.grades ?? [];
+				const tr = await getDouTerms(token).catch(() => []);
+				terms = tr ?? [];
+				if (terms.length) {
+					const def =
+						terms.find((t) => t.is_active)?.id ?? terms[terms.length - 1]?.id ?? '';
+					if (
+						!selectedGradesTermId ||
+						!terms.some((x) => x.id === selectedGradesTermId)
+					) {
+						selectedGradesTermId = def;
+					}
+				} else {
+					selectedGradesTermId = '';
+				}
+				const tid = selectedGradesTermId ? selectedGradesTermId : undefined;
+				const gr = await getDouStudentGrades(token, tid).catch(() => null);
+				grades = gr?.grades ?? [];
 			}
 			if (apiKey === 'gpa') {
 				const r = await getDouStudentGpaSummary(token).catch(() => null);
@@ -445,7 +567,19 @@
 				transcriptTotalAkts = (r as { total_akts?: number } | null)?.total_akts ?? null;
 			}
 			if (apiKey === 'attendance') {
-				const r = await getDouStudentAttendance(token).catch(() => null);
+				const tr = await getDouTerms(token).catch(() => []);
+				terms = tr;
+				const def = terms.find((t) => t.is_active)?.id ?? terms[terms.length - 1]?.id ?? '';
+				if (
+					!selectedAttendanceTermId ||
+					!terms.some((x) => x.id === selectedAttendanceTermId)
+				) {
+					selectedAttendanceTermId = def;
+				}
+				const r = await getDouStudentAttendance(
+					token,
+					selectedAttendanceTermId || undefined
+				).catch(() => null);
 				attendance = r?.attendance ?? [];
 			}
 			if (apiKey === 'exams') {
@@ -1957,64 +2091,112 @@
 			<!-- NOT LİSTESİ                                                       -->
 			<!-- ================================================================ -->
 		{:else if apiKey === 'grades'}
-			<div
-				class="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
-			>
-				<div class="overflow-x-auto">
-					<table class="w-full text-sm">
-						<thead
-							class="bg-slate-50 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
+			<div class="space-y-4">
+				<div class="flex flex-wrap items-end justify-between gap-3">
+					<label class="block min-w-[200px] flex-1">
+						<span class="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-400">
+							Akademik dönem
+						</span>
+						<select
+							bind:value={selectedGradesTermId}
+							on:change={() => reloadGradesForTerm()}
+							disabled={!terms.length}
+							class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm font-medium outline-none dark:border-white/10 dark:bg-white/5 dark:text-slate-100 disabled:opacity-50"
 						>
-							<tr>
-								<th class="px-4 py-3 text-left">Ders</th>
-								<th class="px-4 py-3 text-center">Vize</th>
-								<th class="px-4 py-3 text-center">Final</th>
-								<th class="px-4 py-3 text-center">Büt</th>
-								<th class="px-4 py-3 text-center">Harf</th>
-								<th class="px-4 py-3 text-center">Durum</th>
-							</tr>
-						</thead>
-						<tbody>
-							{#each grades as g}
-								<tr
-									class="border-t border-black/5 dark:border-white/10 hover:bg-slate-50/50 transition-colors"
-								>
-									<td
-										class="px-4 py-3 font-mono text-xs font-semibold text-slate-600 dark:text-slate-300"
-										>{g.course_code}</td
-									>
-									<td class="px-4 py-3 text-center font-medium">{g.midterm ?? '—'}</td>
-									<td class="px-4 py-3 text-center font-medium">{g.final ?? '—'}</td>
-									<td class="px-4 py-3 text-center font-medium text-amber-600 dark:text-amber-400">{g.makeup ?? '—'}</td>
-									<td class="px-4 py-3 text-center">
-										{#if (g.is_published || g.is_finalized) && (g.letter_grade ?? '').toString().trim()}
-											<span
-												class="rounded-full px-2.5 py-0.5 text-xs font-bold {GRADE_COLOR[
-													String(g.letter_grade).trim()
-												] ?? 'bg-slate-100 text-slate-600'}">{String(g.letter_grade).trim()}</span
-											>
-										{:else}<span class="text-slate-300">—</span>{/if}
-									</td>
-									<td class="px-4 py-3 text-center text-xs">
-										{#if g.is_published}<span class="text-emerald-600 dark:text-emerald-400"
-												>Yayınlandı</span
-											>
-										{:else if g.is_finalized}<span class="text-amber-600 dark:text-amber-400"
-												>Kesinleşti</span
-											>
-										{:else}<span class="text-slate-400">Bekleniyor</span>{/if}
-									</td>
-								</tr>
-							{:else}
-								<tr
-									><td colspan="5" class="px-4 py-8 text-center text-sm text-slate-400"
-										>Not bulunamadı.</td
-									></tr
+							{#each terms as t}
+								<option value={t.id}
+									>{(t.name && String(t.name).trim()) ||
+										[t.academic_year, t.season].filter(Boolean).join(' ') ||
+										t.id}</option
 								>
 							{/each}
-						</tbody>
-					</table>
+						</select>
+					</label>
 				</div>
+
+			{#if gradesGrouped.length}
+				<div class="space-y-8">
+					{#each gradesGrouped as grp}
+						<div>
+							{#if gradesGrouped.length > 1}
+								<div
+									class="mb-3 flex items-center gap-3 border-b border-black/10 pb-2 dark:border-white/10"
+								>
+									<h2 class="text-sm font-black uppercase tracking-wide text-slate-800 dark:text-slate-100">
+										{grp.label}
+									</h2>
+									<span class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500 dark:bg-white/10 dark:text-slate-400">
+										Dönem
+									</span>
+								</div>
+							{/if}
+							<div
+								class="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
+							>
+								<div class="overflow-x-auto">
+									<table class="w-full text-sm">
+										<thead
+											class="bg-slate-50 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
+										>
+											<tr>
+												<th class="px-4 py-3 text-left">Ders</th>
+												<th class="px-4 py-3 text-center">Vize</th>
+												<th class="px-4 py-3 text-center">Final</th>
+												<th class="px-4 py-3 text-center">Büt</th>
+												<th class="px-4 py-3 text-center">Harf</th>
+												<th class="px-4 py-3 text-center">Durum</th>
+											</tr>
+										</thead>
+										<tbody>
+											{#each grp.rows as g}
+												<tr
+													class="border-t border-black/5 hover:bg-slate-50/50 dark:border-white/10 transition-colors"
+												>
+													<td class="px-4 py-3">
+														<div class="font-mono text-xs font-semibold text-slate-600 dark:text-slate-300">
+															{g.course_code}
+														</div>
+														<div class="max-w-[200px] truncate text-xs text-slate-400">{g.course_name}</div>
+													</td>
+													<td class="px-4 py-3 text-center font-medium">{g.midterm ?? '—'}</td>
+													<td class="px-4 py-3 text-center font-medium">{g.final ?? '—'}</td>
+													<td class="px-4 py-3 text-center font-medium text-amber-600 dark:text-amber-400">
+														{g.makeup ?? '—'}
+													</td>
+													<td class="px-4 py-3 text-center">
+														{#if (g.is_published || g.is_finalized) && (g.letter_grade ?? '').toString().trim()}
+															<span
+																class="rounded-full px-2.5 py-0.5 text-xs font-bold {GRADE_COLOR[
+																	String(g.letter_grade).trim()
+																] ?? 'bg-slate-100 text-slate-600'}">{String(g.letter_grade).trim()}</span
+															>
+														{:else}<span class="text-slate-300">—</span>{/if}
+													</td>
+													<td class="px-4 py-3 text-center text-xs">
+														{#if g.is_published}<span class="text-emerald-600 dark:text-emerald-400"
+																>Yayınlandı</span
+															>
+														{:else if g.is_finalized}<span class="text-amber-600 dark:text-amber-400"
+																>Kesinleşti</span
+															>
+														{:else}<span class="text-slate-400">Bekleniyor</span>{/if}
+													</td>
+												</tr>
+											{/each}
+										</tbody>
+									</table>
+								</div>
+							</div>
+						</div>
+					{/each}
+				</div>
+			{:else}
+				<div
+					class="overflow-hidden rounded-xl border border-black/10 bg-white p-12 text-center text-sm text-slate-400 shadow-sm dark:border-white/10 dark:bg-white/5"
+				>
+					Not bulunamadı.
+				</div>
+			{/if}
 			</div>
 
 			<!-- ================================================================ -->
@@ -2492,76 +2674,145 @@
 			<!-- DEVAMSIZLIK                                                       -->
 			<!-- ================================================================ -->
 		{:else if apiKey === 'attendance'}
-			<div
-				class="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
-			>
-				<div class="overflow-x-auto">
-					<table class="w-full text-sm">
-						<thead
-							class="bg-slate-50 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
+			<div class="space-y-4">
+				<div class="flex flex-wrap items-end justify-between gap-3">
+					<label class="block min-w-[200px] flex-1">
+						<span class="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-400">
+							Akademik dönem
+						</span>
+						<select
+							bind:value={selectedAttendanceTermId}
+							on:change={() => reloadAttendanceForTerm()}
+							disabled={!terms.length}
+							class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm font-medium outline-none dark:border-white/10 dark:bg-white/5 dark:text-slate-100 disabled:opacity-50"
 						>
-							<tr>
-								<th class="px-4 py-3 text-left">Ders</th>
-								<th class="px-4 py-3 text-center">Toplam</th>
-								<th class="px-4 py-3 text-center">Devamsız</th>
-								<th class="px-4 py-3 text-center">Devam %</th>
-								<th class="px-4 py-3 text-center">Durum</th>
-							</tr>
-						</thead>
-						<tbody>
-							{#each attendance as a}
-								<tr class="border-t border-black/5 dark:border-white/10">
-									<td class="px-4 py-3">
-										<div class="font-mono text-xs font-semibold">{a.course_code}</div>
-										<div class="text-xs text-slate-400">{a.course_name}</div>
-									</td>
-									<td class="px-4 py-3 text-center">{a.total_weeks}</td>
-									<td
-										class="px-4 py-3 text-center font-semibold {a.absent_count > 3
-											? 'text-red-500'
-											: ''}">{a.absent_count}</td
-									>
-									<td class="px-4 py-3 text-center">
-										<div
-											class="font-bold {a.attendance_pct >= 70
-												? 'text-emerald-600 dark:text-emerald-400'
-												: 'text-red-600 dark:text-red-400'}"
-										>
-											%{a.attendance_pct.toFixed(1)}
-										</div>
-										<div
-											class="mt-1 h-1.5 w-16 mx-auto overflow-hidden rounded-full bg-slate-200 dark:bg-white/10"
-										>
-											<div
-												class="h-full rounded-full transition-all {a.attendance_pct >= 70
-													? 'bg-emerald-500'
-													: 'bg-red-500'}"
-												style="width:{a.attendance_pct}%"
-											></div>
-										</div>
-									</td>
-									<td class="px-4 py-3 text-center">
-										<span
-											class="rounded-full px-2.5 py-0.5 text-xs font-medium
-											{a.status === 'ok'
-												? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
-												: a.status === 'warning'
-													? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
-													: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'}"
-										>
-											{a.status === 'ok' ? 'İyi' : a.status === 'warning' ? 'Uyarı' : 'Kritik'}
-										</span>
-									</td>
-								</tr>
-							{:else}
-								<tr
-									><td colspan="5" class="px-4 py-8 text-center text-sm text-slate-400"
-										>Devamsızlık kaydı yok.</td
-									></tr
+							{#each terms as t}
+								<option value={t.id}
+									>{(t.name && String(t.name).trim()) ||
+										[t.academic_year, t.season].filter(Boolean).join(' ') ||
+										t.id}</option
 								>
 							{/each}
-						</tbody>
-					</table>
+						</select>
+					</label>
+					<details
+						class="group relative shrink-0 rounded-lg border border-black/10 bg-white dark:border-white/10 dark:bg-white/5"
+					>
+						<summary
+							class="cursor-pointer list-none px-3 py-2 text-xs font-bold text-slate-600 outline-none marker:hidden dark:text-slate-300 [&::-webkit-details-marker]:hidden"
+						>
+							<span class="inline-flex items-center gap-1.5">
+								<span
+									class="inline-flex size-5 items-center justify-center rounded-full bg-slate-100 text-[11px] font-bold text-slate-600 dark:bg-white/10 dark:text-slate-200"
+									>i</span
+								>
+								%~30 kota
+							</span>
+						</summary>
+						<div
+							class="absolute right-0 z-30 mt-2 w-[min(100vw-1.25rem,20rem)] space-y-2 rounded-xl border border-black/10 bg-white p-3 text-[11px] leading-snug text-slate-600 shadow-lg dark:border-white/15 dark:bg-slate-900 dark:text-slate-300"
+						>
+							<p>
+								Yaklaşık <strong>%30 devamsızlık kotası:</strong> her ders satırında, o ana kadar
+								işlenen hafta sayısı (Toplam) için tabana yuvarlanmış ⌊Toplam × 0,30⌋ kadar oturuma
+								devamsız kalınabilir.
+							</p>
+							<p class="font-mono tabular-nums text-[11px] text-slate-500 dark:text-slate-400">
+								Örnek: 4 hafta → 1 · 10 hafta → 3 · 14 hafta → 4 eksik serbest kabataslak olarak
+								alanır (kurum düzenlemesi değişebilir).
+							</p>
+							<p>
+								Bu kota <strong>Devamsız</strong> sütunundaki sayı ile karşılaştırılır. <strong>Durum</strong>
+								rozeti ise sadece <strong>Devam %</strong> ile belirlenir: İyi ≥%85 · Uyarı %70–84 · Kritik
+								&lt;%70.
+								<span class="block pt-1 opacity-90">
+									Tabloda sarı kullanılmıyor: kota uygunsa yeşil ton; kotayı 1 oturumla aşan satırlarda
+									kırmızımsı pembemsi; kotayı iki veya daha fazla aşan veya katılımın %70 altı olduğu
+									satırlarda daha sert kırmızı.
+								</span>
+							</p>
+						</div>
+					</details>
+				</div>
+
+				<div
+					class="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
+				>
+					<div class="overflow-x-auto">
+						<table class="w-full text-sm">
+							<thead
+								class="bg-slate-50 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
+							>
+								<tr>
+									<th class="px-3 py-3 text-left sm:px-4">Ders</th>
+									<th
+										class="px-2 py-3 text-center sm:px-4"
+										title="Yoklaması girilmiş son hafta (işlenen süre)"
+										>Toplam</th
+									>
+									<th class="px-2 py-3 text-center sm:px-4" title="Devamsız oturum sayısı"
+										>Devamsız</th
+									>
+									<th class="px-3 py-3 text-center sm:px-4">Devam %</th>
+									<th class="px-2 py-3 text-center sm:px-4" title="Devam yüzdesine göre">Durum</th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each attendance as a}
+									{@const lim30 =
+										typeof a.allowed_absences_30pct === 'number'
+											? a.allowed_absences_30pct
+											: floorPct30Quota(a.total_weeks)}
+									{@const fazla =
+										typeof a.absences_over_30pct === 'number'
+											? a.absences_over_30pct
+											: Math.max(0, a.absent_count - lim30)}
+									{@const attUi = attendancePctBarClasses(a.attendance_pct, fazla)}
+									{@const absCls = absentCellClass(a.attendance_pct, fazla)}
+									<tr class="border-t border-black/5 dark:border-white/10">
+										<td class="px-3 py-3 sm:px-4">
+											<div class="font-mono text-xs font-semibold">{a.course_code}</div>
+											<div class="text-xs text-slate-400">{a.course_name}</div>
+										</td>
+										<td class="px-2 py-3 text-center tabular-nums sm:px-4">{a.total_weeks}</td>
+										<td
+											class="px-2 py-3 text-center font-semibold tabular-nums {absCls}">{a.absent_count}</td
+										>
+										<td class="px-3 py-3 text-center sm:px-4">
+											<div class="font-bold tabular-nums {attUi.pct}">
+												%{a.attendance_pct.toFixed(1)}
+											</div>
+											<div
+												class="mt-1 mx-auto h-1.5 w-14 overflow-hidden rounded-full bg-slate-200 dark:bg-white/10"
+											>
+												<div
+													class="h-full rounded-full transition-all {attUi.bar}"
+													style="width:{a.attendance_pct}%"
+												></div>
+											</div>
+										</td>
+										<td class="px-2 py-3 text-center sm:px-4">
+											<span
+												class="rounded-full px-2 py-0.5 text-[10px] font-medium sm:text-xs sm:px-2.5
+												{a.status === 'ok'
+													? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
+													: a.status === 'warning'
+														? 'bg-sky-100 text-sky-900 dark:bg-sky-950/40 dark:text-sky-100'
+														: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'}"
+											>
+												{a.status === 'ok' ? 'İyi' : a.status === 'warning' ? 'Uyarı' : 'Kritik'}
+											</span>
+										</td>
+									</tr>
+								{:else}
+									<tr
+										><td colspan="5" class="px-4 py-8 text-center text-sm text-slate-400">Devamsızlık kaydı yok.</td
+										></tr
+									>
+								{/each}
+							</tbody>
+						</table>
+					</div>
 				</div>
 			</div>
 

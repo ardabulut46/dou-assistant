@@ -155,8 +155,10 @@ export type DouGradeEntry = {
 	course_code: string;
 	course_name: string;
 	term_id: string;
+	term_name?: string;
 	midterm: number | null;
 	final: number | null;
+	makeup: number | null;
 	letter_grade: string | null;
 	is_published: boolean;
 	is_finalized: boolean;
@@ -242,6 +244,12 @@ export type DouAttendanceRow = {
 	absent_count: number;
 	attendance_pct: number;
 	status: 'ok' | 'warning' | 'fail';
+	/** Toplam hafta içinde en fazla izin verilen devamsız (≈ %30, aşağı yuvarlak). */
+	allowed_absences_30pct?: number;
+	/** limiti aşan devamsızlık sayısı (0 ise sınır içi). */
+	absences_over_30pct?: number;
+	/** Sınır dahilinde daha kaç eksik hakkı olduğu. */
+	absences_remain_under_30pct?: number;
 };
 
 export type DouDocumentRequest = {

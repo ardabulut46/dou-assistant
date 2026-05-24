@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import uuid
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -1596,10 +1597,12 @@ def list_student_grades(
         return []
     q = """
         SELECT ce.id AS enrollment_id, c.code AS course_code, c.name AS course_name,
-               cs.term_id, g.midterm, g.final, g.letter_grade, g.is_published, g.is_finalized
+               cs.term_id, ot.name AS term_name,
+               g.midterm, g.final, g.makeup, g.letter_grade, g.is_published, g.is_finalized
         FROM obs_course_enrollments ce
         JOIN obs_course_sections cs ON ce.course_section_id = cs.id
         JOIN obs_courses c ON cs.course_id = c.id
+        LEFT JOIN obs_terms ot ON ot.id = cs.term_id
         LEFT JOIN obs_grade_entries g ON g.enrollment_id = ce.id
         WHERE ce.student_id = :spid AND ce.status IN ('active', 'pending_drop')
         """
@@ -1614,8 +1617,10 @@ def list_student_grades(
             "course_code": r.get("course_code") or "",
             "course_name": r.get("course_name") or "",
             "term_id": _str_id(r["term_id"]),
+            "term_name": r.get("term_name") or "",
             "midterm": _num(r.get("midterm")),
             "final": _num(r.get("final")),
+            "makeup": _num(r.get("makeup")),
             "letter_grade": r.get("letter_grade"),
             "is_published": bool(r.get("is_published")),
             "is_finalized": bool(r.get("is_finalized")),
@@ -1923,6 +1928,11 @@ def attendance_summary(
         tw = int(r.get("max_week") or 14)
         ab = int(r.get("absent_count") or 0)
         pct = round(100.0 * (tw - ab) / tw, 1) if tw else 100.0
+        # Yönerge: dönem N hafta ise en fazla %30 devamsızlık (yaklaşık floor(N*0.30) yoklama);
+        # devam oranı %70 altı = risk (mevcut renk / ObsShell ile uyumlu).
+        allowed_abs_30 = int(math.floor(float(tw) * 0.30 + 1e-9)) if tw > 0 else 0
+        abs_over_30 = max(0, ab - allowed_abs_30)
+        abs_remain_under_30 = max(0, allowed_abs_30 - ab)
         st = "ok"
         if pct < 70:
             st = "fail"
@@ -1936,6 +1946,9 @@ def attendance_summary(
                 "absent_count": ab,
                 "attendance_pct": pct,
                 "status": st,
+                "allowed_absences_30pct": allowed_abs_30,
+                "absences_over_30pct": abs_over_30,
+                "absences_remain_under_30pct": abs_remain_under_30,
             }
         )
     return out
