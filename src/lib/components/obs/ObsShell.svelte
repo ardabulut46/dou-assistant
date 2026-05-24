@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
-	import { goto } from '$app/navigation';
+	import { goto, afterNavigate } from '$app/navigation';
 	import { onDestroy, onMount } from 'svelte';
 	import { user } from '$lib/stores';
 	import { userSignOut } from '$lib/apis/auths';
@@ -175,6 +175,13 @@
 
 	const OBS_ANN_SEEN_LS_KEY = 'dou_obs_ann_seen_ids';
 	const OBS_ATT_WARN_FP_LS_KEY = 'dou_obs_attendance_low_fp';
+
+	/** Küçük ekran: yan menü çekmece; md+ masaüstü görünüm değişmez. */
+	let mobileNavOpen = false;
+
+	afterNavigate(() => {
+		mobileNavOpen = false;
+	});
 
 	/** Çan rozeti için markAllRead’de yazılacak son fingerprint (bir yüklemede hesaplanır). */
 	let lastAttendanceLowFingerprint = '';
@@ -581,8 +588,13 @@
 	// ---------------------------------------------------------------------------
 	// Lifecycle
 	// ---------------------------------------------------------------------------
+	function onEscapeCloseNav(e: KeyboardEvent) {
+		if (e.key === 'Escape') mobileNavOpen = false;
+	}
+
 	onMount(() => {
 		if (!browser) return;
+		window.addEventListener('keydown', onEscapeCloseNav);
 		const events = ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll'];
 		events.forEach((e) => window.addEventListener(e, resetIdle, { passive: true }));
 		resetIdle();
@@ -593,6 +605,7 @@
 	});
 
 	onDestroy(() => {
+		if (browser) window.removeEventListener('keydown', onEscapeCloseNav);
 		if (idleTimer) clearTimeout(idleTimer);
 		if (warnTimer) clearTimeout(warnTimer);
 		if (bellPollInterval !== null) {
@@ -623,13 +636,26 @@
 </svelte:head>
 
 <div
-	class="min-h-[100dvh] bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100"
+	class="flex h-[100dvh] max-h-[100dvh] min-h-0 flex-col overflow-hidden bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100 [touch-action:manipulation]"
 	class:pt-10={idleWarning}
 	aria-label={title}
 >
-	<div class="flex h-[100dvh] min-h-0">
-		<!-- Sidebar -->
-		<aside class="flex w-[260px] shrink-0 flex-col overflow-y-auto bg-slate-950 text-slate-100">
+	{#if mobileNavOpen}
+		<button
+			type="button"
+			class="fixed inset-0 z-30 bg-black/50 backdrop-blur-[1px] md:hidden"
+			aria-label="Menüyü kapat"
+			on:click={() => (mobileNavOpen = false)}
+		></button>
+	{/if}
+	<div class="flex min-h-0 flex-1">
+		<!-- Sidebar: md+ sabit; küçük ekranda çekmece -->
+		<aside
+			id="obs-shell-drawer"
+			class="fixed inset-y-0 left-0 z-40 flex min-h-0 w-[260px] max-w-[min(260px,88vw)] shrink-0 flex-col overflow-y-auto overflow-x-hidden overscroll-contain bg-slate-950 pl-[env(safe-area-inset-left,0)] text-slate-100 shadow-xl transition-transform duration-200 ease-out md:relative md:inset-auto md:z-0 md:flex md:max-w-none md:shadow-none {mobileNavOpen
+				? 'translate-x-0'
+				: '-translate-x-full md:translate-x-0'}"
+		>
 			<!-- Header -->
 			<div class="px-5 py-4 shadow-[0_1px_0_rgba(255,255,255,0.06)]">
 				<a href={dashHref} class="flex items-center gap-3 transition-opacity hover:opacity-80">
@@ -648,7 +674,11 @@
 			</div>
 
 			<!-- Nav -->
-			<nav class="flex-1 overflow-y-auto overflow-x-hidden px-3 pb-4 pt-2">
+			<nav
+				id="obs-shell-nav"
+				class="flex-1 overflow-y-auto overflow-x-hidden px-3 pb-4 pt-2"
+				aria-label="OBS ana menü"
+			>
 				<div class="mb-3 px-3">
 					<a
 						href={aiAskHref}
@@ -712,13 +742,35 @@
 		<div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
 			<!-- Topbar -->
 			<header
-				class="sticky top-0 z-10 border-b border-black/10 bg-white/95 px-6 py-3 backdrop-blur dark:border-white/10 dark:bg-slate-950/90"
+				class="sticky top-0 z-10 shrink-0 border-b border-black/10 bg-white/95 px-4 py-3 pr-[calc(1rem+env(safe-area-inset-right,0px))] pl-[calc(1rem+env(safe-area-inset-left,0px))] backdrop-blur md:px-6 dark:border-white/10 dark:bg-slate-950/90"
 			>
-				<div class="flex items-center justify-between gap-4">
-					<div class="min-w-0">
-						<div class="truncate text-sm font-semibold">{termLabel}</div>
-						<div class="truncate text-xs text-slate-500 dark:text-slate-400">
-							<slot name="userline" />
+				<div class="flex items-center justify-between gap-3 md:gap-4">
+					<div class="flex min-w-0 flex-1 items-start gap-2 md:block md:gap-0">
+						<button
+							type="button"
+							class="mt-0.5 inline-flex size-10 shrink-0 items-center justify-center rounded-xl border border-black/10 bg-white text-slate-700 shadow-sm active:bg-slate-100 md:hidden dark:border-white/10 dark:bg-white/10 dark:text-slate-200 dark:active:bg-white/15"
+							aria-label={mobileNavOpen ? 'Menüyü kapat' : 'Menüyü aç'}
+							aria-expanded={mobileNavOpen}
+							aria-controls="obs-shell-nav"
+							on:click={() => (mobileNavOpen = !mobileNavOpen)}
+						>
+							{#if mobileNavOpen}
+								<svg class="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+									<path d="M18 6L6 18M6 6l12 12" />
+								</svg>
+							{:else}
+								<svg class="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+									<line x1="3" y1="6" x2="21" y2="6" />
+									<line x1="3" y1="12" x2="21" y2="12" />
+									<line x1="3" y1="18" x2="21" y2="18" />
+								</svg>
+							{/if}
+						</button>
+						<div class="min-w-0 pt-0.5 md:pt-0">
+							<div class="truncate text-sm font-semibold">{termLabel}</div>
+							<div class="truncate text-xs text-slate-500 dark:text-slate-400">
+								<slot name="userline" />
+							</div>
 						</div>
 					</div>
 
@@ -766,7 +818,7 @@
 								></button>
 								<!-- Dropdown -->
 								<div
-									class="absolute right-0 top-11 z-50 w-80 overflow-hidden rounded-xl border border-black/10 bg-white shadow-2xl dark:border-white/10 dark:bg-slate-900"
+									class="absolute right-0 top-11 z-50 max-w-[calc(100vw-1rem)] w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-black/10 bg-white shadow-2xl dark:border-white/10 dark:bg-slate-900"
 								>
 									<div
 										class="flex items-center justify-between border-b border-black/5 px-4 py-3 dark:border-white/10"
@@ -840,7 +892,7 @@
 
 						<a
 							href={aiAskHref}
-							class="rounded-lg bg-sky-500 px-3 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-sky-400"
+							class="hidden rounded-lg bg-sky-500 px-3 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-sky-400 sm:inline-flex sm:px-3 sm:text-sm"
 						>
 							AI Asistan
 						</a>
@@ -850,7 +902,9 @@
 			</header>
 
 			<!-- Content -->
-			<main class="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+			<main
+				class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain px-4 py-4 pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:px-6 sm:py-5 break-words"
+			>
 				<slot />
 			</main>
 		</div>

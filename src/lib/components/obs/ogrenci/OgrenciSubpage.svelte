@@ -1157,11 +1157,11 @@
 	<div class="space-y-4">
 		<!-- ——— Başlık ——— -->
 		<div
-			class="flex items-center justify-between rounded-xl border border-black/10 bg-white px-5 py-3.5 shadow-sm dark:border-white/10 dark:bg-white/5"
+			class="flex min-w-0 items-center justify-between rounded-xl border border-black/10 bg-white px-4 py-3 shadow-sm dark:border-white/10 dark:bg-white/5 sm:px-5 sm:py-3.5"
 		>
-			<div>
-				<h1 class="text-base font-bold text-slate-800 dark:text-slate-100">{pageTitle}</h1>
-				<p class="mt-0.5 text-[11px] text-slate-400">{activePath}</p>
+			<div class="min-w-0 pr-2">
+				<h1 class="break-words text-base font-bold text-slate-800 dark:text-slate-100">{pageTitle}</h1>
+				<p class="mt-0.5 break-all text-[11px] text-slate-400 sm:break-words">{activePath}</p>
 			</div>
 		</div>
 
@@ -1265,9 +1265,9 @@
 						</div>
 
 						<!-- Ad + düzenle -->
-						<div class="flex items-start justify-between pt-10">
-							<div>
-								<div class="text-xl font-bold text-slate-900 dark:text-slate-100">
+						<div class="flex flex-col gap-3 pt-10 sm:flex-row sm:items-start sm:justify-between sm:gap-0">
+							<div class="min-w-0">
+								<div class="break-words text-xl font-bold text-slate-900 dark:text-slate-100">
 									{profile.full_name ?? profile.email}
 								</div>
 								<div class="mt-0.5 text-sm text-slate-500">
@@ -1291,7 +1291,7 @@
 									};
 								}}
 								type="button"
-								class="mt-1 flex items-center gap-1.5 rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm font-medium hover:bg-slate-50 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10 transition-colors"
+								class="shrink-0 self-start sm:self-auto mt-1 flex items-center gap-1.5 rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm font-medium hover:bg-slate-50 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10 transition-colors"
 							>
 								<svg
 									class="h-3.5 w-3.5 text-slate-400"
@@ -1315,7 +1315,7 @@
 								(profile as unknown as Record<string, number>).completed_akts ?? 0}
 							{@const toplamAkts =
 								(profile as unknown as Record<string, number>).total_akts_required ?? 120}
-							<div class="mt-5 grid grid-cols-4 gap-3">
+							<div class="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
 								{#each [{ lbl: 'AGNO', val: agno.toFixed(2), sub: 'Kümülatif', color: agno >= 3.0 ? 'text-emerald-600 dark:text-emerald-400' : agno >= 2.0 ? 'text-sky-600 dark:text-sky-400' : 'text-red-500' }, { lbl: 'DNO', val: dno.toFixed(2), sub: 'Bu Dönem', color: dno >= 3.0 ? 'text-emerald-600 dark:text-emerald-400' : dno >= 2.0 ? 'text-sky-600 dark:text-sky-400' : 'text-red-500' }, { lbl: 'AKTS', val: tamamAkts.toString(), sub: `/ ${toplamAkts}`, color: 'text-slate-800 dark:text-slate-100' }, { lbl: 'Durum', val: profile.status === 'active' ? 'Aktif' : (profile.status ?? 'Aktif'), sub: profile.is_financially_eligible ? 'Mali uygun' : 'Borç var', color: profile.status === 'active' ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500' }] as st}
 									<div
 										class="rounded-xl border border-black/8 bg-slate-50 px-4 py-3 dark:border-white/8 dark:bg-white/5"
@@ -1340,7 +1340,8 @@
 										{lbl}
 									</div>
 									<div
-										class="mt-0.5 truncate text-sm font-medium text-slate-800 dark:text-slate-100"
+										class="mt-0.5 break-words text-sm font-medium text-slate-800 dark:text-slate-100 sm:truncate"
+										title={typeof val === 'string' ? val : ''}
 									>
 										{val}
 									</div>
@@ -1451,15 +1452,20 @@
 			<!-- ================================================================ -->
 		{:else if apiKey === 'terms' && terms.length}
 			<div
-				class="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
+				class="-mx-1 overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5 sm:mx-0"
 			>
+				<p class="border-b border-black/5 bg-slate-50/90 px-3 py-1.5 text-[11px] text-slate-500 dark:border-white/10 dark:bg-white/5 dark:text-slate-400 sm:hidden">
+					Listeyi yatay kaydırarak tüm sütunları görebilirsiniz.
+				</p>
+				<div class="overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
+					<div class="min-w-[520px]">
 				<div
 					class="grid grid-cols-5 bg-slate-50 px-5 py-3 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
 				>
-					<div class="col-span-2">Dönem</div>
+					<div class="col-span-2 min-w-0 break-words">Dönem</div>
 					<div>Yıl</div>
-					<div>Başlangıç</div>
-					<div>Bitiş</div>
+					<div class="whitespace-nowrap">Başlangıç</div>
+					<div class="whitespace-nowrap">Bitiş</div>
 				</div>
 				{#each terms as t}
 					<div
@@ -1467,18 +1473,20 @@
 							? 'bg-sky-50/40 dark:bg-sky-900/10'
 							: ''}"
 					>
-						<div class="col-span-2 font-medium">
+						<div class="col-span-2 min-w-0 font-medium break-words">
 							{t.name}
 							{#if t.is_active}<span
-									class="ml-2 rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-bold text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
+									class="ml-2 inline-flex shrink-0 rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-bold text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
 									>Aktif</span
 								>{/if}
 						</div>
 						<div class="text-slate-500">{t.academic_year}</div>
-						<div class="text-slate-500">{t.starts_at}</div>
-						<div class="text-slate-500">{t.ends_at}</div>
+						<div class="whitespace-nowrap text-slate-500">{t.starts_at}</div>
+						<div class="whitespace-nowrap text-slate-500">{t.ends_at}</div>
 					</div>
 				{/each}
+					</div>
+				</div>
 			</div>
 
 			<!-- ================================================================ -->
@@ -1486,16 +1494,16 @@
 			<!-- ================================================================ -->
 		{:else if apiKey === 'advisor' && advisor?.advisor}
 			<div
-				class="rounded-xl border border-black/10 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-white/5"
+				class="rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5 sm:p-6"
 			>
-				<div class="flex items-start gap-5">
+				<div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:gap-5">
 					<div
 						class="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-400 to-indigo-600 text-2xl font-bold text-white shadow"
 					>
 						{advisor.advisor.name.charAt(0)}
 					</div>
-					<div class="flex-1">
-						<div class="text-xl font-bold">{advisor.advisor.name}</div>
+					<div class="min-w-0 flex-1">
+						<div class="break-words text-xl font-bold">{advisor.advisor.name}</div>
 						{#if advisor.advisor.title}<div class="mt-0.5 text-sm text-slate-500">
 								{advisor.advisor.title}
 							</div>{/if}
@@ -1534,7 +1542,7 @@
 					</div>
 				</div>
 
-				<div class="mt-5 grid grid-cols-2 gap-3">
+				<div class="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
 					{#each [['E-posta', advisor.advisor.email, true], ['Oda', advisor.advisor.office ?? '—', false], ['Telefon', advisor.advisor.phone ?? '—', false], ['Bölüm', advisor.advisor.department_name ?? '—', false]] as [lbl, val, isEmail]}
 						<div
 							class="rounded-xl border border-black/5 bg-slate-50 px-4 py-3 dark:border-white/5 dark:bg-white/5"
@@ -1574,7 +1582,7 @@
 			<!-- ================================================================ -->
 		{:else if apiKey === 'enrollments'}
 			<div
-				class="mb-2 flex items-center justify-between rounded-xl border border-black/10 bg-white px-5 py-3 shadow-sm dark:border-white/10 dark:bg-white/5"
+				class="mb-2 flex min-w-0 flex-col gap-2 rounded-xl border border-black/10 bg-white px-4 py-3 shadow-sm dark:border-white/10 dark:bg-white/5 sm:flex-row sm:items-center sm:justify-between sm:px-5 sm:py-3"
 			>
 				<div class="flex items-center gap-3">
 					<span class="text-sm font-semibold">{enrollments.length} ders</span>
@@ -1585,21 +1593,24 @@
 				</div>
 			</div>
 			<div
-				class="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
+				class="-mx-1 overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5 sm:mx-0"
 			>
-				<div class="overflow-x-auto">
-					<table class="w-full text-sm">
+				<p class="border-b border-black/5 bg-slate-50/90 px-3 py-1.5 text-[11px] text-slate-500 dark:border-white/10 dark:bg-white/5 dark:text-slate-400 sm:hidden">
+					Tabloyu yatay kaydırarak tüm sütunları görebilirsiniz.
+				</p>
+				<div class="overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
+					<table class="min-w-[720px] w-full border-collapse text-sm">
 						<thead
 							class="bg-slate-50 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
 						>
 							<tr>
-								<th class="px-4 py-3 text-left">Kod</th>
-								<th class="px-4 py-3 text-left">Ders Adı</th>
-								<th class="px-4 py-3 text-center">K</th>
-								<th class="px-4 py-3 text-center">AKTS</th>
-								<th class="px-4 py-3 text-left">Öğretim Elemanı</th>
-								<th class="px-4 py-3 text-left">Gün / Saat</th>
-								<th class="px-4 py-3 text-left">Derslik</th>
+								<th class="whitespace-nowrap px-4 py-3 text-left">Kod</th>
+								<th class="min-w-[12rem] px-4 py-3 text-left">Ders Adı</th>
+								<th class="whitespace-nowrap px-4 py-3 text-center">K</th>
+								<th class="whitespace-nowrap px-4 py-3 text-center">AKTS</th>
+								<th class="min-w-[8rem] px-4 py-3 text-left">Öğretim Elemanı</th>
+								<th class="whitespace-nowrap px-4 py-3 text-left">Gün / Saat</th>
+								<th class="whitespace-nowrap px-4 py-3 text-left">Derslik</th>
 							</tr>
 						</thead>
 						<tbody>
@@ -1608,17 +1619,22 @@
 									class="border-t border-black/5 hover:bg-slate-50/50 transition-colors dark:border-white/10 dark:hover:bg-white/5"
 								>
 									<td
-										class="px-4 py-3 font-mono text-xs font-semibold text-slate-600 dark:text-slate-300"
+										class="whitespace-nowrap px-4 py-3 font-mono text-xs font-semibold text-slate-600 dark:text-slate-300"
 										>{e.course_code}</td
 									>
-									<td class="px-4 py-3 font-medium">{e.course_name}</td>
-									<td class="px-4 py-3 text-center text-slate-500">{e.credits}</td>
-									<td class="px-4 py-3 text-center font-semibold">{e.akts}</td>
-									<td class="px-4 py-3 text-xs text-slate-500">{e.instructor_name ?? '—'}</td>
-									<td class="px-4 py-3 text-xs"
-										>{e.day_of_week ?? '—'} {e.start_time ?? ''}–{e.end_time ?? ''}</td
+									<td
+										class="min-w-[12rem] px-4 py-3 align-top font-medium leading-snug break-words"
+										>{e.course_name}</td
 									>
-									<td class="px-4 py-3 text-xs text-slate-500">{e.classroom ?? '—'}</td>
+									<td class="whitespace-nowrap px-4 py-3 text-center text-slate-500"
+										>{e.credits}</td
+									>
+									<td class="whitespace-nowrap px-4 py-3 text-center font-semibold">{e.akts}</td>
+									<td class="max-w-[10rem] min-w-[8rem] px-4 py-3 align-top text-xs leading-snug break-words text-slate-500 sm:max-w-none"
+										>{e.instructor_name ?? '—'}</td
+									>
+									<td class="whitespace-nowrap px-4 py-3 text-xs">{e.day_of_week ?? '—'} {e.start_time ?? ''}–{e.end_time ?? ''}</td>
+									<td class="whitespace-nowrap px-4 py-3 text-xs text-slate-500">{e.classroom ?? '—'}</td>
 								</tr>
 							{:else}
 								<tr
@@ -1641,7 +1657,7 @@
 				class="rounded-xl border border-sky-200 bg-sky-50 px-5 py-4 dark:border-sky-900/40 dark:bg-sky-950/20"
 			>
 				<div class="flex items-center justify-between text-sm">
-					<span class="font-semibold">{enrollmentTermLabel} — AKTS Durumu</span>
+					<span class="font-semibold break-words">{enrollmentTermLabel} — AKTS Durumu</span>
 					<span class="font-bold text-sky-700 dark:text-sky-300"
 						>{enrollmentScheduledAkts} / {aktsMax}</span
 					>
@@ -1688,24 +1704,27 @@
 							</span>
 						</div>
 					</div>
-					<div class="overflow-x-auto">
-						<table class="w-full text-[13px]">
+					<p class="border-b border-sky-100 bg-sky-50/90 px-3 py-1.5 text-[11px] text-sky-800/80 dark:border-sky-900/30 dark:bg-sky-950/40 dark:text-sky-300/90 sm:hidden">
+						Tabloyu yatay kaydırarak tüm sütunları görebilirsiniz.
+					</p>
+					<div class="overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
+						<table class="min-w-[640px] w-full text-[13px]">
 							<thead class="bg-sky-50/30 text-[11px] font-bold text-sky-600 dark:text-sky-400 uppercase tracking-wider">
 								<tr>
-									<th class="px-4 py-2 text-left">Kod</th>
-									<th class="px-4 py-2 text-left">Ders Adı</th>
-									<th class="px-4 py-2 text-center">AKTS</th>
-									<th class="px-4 py-2 text-center">Durum</th>
-									<th class="px-4 py-2 text-left">Öğr. Elemanı</th>
-									<th class="px-4 py-2 text-right"></th>
+									<th class="whitespace-nowrap px-4 py-2 text-left">Kod</th>
+									<th class="min-w-[10rem] px-4 py-2 text-left">Ders Adı</th>
+									<th class="whitespace-nowrap px-4 py-2 text-center">AKTS</th>
+									<th class="whitespace-nowrap px-4 py-2 text-center">Durum</th>
+									<th class="min-w-[8rem] px-4 py-2 text-left">Öğr. Elemanı</th>
+									<th class="whitespace-nowrap px-4 py-2 text-right"></th>
 								</tr>
 							</thead>
 							<tbody class="divide-y divide-sky-50 dark:divide-sky-900/20">
 								{#each enrollments.filter((e) => ['active', 'pending', 'draft'].includes(e.status)) as e}
 									<tr class="hover:bg-sky-50/20 transition-colors">
-										<td class="px-4 py-2.5 font-mono font-bold text-sky-700 dark:text-sky-300">{e.course_code}</td>
-										<td class="px-4 py-2.5 font-medium text-slate-700 dark:text-slate-200">{e.course_name}</td>
-										<td class="px-4 py-2.5 text-center font-bold">{e.akts}</td>
+										<td class="whitespace-nowrap px-4 py-2.5 font-mono font-bold text-sky-700 dark:text-sky-300">{e.course_code}</td>
+										<td class="min-w-[10rem] max-w-[22rem] px-4 py-2.5 font-medium leading-snug break-words text-slate-700 dark:text-slate-200">{e.course_name}</td>
+										<td class="whitespace-nowrap px-4 py-2.5 text-center font-bold">{e.akts}</td>
 										<td class="px-4 py-2.5 text-center">
 											{#if e.status === 'active'}
 												<span class="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">KAYITLI</span>
@@ -1715,8 +1734,8 @@
 												<span class="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-bold text-sky-700 dark:bg-sky-900/40 dark:text-sky-300">TASLAK</span>
 											{/if}
 										</td>
-										<td class="px-4 py-2.5 text-slate-500 dark:text-slate-400 text-xs">{e.instructor_name ?? '—'}</td>
-										<td class="px-4 py-2.5 text-right">
+										<td class="min-w-[8rem] px-4 py-2.5 text-xs leading-snug break-words text-slate-500 dark:text-slate-400">{e.instructor_name ?? '—'}</td>
+										<td class="whitespace-nowrap px-4 py-2.5 text-right">
 											{#if e.status === 'draft' && !hasPendingRegistration}
 												<button 
 													on:click={() => removeDraftEnrollmentRow(e.id)}
@@ -1775,25 +1794,28 @@
 				class="mt-3 overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
 			>
 				<div
-					class="flex items-center justify-between border-b border-black/5 px-5 py-3 dark:border-white/10"
+					class="flex flex-wrap items-start justify-between gap-2 border-b border-black/5 px-4 py-3 dark:border-white/10 sm:items-center sm:px-5"
 				>
 					<div class="text-sm font-bold text-slate-600 dark:text-slate-300">Açılan Dersler</div>
 					<div class="text-xs text-slate-400">{availableCourses.length} ders mevcut</div>
 				</div>
-				<div class="overflow-x-auto">
-					<table class="w-full text-sm">
+				<p class="border-b border-black/5 bg-slate-50/90 px-3 py-1.5 text-[11px] text-slate-500 dark:border-white/10 dark:bg-white/5 dark:text-slate-400 sm:hidden">
+					Tabloyu yatay kaydırarak tüm sütunları görebilirsiniz.
+				</p>
+				<div class="overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
+					<table class="min-w-[880px] w-full text-sm">
 						<thead
 							class="bg-slate-50 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
 						>
 							<tr>
-								<th class="px-4 py-3 text-left">Kod</th>
-								<th class="px-4 py-3 text-left">Ders Adı</th>
-								<th class="px-4 py-3 text-center">AKTS</th>
-								<th class="px-4 py-3 text-left text-xs">Öncelik</th>
-								<th class="px-4 py-3 text-left">Öğr. Elemanı</th>
-								<th class="px-4 py-3 text-left">Gün/Saat</th>
-								<th class="px-4 py-3 text-center">Kontenjan</th>
-								<th class="px-4 py-3 text-center"></th>
+								<th class="whitespace-nowrap px-4 py-3 text-left">Kod</th>
+								<th class="min-w-[11rem] px-4 py-3 text-left">Ders Adı</th>
+								<th class="whitespace-nowrap px-4 py-3 text-center">AKTS</th>
+								<th class="min-w-[5rem] px-4 py-3 text-left text-xs">Öncelik</th>
+								<th class="min-w-[8rem] px-4 py-3 text-left">Öğr. Elemanı</th>
+								<th class="whitespace-nowrap px-4 py-3 text-left">Gün/Saat</th>
+								<th class="whitespace-nowrap px-4 py-3 text-center">Kontenjan</th>
+								<th class="whitespace-nowrap px-4 py-3 text-center"></th>
 							</tr>
 						</thead>
 						<tbody>
@@ -1810,22 +1832,22 @@
 										? 'bg-sky-50/50 dark:bg-sky-900/10'
 										: 'hover:bg-slate-50/50 dark:hover:bg-white/5'} transition-colors"
 								>
-									<td class="px-4 py-3 font-mono text-xs font-semibold text-slate-500"
+									<td class="whitespace-nowrap px-4 py-3 font-mono text-xs font-semibold text-slate-500"
 										>{c.course_code}</td
 									>
-									<td class="px-4 py-3 font-medium">{c.course_name}</td>
-									<td class="px-4 py-3 text-center font-semibold">{c.akts}</td>
+									<td class="max-w-[20rem] px-4 py-3 font-medium leading-snug break-words">{c.course_name}</td>
+									<td class="whitespace-nowrap px-4 py-3 text-center font-semibold">{c.akts}</td>
 									<td
 										class="px-4 py-3 text-[10px] leading-tight text-slate-600 dark:text-slate-400"
 										title={c.registration_priority_label ?? ''}
 									>
 										<span class="font-mono font-semibold">{c.registration_priority_tier ?? '—'}</span>
 										{#if c.registration_priority_label}
-											<div class="max-w-[7rem] truncate">{c.registration_priority_label}</div>
+											<div class="max-w-[7rem] break-words sm:truncate">{c.registration_priority_label}</div>
 										{/if}
 									</td>
-									<td class="px-4 py-3 text-xs text-slate-500">{c.instructor_name}</td>
-									<td class="px-4 py-3 text-xs">{c.day_of_week} {c.start_time}–{c.end_time}</td>
+									<td class="min-w-[8rem] px-4 py-3 text-xs leading-snug break-words text-slate-500">{c.instructor_name}</td>
+									<td class="whitespace-nowrap px-4 py-3 text-xs">{c.day_of_week} {c.start_time}–{c.end_time}</td>
 									<td
 										class="px-4 py-3 text-center text-xs {full ? 'text-red-500' : 'text-slate-500'}"
 									>
@@ -1856,7 +1878,7 @@
 								</tr>
 							{:else}
 								<tr
-									><td colspan="7" class="px-4 py-8 text-center text-sm text-slate-400"
+									><td colspan="8" class="px-4 py-8 text-center text-sm text-slate-400"
 										>Açılan ders bulunamadı.</td
 									></tr
 								>
@@ -1880,7 +1902,7 @@
 				class="rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
 			>
 				<div
-					class="flex flex-wrap items-center justify-between gap-2 border-b border-black/5 px-5 py-3 dark:border-white/10"
+					class="flex flex-wrap items-start justify-between gap-2 border-b border-black/5 px-4 py-3 dark:border-white/10 sm:items-center sm:px-5"
 				>
 					<div>
 						<span class="text-sm font-semibold">
@@ -1934,21 +1956,24 @@
 					</div>
 				{/if}
 
-				<div class="overflow-x-auto">
-					<table class="w-full text-sm">
+				<p class="border-b border-black/5 bg-slate-50/90 px-3 py-1.5 text-[11px] text-slate-500 dark:border-white/10 dark:bg-white/5 dark:text-slate-400 sm:hidden">
+					Tabloyu yatay kaydırarak tüm sütunları görebilirsiniz.
+				</p>
+				<div class="overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
+					<table class="min-w-[820px] w-full text-sm">
 						<thead
 							class="bg-slate-50 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
 						>
 							<tr>
-								<th class="w-8 px-4 py-3"></th>
-								<th class="px-4 py-3 text-left">Kod</th>
-								<th class="px-4 py-3 text-left">Ders Adı</th>
-								<th class="px-4 py-3 text-left">Durum</th>
-								<th class="px-4 py-3 text-center">AKTS</th>
-								<th class="px-4 py-3 text-left text-xs">Önc.</th>
-								<th class="px-4 py-3 text-left">Öğr. Elemanı</th>
-								<th class="px-4 py-3 text-left">Gün/Saat</th>
-								<th class="px-4 py-3"></th>
+								<th class="w-8 shrink-0 px-2 py-3 sm:px-4"></th>
+								<th class="whitespace-nowrap px-4 py-3 text-left">Kod</th>
+								<th class="min-w-[11rem] px-4 py-3 text-left">Ders Adı</th>
+								<th class="min-w-[7rem] px-4 py-3 text-left">Durum</th>
+								<th class="whitespace-nowrap px-4 py-3 text-center">AKTS</th>
+								<th class="whitespace-nowrap px-4 py-3 text-left text-xs">Önc.</th>
+								<th class="min-w-[8rem] px-4 py-3 text-left">Öğr. Elemanı</th>
+								<th class="whitespace-nowrap px-4 py-3 text-left">Gün/Saat</th>
+								<th class="whitespace-nowrap px-4 py-3 text-right"></th>
 							</tr>
 						</thead>
 						<tbody>
@@ -1981,14 +2006,14 @@
 										{/if}
 									</td>
 									<td
-										class="px-4 py-3 font-mono text-xs font-semibold {marked
+										class="whitespace-nowrap px-4 py-3 font-mono text-xs font-semibold {marked
 											? 'text-red-500'
 											: 'text-slate-500'}"
 									>
 										{e.course_code}
 									</td>
 									<td
-										class="px-4 py-3 font-medium {marked || st === 'pending_drop'
+										class="min-w-[11rem] max-w-[22rem] px-4 py-3 font-medium leading-snug break-words {marked || st === 'pending_drop'
 											? 'text-slate-500 line-through'
 											: ''}"
 									>
@@ -2014,21 +2039,21 @@
 											<span class="text-xs text-slate-400">Kayıtlı</span>
 										{/if}
 									</td>
-									<td class="px-4 py-3 text-center">{e.akts}</td>
+									<td class="whitespace-nowrap px-4 py-3 text-center">{e.akts}</td>
 									<td
 										class="px-4 py-3 text-[10px] leading-tight text-slate-500"
 										title={e.registration_priority_label ?? ''}
 									>
 										<span class="font-mono font-semibold">{e.registration_priority_tier ?? '—'}</span>
 										{#if e.registration_priority_label}
-											<div class="max-w-[6.5rem] truncate">{e.registration_priority_label}</div>
+											<div class="max-w-[6.5rem] break-words sm:truncate">{e.registration_priority_label}</div>
 										{/if}
 									</td>
-									<td class="px-4 py-3 text-xs text-slate-500">{e.instructor_name ?? '—'}</td>
-									<td class="px-4 py-3 text-xs">
+									<td class="min-w-[8rem] px-4 py-3 text-xs leading-snug break-words text-slate-500">{e.instructor_name ?? '—'}</td>
+									<td class="whitespace-nowrap px-4 py-3 text-xs">
 										{e.day_of_week ?? '—'} {e.start_time ?? ''}
 									</td>
-									<td class="px-4 py-3 text-right">
+									<td class="whitespace-nowrap px-4 py-3 text-right">
 										{#if st === 'draft' && !hasPendingAddDrop}
 											<button
 												type="button"
@@ -2062,27 +2087,30 @@
 				class="mt-6 overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
 			>
 				<div
-					class="flex items-center justify-between border-b border-black/5 px-5 py-3 dark:border-white/10"
+					class="flex flex-wrap items-start justify-between gap-2 border-b border-black/5 px-4 py-3 dark:border-white/10 sm:items-center sm:px-5"
 				>
-					<div class="text-sm font-bold text-slate-600 dark:text-slate-300">
+					<div class="min-w-0 text-sm font-bold text-slate-600 dark:text-slate-300">
 						Ders ekle-bırak için açılan şubeler
 					</div>
-					<div class="text-xs text-slate-400">{availableCourses.length} şube</div>
+					<div class="shrink-0 text-xs text-slate-400">{availableCourses.length} şube</div>
 				</div>
-				<div class="overflow-x-auto">
-					<table class="w-full text-sm">
+				<p class="border-b border-black/5 bg-slate-50/90 px-3 py-1.5 text-[11px] text-slate-500 dark:border-white/10 dark:bg-white/5 dark:text-slate-400 sm:hidden">
+					Tabloyu yatay kaydırarak tüm sütunları görebilirsiniz.
+				</p>
+				<div class="overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
+					<table class="min-w-[880px] w-full text-sm">
 						<thead
 							class="bg-slate-50 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
 						>
 							<tr>
-								<th class="px-4 py-3 text-left">Kod</th>
-								<th class="px-4 py-3 text-left">Ders Adı</th>
-								<th class="px-4 py-3 text-center">AKTS</th>
-								<th class="px-4 py-3 text-left text-xs">Öncelik</th>
-								<th class="px-4 py-3 text-left">Öğr. Elemanı</th>
-								<th class="px-4 py-3 text-left">Gün/Saat</th>
-								<th class="px-4 py-3 text-center">Kontenjan</th>
-								<th class="px-4 py-3 text-center"></th>
+								<th class="whitespace-nowrap px-4 py-3 text-left">Kod</th>
+								<th class="min-w-[11rem] px-4 py-3 text-left">Ders Adı</th>
+								<th class="whitespace-nowrap px-4 py-3 text-center">AKTS</th>
+								<th class="min-w-[5rem] px-4 py-3 text-left text-xs">Öncelik</th>
+								<th class="min-w-[8rem] px-4 py-3 text-left">Öğr. Elemanı</th>
+								<th class="whitespace-nowrap px-4 py-3 text-left">Gün/Saat</th>
+								<th class="whitespace-nowrap px-4 py-3 text-center">Kontenjan</th>
+								<th class="whitespace-nowrap px-4 py-3 text-center"></th>
 							</tr>
 						</thead>
 						<tbody>
@@ -2096,22 +2124,22 @@
 										? 'bg-sky-50/50 dark:bg-sky-900/10'
 										: 'hover:bg-slate-50/50 dark:hover:bg-white/5'} transition-colors"
 								>
-									<td class="px-4 py-3 font-mono text-xs font-semibold text-slate-500"
+									<td class="whitespace-nowrap px-4 py-3 font-mono text-xs font-semibold text-slate-500"
 										>{c.course_code}</td
 									>
-									<td class="px-4 py-3 font-medium">{c.course_name}</td>
-									<td class="px-4 py-3 text-center font-semibold">{c.akts}</td>
+									<td class="max-w-[20rem] px-4 py-3 font-medium leading-snug break-words">{c.course_name}</td>
+									<td class="whitespace-nowrap px-4 py-3 text-center font-semibold">{c.akts}</td>
 									<td
 										class="px-4 py-3 text-[10px] leading-tight text-slate-600 dark:text-slate-400"
 										title={c.registration_priority_label ?? ''}
 									>
 										<span class="font-mono font-semibold">{c.registration_priority_tier ?? '—'}</span>
 										{#if c.registration_priority_label}
-											<div class="max-w-[7rem] truncate">{c.registration_priority_label}</div>
+											<div class="max-w-[7rem] break-words sm:truncate">{c.registration_priority_label}</div>
 										{/if}
 									</td>
-									<td class="px-4 py-3 text-xs text-slate-500">{c.instructor_name}</td>
-									<td class="px-4 py-3 text-xs">{c.day_of_week} {c.start_time}–{c.end_time}</td>
+									<td class="min-w-[8rem] px-4 py-3 text-xs leading-snug break-words text-slate-500">{c.instructor_name}</td>
+									<td class="whitespace-nowrap px-4 py-3 text-xs">{c.day_of_week} {c.start_time}–{c.end_time}</td>
 									<td
 										class="px-4 py-3 text-center text-xs {full ? 'text-red-500' : 'text-slate-500'}"
 									>
@@ -2142,7 +2170,7 @@
 								</tr>
 							{:else}
 								<tr
-									><td colspan="7" class="px-4 py-8 text-center text-sm text-slate-400"
+									><td colspan="8" class="px-4 py-8 text-center text-sm text-slate-400"
 										>Açılan ders bulunamadı.</td
 									></tr
 								>
@@ -2157,20 +2185,23 @@
 			<!-- ================================================================ -->
 		{:else if apiKey === 'exams'}
 			<div
-				class="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
+				class="-mx-1 overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5 sm:mx-0"
 			>
-				<div class="overflow-x-auto">
-					<table class="w-full text-sm">
+				<p class="border-b border-black/5 bg-slate-50/90 px-3 py-1.5 text-[11px] text-slate-500 dark:border-white/10 dark:bg-white/5 dark:text-slate-400 sm:hidden">
+					Tabloyu yatay kaydırarak tüm sütunları görebilirsiniz.
+				</p>
+				<div class="overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
+					<table class="min-w-[600px] w-full text-sm">
 						<thead
 							class="bg-slate-50 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
 						>
 							<tr>
-								<th class="px-4 py-3 text-left">Ders</th>
-								<th class="px-4 py-3 text-left">Tür</th>
-								<th class="px-4 py-3 text-left">Tarih</th>
-								<th class="px-4 py-3 text-left">Saat</th>
-								<th class="px-4 py-3 text-left">Derslik</th>
-								<th class="px-4 py-3 text-center">Ağırlık</th>
+								<th class="whitespace-nowrap px-4 py-3 text-left">Ders</th>
+								<th class="whitespace-nowrap px-4 py-3 text-left">Tür</th>
+								<th class="whitespace-nowrap px-4 py-3 text-left">Tarih</th>
+								<th class="whitespace-nowrap px-4 py-3 text-left">Saat</th>
+								<th class="whitespace-nowrap px-4 py-3 text-left">Derslik</th>
+								<th class="whitespace-nowrap px-4 py-3 text-center">Ağırlık</th>
 							</tr>
 						</thead>
 						<tbody>
@@ -2178,8 +2209,8 @@
 								<tr
 									class="border-t border-black/5 dark:border-white/10 hover:bg-slate-50/50 transition-colors"
 								>
-									<td class="px-4 py-3 font-mono text-xs font-semibold">{ex.course_code}</td>
-									<td class="px-4 py-3">
+									<td class="whitespace-nowrap px-4 py-3 font-mono text-xs font-semibold">{ex.course_code}</td>
+									<td class="whitespace-nowrap px-4 py-3">
 										<span
 											class="rounded-full px-2 py-0.5 text-xs font-medium
 											{ex.exam_type === 'midterm'
@@ -2195,10 +2226,10 @@
 													: ex.exam_type}
 										</span>
 									</td>
-									<td class="px-4 py-3 font-medium">{ex.exam_date}</td>
-									<td class="px-4 py-3 text-slate-500">{ex.exam_time}</td>
-									<td class="px-4 py-3 text-xs text-slate-500">{ex.classroom}</td>
-									<td class="px-4 py-3 text-center font-semibold"
+									<td class="whitespace-nowrap px-4 py-3 font-medium">{ex.exam_date}</td>
+									<td class="whitespace-nowrap px-4 py-3 text-slate-500">{ex.exam_time}</td>
+									<td class="whitespace-nowrap px-4 py-3 text-xs text-slate-500">{ex.classroom}</td>
+									<td class="whitespace-nowrap px-4 py-3 text-center font-semibold"
 										>%{ex.weight_percent ?? 0}</td
 									>
 								</tr>
@@ -2221,7 +2252,7 @@
 			{@const DAYS = ['Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma']}
 			<div class="space-y-4">
 				<div class="flex flex-wrap items-end justify-between gap-3">
-					<label class="block min-w-[200px] flex-1">
+					<label class="block min-w-0 flex-1 sm:min-w-[200px]">
 						<span class="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-400">
 							Akademik dönem
 						</span>
@@ -2253,23 +2284,37 @@
 							class="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
 						>
 							<div
-								class="bg-slate-100/70 px-5 py-2 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
+								class="bg-slate-100/70 px-4 py-2 text-xs font-bold text-slate-500 sm:px-5 dark:bg-white/5 dark:text-slate-400"
 							>
 								{day}
 							</div>
 							{#each rows as s}
 								<div
-									class="flex items-center gap-4 border-t border-black/5 px-5 py-3 dark:border-white/10"
+									class="border-t border-black/5 px-4 py-3 dark:border-white/10 sm:px-5"
 								>
-									<span class="w-28 shrink-0 font-mono text-xs text-slate-400"
-										>{s.start}–{s.end}</span
+									<div
+										class="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4"
 									>
-									<span
-										class="rounded-lg bg-sky-100 px-2 py-0.5 font-mono text-xs font-bold text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
-										>{s.course_code}</span
-									>
-									<span class="flex-1 text-sm font-medium">{s.course_name}</span>
-									<span class="shrink-0 text-xs text-slate-400">{s.classroom}</span>
+										<div class="flex shrink-0 flex-wrap items-center gap-2 sm:gap-3">
+											<span
+												class="w-[6.75rem] shrink-0 font-mono text-xs tabular-nums text-slate-400"
+												>{s.start}–{s.end}</span
+											>
+											<span
+												class="shrink-0 rounded-lg bg-sky-100 px-2 py-0.5 font-mono text-xs font-bold text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
+												>{s.course_code}</span
+											>
+										</div>
+										<p
+											class="min-w-0 flex-1 text-sm font-medium leading-snug text-slate-800 dark:text-slate-100"
+										>
+											{s.course_name}
+										</p>
+										<span
+											class="shrink-0 text-xs text-slate-500 dark:text-slate-400 sm:text-right"
+											>{s.classroom ?? '—'}</span
+										>
+									</div>
 								</div>
 							{/each}
 						</div>
@@ -2291,7 +2336,7 @@
 		{:else if apiKey === 'grades'}
 			<div class="space-y-4">
 				<div class="flex flex-wrap items-end justify-between gap-3">
-					<label class="block min-w-[200px] flex-1">
+					<label class="block min-w-0 flex-1 sm:min-w-[200px]">
 						<span class="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-400">
 							Akademik dönem
 						</span>
@@ -2341,24 +2386,27 @@
 							<div
 								class="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
 							>
-								<div class="overflow-x-auto">
-									<table class="w-full text-sm">
+							<p class="border-b border-black/5 bg-slate-50/90 px-3 py-1.5 text-[11px] text-slate-500 dark:border-white/10 dark:bg-white/5 dark:text-slate-400 sm:hidden">
+								Tabloyu yatay kaydırarak tüm not sütunlarını görebilirsiniz.
+							</p>
+							<div class="overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
+									<table class="min-w-[720px] w-full text-sm">
 										<thead
 											class="bg-slate-50 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
 										>
 											<tr>
-												<th class="px-4 py-3 text-left">Ders</th>
-												<th class="px-4 py-3 text-center">Vize</th>
-												<th class="px-4 py-3 text-center">Final</th>
-												<th class="px-4 py-3 text-center">Büt</th>
-												<th class="px-4 py-3 text-center">Harf</th>
+												<th class="min-w-[11rem] px-4 py-3 text-left">Ders</th>
+												<th class="whitespace-nowrap px-4 py-3 text-center">Vize</th>
+												<th class="whitespace-nowrap px-4 py-3 text-center">Final</th>
+												<th class="whitespace-nowrap px-4 py-3 text-center">Büt</th>
+												<th class="whitespace-nowrap px-4 py-3 text-center">Harf</th>
 												<th
-													class="px-4 py-3 text-center whitespace-nowrap"
+													class="whitespace-nowrap px-4 py-3 text-center"
 													title="Şubede tanımlı vize/final yüzdeleriyle 100 üzerinden (hocanın girdiği paylar)."
 												>
 													Ort.<span class="text-[10px] font-normal opacity-70">100</span>
 												</th>
-												<th class="px-4 py-3 text-center">Durum</th>
+												<th class="whitespace-nowrap px-4 py-3 text-center">Durum</th>
 											</tr>
 										</thead>
 										<tbody>
@@ -2367,18 +2415,18 @@
 												<tr
 													class="border-t border-black/5 hover:bg-slate-50/50 dark:border-white/10 transition-colors"
 												>
-													<td class="px-4 py-3">
+													<td class="min-w-[11rem] max-w-[22rem] px-4 py-3">
 														<div class="font-mono text-xs font-semibold text-slate-600 dark:text-slate-300">
 															{g.course_code}
 														</div>
-														<div class="max-w-[200px] truncate text-xs text-slate-400">{g.course_name}</div>
+														<div class="mt-0.5 text-xs leading-snug break-words text-slate-400">{g.course_name}</div>
 													</td>
-													<td class="px-4 py-3 text-center font-medium">{g.midterm ?? '—'}</td>
-													<td class="px-4 py-3 text-center font-medium">{g.final ?? '—'}</td>
-													<td class="px-4 py-3 text-center font-medium text-amber-600 dark:text-amber-400">
+													<td class="whitespace-nowrap px-4 py-3 text-center font-medium">{g.midterm ?? '—'}</td>
+													<td class="whitespace-nowrap px-4 py-3 text-center font-medium">{g.final ?? '—'}</td>
+													<td class="whitespace-nowrap px-4 py-3 text-center font-medium text-amber-600 dark:text-amber-400">
 														{g.makeup ?? '—'}
 													</td>
-													<td class="px-4 py-3 text-center">
+													<td class="whitespace-nowrap px-4 py-3 text-center">
 														{#if (g.is_published || g.is_finalized) && (g.letter_grade ?? '').toString().trim()}
 															<span
 																class="rounded-full px-2.5 py-0.5 text-xs font-bold {GRADE_COLOR[
@@ -2387,7 +2435,7 @@
 															>
 														{:else}<span class="text-slate-300">—</span>{/if}
 													</td>
-													<td class="px-4 py-3 text-center align-middle">
+													<td class="whitespace-nowrap px-4 py-3 text-center align-middle">
 														{#if wg}
 															<details
 																class="mx-auto max-w-[5.75rem] text-center [&>summary::-webkit-details-marker]:hidden [&>summary]:list-none"
@@ -2423,7 +2471,7 @@
 															>
 														{/if}
 													</td>
-													<td class="px-4 py-3 text-center text-xs">
+													<td class="whitespace-nowrap px-4 py-3 text-center text-xs">
 														{#if g.is_published}<span class="text-emerald-600 dark:text-emerald-400"
 																>Yayınlandı</span
 															>
@@ -2499,8 +2547,11 @@
 				<div
 					class="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
 				>
-					<div class="overflow-x-auto">
-						<table class="w-full text-sm">
+					<p class="border-b border-black/5 bg-slate-50/90 px-3 py-1.5 text-[11px] text-slate-500 dark:border-white/10 dark:bg-white/5 dark:text-slate-400 sm:hidden">
+						Geniş hesaplama tablosunu görmek için yatay kaydırın.
+					</p>
+					<div class="overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
+						<table class="min-w-[800px] w-full text-sm">
 							<thead
 								class="bg-slate-50 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:bg-white/5 dark:text-slate-400"
 							>
@@ -2696,28 +2747,32 @@
 				<div
 					class="col-span-2 overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
 				>
-					<div
-						class="grid grid-cols-3 bg-slate-50 px-5 py-3 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
-					>
-						<div>Dönem</div>
-						<div class="text-center">DNO</div>
-						<div class="text-center">AKTS</div>
-					</div>
-					{#each gpaTerms as { term_name: string; term_gpa: number | null; akts_completed: number }[] as t}
-						<div
-							class="grid grid-cols-3 border-t border-black/5 px-5 py-3.5 text-sm dark:border-white/10"
-						>
-							<div class="font-medium">{t.term_name}</div>
+					<div class="overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
+						<div class="min-w-[22rem] sm:min-w-0">
 							<div
-								class="text-center font-bold {t.term_gpa && t.term_gpa >= 2.0
-									? 'text-emerald-600 dark:text-emerald-400'
-									: 'text-red-600 dark:text-red-400'}"
+								class="grid grid-cols-3 bg-slate-50 px-5 py-3 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
 							>
-								{t.term_gpa?.toFixed(2) ?? '—'}
+								<div class="min-w-0">Dönem</div>
+								<div class="text-center whitespace-nowrap">DNO</div>
+								<div class="text-center whitespace-nowrap">AKTS</div>
 							</div>
-							<div class="text-center text-slate-500">{t.akts_completed}</div>
+							{#each gpaTerms as { term_name: string; term_gpa: number | null; akts_completed: number }[] as t}
+								<div
+									class="grid grid-cols-3 border-t border-black/5 px-5 py-3.5 text-sm dark:border-white/10"
+								>
+									<div class="min-w-0 font-medium leading-snug break-words">{t.term_name}</div>
+									<div
+										class="text-center font-bold whitespace-nowrap {t.term_gpa && t.term_gpa >= 2.0
+											? 'text-emerald-600 dark:text-emerald-400'
+											: 'text-red-600 dark:text-red-400'}"
+									>
+										{t.term_gpa?.toFixed(2) ?? '—'}
+									</div>
+									<div class="text-center text-slate-500 whitespace-nowrap tabular-nums">{t.akts_completed}</div>
+								</div>
+							{/each}
 						</div>
-					{/each}
+					</div>
 				</div>
 			</div>
 
@@ -2730,24 +2785,24 @@
 				class="mb-4 overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5 print:shadow-none print:border-0"
 			>
 				<div
-					class="border-b border-black/10 bg-slate-50 px-6 py-4 dark:border-white/10 dark:bg-white/5 print:bg-white"
+					class="border-b border-black/10 bg-slate-50 px-4 py-4 dark:border-white/10 dark:bg-white/5 print:bg-white sm:px-6"
 				>
-					<div class="flex items-start justify-between gap-4">
-						<div>
+					<div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+						<div class="min-w-0">
 							<div class="text-xs font-bold uppercase tracking-widest text-slate-400">
 								Doğuş Üniversitesi
 							</div>
-							<div class="mt-1 text-lg font-bold text-slate-900 dark:text-slate-100">
+							<div class="mt-1 break-words text-lg font-bold text-slate-900 dark:text-slate-100">
 								Akademik Transkript
 							</div>
-							<div class="mt-1 text-sm text-slate-500">
+							<div class="mt-1 break-words text-sm text-slate-500">
 								{profile?.full_name ?? $user?.name ?? '—'} · No: {profile?.student_no ?? '—'}
 							</div>
-							<div class="text-xs text-slate-400">
-								{profile?.department ?? '—'} · {profile?.program ?? 'Lisans'}
+							<div class="break-words text-xs text-slate-400">
+								{profile?.department_name ?? '—'} · {profile?.program ?? 'Lisans'}
 							</div>
 						</div>
-						<div class="flex items-center gap-5 shrink-0">
+						<div class="flex shrink-0 flex-wrap items-center justify-between gap-4 border-t border-black/5 pt-4 sm:flex-nowrap sm:justify-end sm:border-t-0 sm:pt-0">
 							<div class="text-center">
 								<div class="text-xs font-semibold text-slate-400">Kümülatif GNO</div>
 								<div
@@ -2784,9 +2839,9 @@
 					class="mb-3 overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
 				>
 					<!-- Dönem başlığı -->
-					<div class="flex items-center justify-between bg-slate-100 px-5 py-3 dark:bg-white/10">
-						<div class="font-semibold text-slate-700 dark:text-slate-200">{term.term_name}</div>
-						<div class="flex gap-4 text-xs text-slate-500">
+					<div class="flex flex-col gap-2 bg-slate-100 px-4 py-3 dark:bg-white/10 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-5">
+						<div class="min-w-0 font-semibold leading-snug break-words text-slate-700 dark:text-slate-200">{term.term_name}</div>
+						<div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
 							<span
 								>Dönem AKTS: <strong class="text-slate-700 dark:text-slate-200"
 									>{term.term_akts}</strong
@@ -2804,31 +2859,34 @@
 						</div>
 					</div>
 					<!-- Ders satırları -->
-					<div class="overflow-x-auto">
-						<table class="w-full text-sm">
+					<p class="border-b border-black/5 bg-slate-50/90 px-3 py-1.5 text-[11px] text-slate-500 dark:border-white/10 dark:bg-white/5 dark:text-slate-400 sm:hidden">
+						Tabloyu yatay kaydırarak tam transkripti görebilirsiniz.
+					</p>
+					<div class="overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
+						<table class="min-w-[600px] w-full text-sm">
 							<thead class="bg-slate-50/80 text-xs font-semibold text-slate-500 dark:bg-white/5">
 								<tr>
-									<th class="px-5 py-2 text-left">Ders Kodu</th>
-									<th class="px-5 py-2 text-left">Ders Adı</th>
-									<th class="px-5 py-2 text-center">Kredi</th>
-									<th class="px-5 py-2 text-center">AKTS</th>
-									<th class="px-5 py-2 text-center">Not Puanı</th>
-									<th class="px-5 py-2 text-center">Harf Notu</th>
+									<th class="whitespace-nowrap px-5 py-2 text-left">Ders Kodu</th>
+									<th class="min-w-[12rem] px-5 py-2 text-left">Ders Adı</th>
+									<th class="whitespace-nowrap px-5 py-2 text-center">Kredi</th>
+									<th class="whitespace-nowrap px-5 py-2 text-center">AKTS</th>
+									<th class="whitespace-nowrap px-5 py-2 text-center">Not Puanı</th>
+									<th class="whitespace-nowrap px-5 py-2 text-center">Harf Notu</th>
 								</tr>
 							</thead>
 							<tbody>
 								{#each term.courses as c}
 									<tr class="border-t border-black/5 dark:border-white/10">
-										<td class="px-5 py-2.5 font-mono text-xs font-semibold text-slate-500"
+										<td class="whitespace-nowrap px-5 py-2.5 font-mono text-xs font-semibold text-slate-500"
 											>{c.code}</td
 										>
-										<td class="px-5 py-2.5 font-medium">{c.name}</td>
-										<td class="px-5 py-2.5 text-center text-xs text-slate-400">{c.credits}</td>
-										<td class="px-5 py-2.5 text-center text-xs text-slate-400">{c.akts}</td>
-										<td class="px-5 py-2.5 text-center text-xs text-slate-500"
+										<td class="max-w-[20rem] px-5 py-2.5 font-medium leading-snug break-words">{c.name}</td>
+										<td class="whitespace-nowrap px-5 py-2.5 text-center text-xs text-slate-400">{c.credits}</td>
+										<td class="whitespace-nowrap px-5 py-2.5 text-center text-xs text-slate-400">{c.akts}</td>
+										<td class="whitespace-nowrap px-5 py-2.5 text-center text-xs text-slate-500"
 											>{c.grade_point.toFixed(2)}</td
 										>
-										<td class="px-5 py-2.5 text-center">
+										<td class="whitespace-nowrap px-5 py-2.5 text-center">
 											<span
 												class="rounded-full px-2.5 py-0.5 text-xs font-bold {GRADE_COLOR[
 													c.letter
@@ -2853,12 +2911,12 @@
 					<div
 						class="mb-4 overflow-hidden rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5"
 					>
-						<div class="flex items-center justify-between gap-4">
-							<div>
+						<div class="flex flex-wrap items-start justify-between gap-4">
+							<div class="min-w-0 flex-1">
 								<div class="text-xs font-semibold text-slate-500 dark:text-slate-400">Program</div>
-								<div class="mt-1 text-sm font-bold">{curriculum.program ?? '—'}</div>
+								<div class="mt-1 break-words text-sm font-bold">{curriculum.program ?? '—'}</div>
 							</div>
-							<div class="text-right">
+							<div class="text-right shrink-0">
 								<div class="text-xs font-semibold text-slate-500 dark:text-slate-400">
 									Genel İlerleme
 								</div>
@@ -2892,9 +2950,9 @@
 						<div
 							class="mb-4 overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
 						>
-							<div class="flex items-center justify-between bg-slate-50 px-5 py-3 dark:bg-white/5">
-								<div class="font-semibold">{cat.name}</div>
-								<div class="text-xs text-slate-500">
+							<div class="flex flex-col gap-2 border-b border-black/10 bg-slate-50 px-4 py-3 dark:border-white/10 dark:bg-white/5 sm:flex-row sm:items-center sm:justify-between sm:gap-0 sm:px-5">
+								<div class="min-w-0 text-sm font-semibold leading-snug break-words sm:text-base">{cat.name}</div>
+								<div class="shrink-0 text-xs text-slate-500">
 									{done}/{total} tamamlandı
 									{#if ongoing > 0}<span
 											class="ml-1.5 rounded-full bg-sky-100 px-1.5 py-0.5 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
@@ -2902,6 +2960,11 @@
 										>{/if}
 								</div>
 							</div>
+							<p class="border-b border-black/5 bg-slate-50/90 px-3 py-1.5 text-[11px] text-slate-500 dark:border-white/10 dark:bg-white/5 dark:text-slate-400 sm:hidden">
+								Satırları yatay kaydırarak tüm sütunları görebilirsiniz.
+							</p>
+							<div class="overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
+								<div class="min-w-[620px]">
 							{#each cat.courses as c}
 								{@const statusColors = {
 									tamamlandi:
@@ -2920,7 +2983,7 @@
 									<div class="col-span-2 font-mono text-xs font-semibold text-slate-500">
 										{c.code}
 									</div>
-									<div class="col-span-6 font-medium">{c.name}</div>
+									<div class="col-span-6 min-w-0 font-medium leading-snug break-words">{c.name}</div>
 									<div class="col-span-1 text-center text-xs text-slate-400">{c.akts} AKTS</div>
 									<div class="col-span-2 text-center">
 										{#if c.grade}
@@ -2943,6 +3006,8 @@
 									</div>
 								</div>
 							{/each}
+								</div>
+							</div>
 						</div>
 					{/each}
 				</div>
@@ -2961,7 +3026,7 @@
 		{:else if apiKey === 'attendance'}
 			<div class="space-y-4">
 				<div class="flex flex-wrap items-end justify-between gap-3">
-					<label class="block min-w-[200px] flex-1">
+					<label class="block min-w-0 flex-1 sm:min-w-[200px]">
 						<span class="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-400">
 							Akademik dönem
 						</span>
@@ -3025,10 +3090,13 @@
 				</div>
 
 				<div
-					class="overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
+					class="-mx-1 overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5 sm:mx-0"
 				>
-					<div class="overflow-x-auto">
-						<table class="w-full text-sm">
+					<p class="border-b border-black/5 bg-slate-50/90 px-3 py-1.5 text-[11px] text-slate-500 dark:border-white/10 dark:bg-white/5 dark:text-slate-400 sm:hidden">
+						Tüm devamsızlık sütunlarını görmek için yatay kaydırın.
+					</p>
+					<div class="overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
+						<table class="min-w-[480px] w-full text-sm">
 							<thead
 								class="bg-slate-50 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
 							>
@@ -3116,7 +3184,7 @@
 							class="rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5"
 						>
 							<div class="flex items-start justify-between gap-3">
-								<div class="font-semibold">{ann.title}</div>
+								<div class="min-w-0 flex-1 font-semibold leading-snug break-words">{ann.title}</div>
 								<span
 									class="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600 dark:bg-white/10 dark:text-slate-300"
 								>
@@ -3154,12 +3222,12 @@
 					: sentMsgs.filter((m) => m.status !== 'deleted')}
 
 			<!-- Başlık + Yeni Mesaj -->
-			<div class="flex items-center justify-between">
-				<span class="text-xs text-slate-400">{msgs.length} mesaj</span>
+			<div class="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+				<span class="min-w-0 text-xs text-slate-400">{msgs.length} mesaj</span>
 				<button
 					on:click={() => (showCompose = true)}
 					type="button"
-					class="flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-400 transition-colors"
+					class="flex w-full shrink-0 items-center justify-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-400 transition-colors sm:w-auto"
 				>
 					Yeni Mesaj
 				</button>
@@ -3176,7 +3244,7 @@
 					>
 						<div class="flex items-start justify-between gap-3">
 							<div
-								class="font-semibold text-sm {apiKey === 'inbox' && !m.is_read
+								class="min-w-0 flex-1 font-semibold text-sm leading-snug break-words {apiKey === 'inbox' && !m.is_read
 									? 'text-sky-700 dark:text-sky-300'
 									: ''}"
 							>
@@ -3208,10 +3276,10 @@
 			<!-- Compose modal -->
 			{#if showCompose}
 				<div
-					class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+					class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 backdrop-blur-sm sm:p-4"
 				>
 					<div
-						class="w-full max-w-lg rounded-2xl border border-black/10 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-slate-900"
+						class="max-h-[min(90dvh,40rem)] w-full max-w-lg overflow-y-auto overscroll-contain rounded-2xl border border-black/10 bg-white p-5 shadow-2xl dark:border-white/10 dark:bg-slate-900 sm:p-6"
 					>
 						<div class="mb-5 flex items-center justify-between">
 							<div class="font-bold text-slate-800 dark:text-slate-100">Yeni Mesaj</div>
@@ -3350,12 +3418,12 @@
 						<div class="space-y-2">
 							{#each docRequests as req}
 								<div class="rounded-xl border border-black/5 p-4 dark:border-white/10">
-									<div class="flex items-center justify-between">
-										<span class="font-medium text-sm"
+									<div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+										<span class="min-w-0 text-sm font-medium leading-snug break-words"
 											>{req.document_type} — {req.document_subtype}</span
 										>
 										<span
-											class="rounded-full px-2 py-0.5 text-xs {req.status === 'tamamlandı'
+											class="shrink-0 self-start rounded-full px-2 py-0.5 text-xs sm:self-center {req.status === 'tamamlandı'
 												? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
 												: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'}"
 										>
@@ -3429,12 +3497,12 @@
 	</div>
 
 	<!-- Floating compose button (mesajlar sayfasında değilken) -->
-	{#if !['inbox', 'sent'].includes(apiKey) && !showCompose}
+		{#if !['inbox', 'sent'].includes(apiKey) && !showCompose}
 		<button
 			on:click={() => (showCompose = true)}
 			type="button"
 			title="Mesaj Yaz"
-			class="fixed bottom-6 right-6 z-40 flex h-11 w-11 items-center justify-center rounded-full bg-sky-500 text-sm font-bold leading-none text-white shadow-lg hover:bg-sky-400 transition-all hover:scale-105"
+			class="fixed bottom-[max(1.25rem,env(safe-area-inset-bottom))] right-[max(1.25rem,env(safe-area-inset-right))] z-40 flex h-11 w-11 items-center justify-center rounded-full bg-sky-500 text-sm font-bold leading-none text-white shadow-lg hover:bg-sky-400 transition-all hover:scale-105"
 		>
 			+
 		</button>
@@ -3442,9 +3510,9 @@
 
 	<!-- Compose modal (sayfa dışından açılınca) -->
 	{#if showCompose && !['inbox', 'sent'].includes(apiKey)}
-		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 backdrop-blur-sm sm:p-4">
 			<div
-				class="w-full max-w-lg rounded-2xl border border-black/10 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-slate-900"
+				class="max-h-[min(90dvh,40rem)] w-full max-w-lg overflow-y-auto overscroll-contain rounded-2xl border border-black/10 bg-white p-5 shadow-2xl dark:border-white/10 dark:bg-slate-900 sm:p-6"
 			>
 				<div class="mb-5 flex items-center justify-between">
 					<div class="font-bold text-slate-800 dark:text-slate-100">Yeni Mesaj</div>
