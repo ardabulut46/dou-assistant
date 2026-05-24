@@ -650,7 +650,6 @@
 			<!-- Nav -->
 			<nav class="flex-1 overflow-y-auto overflow-x-hidden px-3 pb-4 pt-2">
 				<div class="mb-3 px-3">
-					<div class="mb-1 text-[10px] font-bold tracking-widest text-slate-500">ASİSTAN</div>
 					<a
 						href={aiAskHref}
 						class="flex w-full items-center gap-2 rounded-lg bg-sky-500/15 px-3 py-2 text-[13px] font-semibold text-sky-300 ring-1 ring-sky-500/25 transition-colors hover:bg-sky-500/25"
@@ -843,13 +842,7 @@
 							href={aiAskHref}
 							class="rounded-lg bg-sky-500 px-3 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-sky-400"
 						>
-							AI'a Sor
-						</a>
-						<a
-							href="/"
-							class="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm transition-colors hover:bg-slate-50 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10"
-						>
-							← Asistan
+							AI Asistan
 						</a>
 						<slot name="actions" />
 					</div>
