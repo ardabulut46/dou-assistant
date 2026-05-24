@@ -71,6 +71,8 @@
 	let selectedAttendanceTermId = '';
 	/** Not listesi: seçilen akademik dönem */
 	let selectedGradesTermId = '';
+	/** Ders programı sekmesi: API `term_id` filtresi */
+	let selectedScheduleTermId = '';
 
 	function floorPct30Quota(weeks: number): number {
 		return weeks > 0 ? Math.floor(weeks * 0.3 + 1e-9) : 0;
@@ -503,6 +505,26 @@
 		}
 	}
 
+	async function reloadScheduleForTerm() {
+		if (!browser) return;
+		const token = localStorage.token ?? null;
+		if (!token) return;
+		loading = true;
+		loadErr = null;
+		try {
+			const tid =
+				selectedScheduleTermId && terms.some((x) => x.id === selectedScheduleTermId)
+					? selectedScheduleTermId
+					: undefined;
+			const r = await getDouStudentSchedule(token, tid);
+			schedule = r?.schedule ?? [];
+		} catch (e: unknown) {
+			loadErr = e instanceof Error ? e.message : 'Ders programı yüklenemedi.';
+		} finally {
+			loading = false;
+		}
+	}
+
 	// ---------------------------------------------------------------------------
 	// Veri yükleme
 	// ---------------------------------------------------------------------------
@@ -659,7 +681,22 @@
 				exams = r?.exams ?? [];
 			}
 			if (apiKey === 'schedule') {
-				const r = await getDouStudentSchedule(token).catch(() => null);
+				const tr = await getDouTerms(token).catch(() => []);
+				terms = tr ?? [];
+				if (terms.length) {
+					const def =
+						terms.find((t) => t.is_active)?.id ?? terms[terms.length - 1]?.id ?? '';
+					if (
+						!selectedScheduleTermId ||
+						!terms.some((x) => x.id === selectedScheduleTermId)
+					) {
+						selectedScheduleTermId = def;
+					}
+				} else {
+					selectedScheduleTermId = '';
+				}
+				const tid = selectedScheduleTermId ? selectedScheduleTermId : undefined;
+				const r = await getDouStudentSchedule(token, tid).catch(() => null);
 				schedule = r?.schedule ?? [];
 			}
 			if (apiKey === 'announcements') {
@@ -2120,7 +2157,29 @@
 			<!-- ================================================================ -->
 		{:else if apiKey === 'schedule'}
 			{@const DAYS = ['Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma']}
-			<div class="space-y-3">
+			<div class="space-y-4">
+				<div class="flex flex-wrap items-end justify-between gap-3">
+					<label class="block min-w-[200px] flex-1">
+						<span class="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-400">
+							Akademik dönem
+						</span>
+						<select
+							bind:value={selectedScheduleTermId}
+							on:change={() => reloadScheduleForTerm()}
+							disabled={!terms.length}
+							class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm font-medium outline-none dark:border-white/10 dark:bg-white/5 dark:text-slate-100 disabled:opacity-50"
+						>
+							{#each terms as t}
+								<option value={t.id}
+									>{(t.name && String(t.name).trim()) ||
+										[t.academic_year, t.season].filter(Boolean).join(' ') ||
+										t.id}</option
+								>
+							{/each}
+						</select>
+					</label>
+				</div>
+				<div class="space-y-3">
 				{#each DAYS as day}
 					{@const rows = schedule.filter((s) => s.day === day)}
 					{#if rows.length}
@@ -2154,9 +2213,10 @@
 					<div
 						class="rounded-xl border border-dashed border-black/15 p-8 text-center text-sm text-slate-400"
 					>
-						Ders programı yüklenemedi.
+						Bu dönem için programda görünecek kayıtlı ders bulunamadı.
 					</div>
 				{/if}
+				</div>
 			</div>
 
 			<!-- ================================================================ -->
