@@ -1598,6 +1598,8 @@ def list_student_grades(
     q = """
         SELECT ce.id AS enrollment_id, c.code AS course_code, c.name AS course_name,
                cs.term_id, ot.name AS term_name,
+               cs.midterm_weight_percent AS midterm_weight_percent,
+               cs.final_weight_percent AS final_weight_percent,
                g.midterm, g.final, g.makeup, g.letter_grade, g.is_published, g.is_finalized
         FROM obs_course_enrollments ce
         JOIN obs_course_sections cs ON ce.course_section_id = cs.id
@@ -1618,6 +1620,10 @@ def list_student_grades(
             "course_name": r.get("course_name") or "",
             "term_id": _str_id(r["term_id"]),
             "term_name": r.get("term_name") or "",
+            "midterm_weight_percent": _mapping_weight_pct(
+                r, "midterm_weight_percent", 40.0
+            ),
+            "final_weight_percent": _mapping_weight_pct(r, "final_weight_percent", 60.0),
             "midterm": _num(r.get("midterm")),
             "final": _num(r.get("final")),
             "makeup": _num(r.get("makeup")),

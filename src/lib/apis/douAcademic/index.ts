@@ -156,6 +156,10 @@ export type DouGradeEntry = {
 	course_name: string;
 	term_id: string;
 	term_name?: string;
+	/** Şubede akademisyen tarafından tanımlı vize sınav yüzdesi (yoksa API 40 döner). */
+	midterm_weight_percent?: number;
+	/** Şubede tanımlı final sınav yüzdesi (yoksa 60). */
+	final_weight_percent?: number;
 	midterm: number | null;
 	final: number | null;
 	makeup: number | null;

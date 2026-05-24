@@ -151,6 +151,78 @@
 		});
 	}
 
+	type MockCourseRow = (typeof mockCourses)[number];
+
+	/** Vize/final ağırlıklarıyla 100 üzerinden ders notu ve katkı parçaları */
+	function getMockCourseBreakdown(c: MockCourseRow): {
+		vNum: number;
+		fEff: number;
+		vizePart: number;
+		finalPart: number;
+		total: number;
+		usesMakeup: boolean;
+	} {
+		const vNum = Number(c.vize ?? 0);
+		const m = c.makeup;
+		const usesMakeup = m !== null && m !== undefined;
+		const fEff = Number((usesMakeup ? m : c.final) ?? 0);
+		const vizePart = (vNum * c.vizeWeight) / 100;
+		const finalPart = (fEff * c.finalWeight) / 100;
+		return {
+			vNum,
+			fEff,
+			vizePart,
+			finalPart,
+			total: vizePart + finalPart,
+			usesMakeup
+		};
+	}
+
+	/** Şubede ağırlık yok / eski kayıtta API varsayılanı (40/60). */
+	const LISTED_GRADE_VIZE_PCT = 40;
+	const LISTED_GRADE_FINAL_PCT = 60;
+
+	function listedGradeWeighted100(g: DouGradeEntry): {
+		vNum: number;
+		fNum: number;
+		vPart: number;
+		fPart: number;
+		total: number;
+		usesMakeup: boolean;
+		vw: number;
+		wf: number;
+	} | null {
+		if (g.midterm === null || g.midterm === undefined) return null;
+		const usesMakeup = g.makeup !== null && g.makeup !== undefined;
+		const fSrc = usesMakeup ? g.makeup : g.final;
+		if (fSrc === null || fSrc === undefined) return null;
+		const vNum = Number(g.midterm);
+		const fNum = Number(fSrc);
+		if (Number.isNaN(vNum) || Number.isNaN(fNum)) return null;
+		const vwRaw = g.midterm_weight_percent;
+		const wfRaw = g.final_weight_percent;
+		const vw =
+			typeof vwRaw === 'number' && Number.isFinite(vwRaw) && vwRaw >= 0
+				? vwRaw
+				: LISTED_GRADE_VIZE_PCT;
+		const wf =
+			typeof wfRaw === 'number' && Number.isFinite(wfRaw) && wfRaw >= 0
+				? wfRaw
+				: LISTED_GRADE_FINAL_PCT;
+		const vPart = (vNum * vw) / 100;
+		const fPart = (fNum * wf) / 100;
+		return {
+			vNum,
+			fNum,
+			vPart,
+			fPart,
+			total: vPart + fPart,
+			usesMakeup,
+			vw,
+			wf
+		};
+	}
+
 	$: mockAno = (() => {
 		if (mockCourses.length === 0) return 0;
 		const totalPoints = mockCourses.reduce((acc, c) => acc + c.gradePoint * c.akts, 0);
@@ -2113,6 +2185,12 @@
 						</select>
 					</label>
 				</div>
+				<p class="text-[11px] leading-snug text-slate-500 dark:text-slate-400">
+					<strong>Ort.</strong> sütunu, her dersin <strong>kayıtlı olduğun şubesinde akademisyence girilmiş</strong>
+					vize / final sınav yüzdeleriyle 100 üzerinden hesaplanır (büt notu girilmişse final payında kullanılır).
+					Yüzdeler OBS’te hâlen tanımlı değilse gösterge <strong>%{LISTED_GRADE_VIZE_PCT}/{LISTED_GRADE_FINAL_PCT}</strong>
+					varsayımına düşebilir — detay için satırdaki formül çizgisine bakın.
+				</p>
 
 			{#if gradesGrouped.length}
 				<div class="space-y-8">
@@ -2144,11 +2222,18 @@
 												<th class="px-4 py-3 text-center">Final</th>
 												<th class="px-4 py-3 text-center">Büt</th>
 												<th class="px-4 py-3 text-center">Harf</th>
+												<th
+													class="px-4 py-3 text-center whitespace-nowrap"
+													title="Şubede tanımlı vize/final yüzdeleriyle 100 üzerinden (hocanın girdiği paylar)."
+												>
+													Ort.<span class="text-[10px] font-normal opacity-70">100</span>
+												</th>
 												<th class="px-4 py-3 text-center">Durum</th>
 											</tr>
 										</thead>
 										<tbody>
 											{#each grp.rows as g}
+												{@const wg = listedGradeWeighted100(g)}
 												<tr
 													class="border-t border-black/5 hover:bg-slate-50/50 dark:border-white/10 transition-colors"
 												>
@@ -2171,6 +2256,42 @@
 																] ?? 'bg-slate-100 text-slate-600'}">{String(g.letter_grade).trim()}</span
 															>
 														{:else}<span class="text-slate-300">—</span>{/if}
+													</td>
+													<td class="px-4 py-3 text-center align-middle">
+														{#if wg}
+															<details
+																class="mx-auto max-w-[5.75rem] text-center [&>summary::-webkit-details-marker]:hidden [&>summary]:list-none"
+															>
+																<summary class="cursor-pointer select-none pb-px">
+																	<span
+																		class="text-sm font-bold tabular-nums text-slate-800 dark:text-slate-100"
+																		>{wg.total.toFixed(2)}</span
+																	>
+																	<span
+																		class="-mt-px block text-[9px] font-medium leading-none text-slate-400 dark:text-slate-500"
+																		>⋯</span
+																	>
+																</summary>
+																<div
+																	class="mt-1 border-t border-black/10 pt-1 text-[10px] leading-tight text-slate-600 dark:border-white/10 dark:text-slate-400"
+																>
+																	<div class="font-mono tabular-nums opacity-95">
+																		<span class="text-[9px] text-slate-500 dark:text-slate-400">{wg.vw}%·{wg.wf}%</span><br />
+																		({wg.vw}×{wg.vNum}+{wg.wf}×{wg.fNum})÷100={wg.total.toFixed(2)}
+																	</div>
+																	{#if wg.usesMakeup}
+																		<div class="mt-0.5 text-[9px] text-amber-800 dark:text-amber-400">
+																			Final için büt
+																		</div>
+																	{/if}
+																</div>
+															</details>
+														{:else}
+															<span
+																class="text-slate-300"
+																title="Vize ile final veya büt birlikte girilince hesaplanır">—</span
+															>
+														{/if}
 													</td>
 													<td class="px-4 py-3 text-center text-xs">
 														{#if g.is_published}<span class="text-emerald-600 dark:text-emerald-400"
@@ -2259,12 +2380,16 @@
 									<th class="px-4 py-3 text-center">Vize (%/Not)</th>
 									<th class="px-4 py-3 text-center">Final (%/Not)</th>
 									<th class="px-4 py-3 text-center">Büt (Not)</th>
+									<th class="px-4 py-3 text-center min-w-[7.5rem]" title="100 üzerinden ağırlıklı ara not"
+										>Ortalama<br /><span class="font-normal opacity-75">(100)</span></th
+									>
 									<th class="px-4 py-3 text-center">Harf</th>
 									<th class="px-4 py-3 text-right">İşlem</th>
 								</tr>
 							</thead>
 							<tbody>
 								{#each mockCourses as c, i}
+									{@const br = getMockCourseBreakdown(c)}
 									<tr class="border-t border-black/5 dark:border-white/10 hover:bg-slate-50/50 transition-all duration-200">
 										<td class="px-4 py-3">
 											<div class="flex flex-col">
@@ -2339,6 +2464,26 @@
 												/>
 											</div>
 										</td>
+										<td class="px-4 py-3 text-center align-top">
+											<div
+												class="text-base font-black tabular-nums text-slate-800 dark:text-slate-100"
+											>
+												{br.total.toFixed(2)}
+											</div>
+											<div
+												class="mx-auto mt-1 max-w-[11rem] text-center text-[9px] leading-snug text-slate-400 dark:text-slate-500 font-mono"
+											>
+												({c.vizeWeight}%×{br.vNum})+({c.finalWeight}%×{br.fEff})<br />
+												={br.vizePart.toFixed(2)}+{br.finalPart.toFixed(2)}=<span
+													class="font-bold text-slate-500 dark:text-slate-400">{br.total.toFixed(2)}</span
+												>
+											</div>
+											{#if br.usesMakeup}
+												<div class="mt-1 text-[9px] text-amber-700/90 dark:text-amber-400/90">
+													Final yüzdesi ({c.finalWeight}%) için büt notu kullanıldı.
+												</div>
+											{/if}
+										</td>
 										<td class="px-4 py-3 text-center">
 											<span
 												class="inline-block min-w-[2.5rem] rounded-full px-2 py-0.5 text-xs font-black {GRADE_COLOR[
@@ -2362,7 +2507,7 @@
 									</tr>
 								{:else}
 									<tr>
-										<td colspan="7" class="px-4 py-12 text-center">
+										<td colspan="8" class="px-4 py-12 text-center">
 											<div class="text-slate-400 text-sm">Hesaplanacak ders bulunamadı.</div>
 											<button
 												on:click={initMockFromEnrollments}
@@ -2384,11 +2529,21 @@
 						<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-amber-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
 						</svg>
-						<div class="text-xs text-amber-800 dark:text-amber-200 leading-normal">
-							<p class="font-bold mb-1">Not Hesaplama Hakkında Bilgilendirme</p>
-							Bu araç, Doğuş Üniversitesi Ön Lisans ve Lisans Eğitim-Öğretim ve Sınav Yönetmeliği (Madde 34 ve 35) baz alınarak hazırlanmıştır. 
-							Harf notu baremleri (A+, A, B+...) yönetmelikteki puan aralıklarına göre otomatik hesaplanır. 
-							AGNO tahmini, transkriptinizdeki toplam AKTS ve mevcut GNO verileriniz kullanılarak hesaplanır.
+						<div class="text-xs text-amber-800 dark:text-amber-200 leading-normal space-y-2">
+							<p class="font-bold">Not Hesaplama Hakkında Bilgilendirme</p>
+							<p class="opacity-95">
+								<strong>Ders notu (100 üzerinden):</strong> Yüzdeler o dersteki sınav payını gösterir. Ortalama =
+								<span class="font-mono text-[11px] whitespace-normal sm:whitespace-nowrap"
+									>(Vize × Vize%) / 100 + (Final × Final%) / 100</span
+								>. Büt yazılmışsa son terimde Final yerine <strong>büt</strong> notu, yine Final ağırlığı ile kullanılır.
+								Aşağıda her satırda bu matematik üçümlü olarak (ör.&nbsp;26,00&nbsp;+&nbsp;30,00) gösterilir.
+								<strong>ANO</strong> ise harfin 4'lük puana karşılığı ile AKTS ağırlıklı olarak hesaplanır.
+							</p>
+							<p class="opacity-90">
+								Bu araç, Doğuş Üniversitesi Ön Lisans ve Lisans Eğitim-Öğretim ve Sınav Yönetmeliği (Madde 34 ve 35)
+								baz alınarak hazırlanmıştır. Harf notu baremleri (A+, A, B+…) otomatik uygulanır. AGNO tahmini için
+								transkript AKTS'i ve mevcut GNO kullanılır.
+							</p>
 						</div>
 					</div>
 				</div>
