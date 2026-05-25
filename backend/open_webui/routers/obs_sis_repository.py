@@ -717,6 +717,44 @@ def _canonical_half_from_program_semester(ps: int) -> tuple[int, int]:
     return (cy, hn)
 
 
+def _catalog_row_labels_tr(
+    eff_program_sem_ix: Optional[int],
+    semester_no_any: Any,
+    class_year_any: Any,
+) -> tuple[str, str]:
+    """Katalog/liste tablolarında sınıf ve Güz/Bahar sütunları."""
+
+    clab_main = ""
+    halb_main = ""
+    if eff_program_sem_ix is not None:
+        try:
+            ps = max(1, int(eff_program_sem_ix))
+            cn_cy, cn_hf = _canonical_half_from_program_semester(ps)
+            clab_main = f"{int(cn_cy)}. sınıf"
+            halb_main = "Güz" if int(cn_hf) == 1 else "Bahar"
+        except (TypeError, ValueError):
+            clab_main, halb_main = "", ""
+
+    if not clab_main:
+        try:
+            cy = int(class_year_any or 0)
+            clab_main = f"{cy}. sınıf" if cy >= 1 else "—"
+        except (TypeError, ValueError):
+            clab_main = "—"
+    hf_l = "—"
+    try:
+        sn = int(semester_no_any)
+        if sn == 1:
+            hf_l = "Güz"
+        elif sn == 2:
+            hf_l = "Bahar"
+    except (TypeError, ValueError):
+        pass
+    if not halb_main or halb_main == "—":
+        halb_main = hf_l
+    return clab_main, halb_main
+
+
 def _course_placement_visible_for_student(
     student_dept_id: Optional[str],
     student_program_semester: int,
@@ -727,10 +765,12 @@ def _course_placement_visible_for_student(
 ) -> bool:
     """Bölüm eşiti + kart (program yılı) süzümü.
 
-    **Öncelik:** ``_effective_course_program_semester_index`` öğrenci ``program_semester_number`` ile
-    karşılaştırılır (çoğu ``obs_courses`` satırı burada yakalanır).
+    ``_effective_course_program_semester_index`` öğrenci ``program_semester_number`` ile
+    uyuyorsa kabul edilir.
 
-    **Yedek:** İndeks hesaplanamazsa ``class_year`` + ``semester_no`` ∈ {1, 2} (Güz/Bahar) klasik dizilimi.
+    Ek olarak kolon uyumsuzluğunda ``class_year`` + ``semester_no`` (klasik 1–4 sınıf, 1–2 yarıyıl)
+    öğrencinin program yarıyılına karşı düşüyorsa müfredat satırı rakamı yüzünden süzülmez.
+    İndeks üretilemiyorsa yalnızca bu klasik ikili kullanılır.
     """
 
     if not student_dept_id or not course_dept_id:
@@ -760,11 +800,19 @@ def _course_placement_visible_for_student(
     eff = _effective_course_program_semester_index(
         curriculum_semester, semester_no, class_year
     )
-    if eff is not None:
-        return eff == stud_ps_i
-
+    canonical_ok = False
     if ccy >= 1 and csn_int is not None and 1 <= csn_int <= 2:
-        return (ccy, csn_int) == (canon_cy, canon_sn_half)
+        canonical_ok = (ccy, csn_int) == (canon_cy, canon_sn_half)
+
+    if eff is not None and eff == stud_ps_i:
+        return True
+    # Katalogda ``curriculum_semester`` rakamı yanlış/çakışılı dolduysa tek başına filtreyi koparır;
+    # ``class_year`` + ``semester_no`` ikilisi kullanıcı yarıyılıyla örtüşüyorsa yine uygun say.
+    if canonical_ok:
+        return True
+
+    if eff is not None:
+        return False
     return False
 
 
@@ -801,6 +849,21 @@ def _effective_course_program_semester_index(
     if v_sem is not None:
         return v_sem
     return _course_semester_index(class_year, None)
+
+
+def _catalog_display_program_semester_index(
+    curriculum_semester: Any,
+    semester_no: Any,
+    class_year: Any,
+) -> Optional[int]:
+    """Tablo «Sınıf / Yarıyıl» için indeks: önce ``_course_semester_index`` (`registration_priority_tier` ile aynı mantık), eksiklerde etkin indeks."""
+
+    idx = _course_semester_index(class_year, curriculum_semester)
+    if idx is not None:
+        return idx
+    return _effective_course_program_semester_index(
+        curriculum_semester, semester_no, class_year
+    )
 
 
 def _is_first_two_curriculum_semesters(class_year: Any, curriculum_semester: Any) -> bool:
@@ -988,6 +1051,87 @@ def _course_matches_student_program_semester_card(
         semester_no,
         class_year,
     )
+
+
+OBS_MANDATORY_PLAN_DENIED_MSG_TR = (
+    "Döneminize göre bu zorunlu dersleri almanız gerekmektedir."
+)
+
+
+def planned_course_ids_for_mandatory_gate_submit(
+    db: Session,
+    student_profile_id: str,
+    term_id: str,
+    *,
+    flow: str,
+    enrollment_ids_to_drop: Optional[list[str]] = None,
+) -> set[str]:
+    """Danışman onayına göndermeden önce: bu dönemin planında hangi ``course_id``'ler yer alıyor.
+
+    ``registration``: taslak (kayıt) + henüz bırakılmayan aktif/onay bekleyen satırlar (ekle‑bırak taslakları hariç).
+    ``add_drop``: bırakma listesinden çıkarılmış aktifler + ``add_drop`` taslakları; ``pending_drop`` sayılmaz."""
+
+    tid = str(term_id or "").strip()
+    raw_flow = flow if flow in ("registration", "add_drop") else "registration"
+    drop_set = {
+        str(x).strip().lower().replace("{", "").replace("}", "").replace("-", "")
+        for x in (enrollment_ids_to_drop or [])
+        if str(x).strip()
+    }
+
+    rows = (
+        db.execute(
+            text(
+                """
+                SELECT cs.course_id::text AS cid, ce.status AS st,
+                       COALESCE(ce.enrollment_reason, '') AS enr_reason,
+                       LOWER(TRIM(BOTH FROM ce.id::text)) AS eid
+                FROM obs_course_enrollments ce
+                JOIN obs_course_sections cs ON ce.course_section_id = cs.id
+                WHERE ce.student_id = :spid
+                  AND LOWER(TRIM(BOTH FROM cs.term_id::text)) = LOWER(TRIM(BOTH FROM :tid))
+                """
+            ),
+            {"spid": student_profile_id, "tid": tid},
+        )
+        .mappings()
+        .all()
+    )
+    out: set[str] = set()
+    for r in rows:
+        st_raw = str(r.get("st") or "").strip().lower()
+        cid_raw = _str_id(r.get("cid"))
+        if not cid_raw:
+            continue
+        er = str(r.get("enr_reason") or "").strip().lower()
+        eid = str(r.get("eid") or "").strip()
+
+        def _nid(s: str) -> str:
+            return s.lower().replace("{", "").replace("}", "").replace("-", "")
+
+        eid_cmp = _nid(eid) if eid else ""
+
+        if st_raw == "dropped":
+            continue
+        if st_raw == "pending_drop":
+            continue
+        if st_raw == "active" and eid_cmp and eid_cmp in drop_set:
+            continue
+
+        if raw_flow == "registration":
+            if st_raw == "draft" and er in ("", "registration"):
+                out.add(cid_raw)
+                continue
+            if st_raw in ("active", "pending") and er != "add_drop":
+                out.add(cid_raw)
+        else:
+            if st_raw == "active":
+                out.add(cid_raw)
+            elif st_raw == "draft" and er == "add_drop":
+                out.add(cid_raw)
+            elif st_raw == "pending" and er == "add_drop":
+                out.add(cid_raw)
+    return out
 
 
 def mandate_backlog_remaining(
@@ -2122,7 +2266,7 @@ def list_enrollments(
     for r in rows:
         room = r.get("classroom_code") or r.get("classroom_name") or ""
         cid_en = _str_id(r.get("course_id"))
-        ptier, plab = (
+        ptier, _ = (
             registration_priority_tier(db, spid, cid_en) if cid_en else (3, "")
         )
         ct_raw = r.get("type") or ""
@@ -2167,7 +2311,7 @@ def list_enrollments(
                 "status": r.get("status") or "",
                 "enrollment_reason": r.get("enrollment_reason") or "",
                 "registration_priority_tier": ptier,
-                "registration_priority_label": plab,
+                "registration_priority_label": "",
                 "add_drop_curriculum_slot_match": slot_ok,
             }
         )
@@ -2801,8 +2945,143 @@ def available_sections(
             )
         ).first()
         tid = _str_id(row[0]) if row else None
+    if listing_mode == "add_drop" and not tid:
+        ccy_can, csn_half_can = _canonical_half_from_program_semester(int(psn_student))
+        meta_side_early_nt = {
+            "program_semester_number": int(psn_student),
+            "department_id": stud_dept or "",
+            "curriculum_filter_active": bool(stud_dept),
+            "canonical_class_year": ccy_can,
+            "canonical_semester_half": csn_half_can,
+            "sections_in_terms_total": 0,
+            "sections_query_rows_student": 0,
+            "real_section_rows_emitted": 0,
+            "offer_placeholder_rows": 0,
+            "courses_pending_sections": [],
+            "add_drop_sections_empty_hint": "Dönem seçilmemiş.",
+            "registration_sections_empty_hint": "",
+        }
+        return None, [], meta_side_early_nt
+    if listing_mode == "add_drop" and not stud_dept:
+        ccy_can, csn_half_can = _canonical_half_from_program_semester(int(psn_student))
+        meta_side_early = {
+            "program_semester_number": int(psn_student),
+            "department_id": "",
+            "curriculum_filter_active": False,
+            "canonical_class_year": ccy_can,
+            "canonical_semester_half": csn_half_can,
+            "sections_in_terms_total": 0,
+            "sections_query_rows_student": 0,
+            "real_section_rows_emitted": 0,
+            "offer_placeholder_rows": 0,
+            "courses_pending_sections": [],
+            "add_drop_sections_empty_hint": "Öğrenci kaydına bölüm atanmamış; ders listesi oluşturulamıyor.",
+            "registration_sections_empty_hint": "",
+        }
+        return tid, [], meta_side_early
+
+    if listing_mode == "registration" and not stud_dept:
+        ccy_can, csn_half_can = _canonical_half_from_program_semester(int(psn_student))
+        meta_side_early_reg = {
+            "program_semester_number": int(psn_student),
+            "department_id": "",
+            "curriculum_filter_active": False,
+            "canonical_class_year": ccy_can,
+            "canonical_semester_half": csn_half_can,
+            "sections_in_terms_total": 0,
+            "sections_query_rows_student": 0,
+            "real_section_rows_emitted": 0,
+            "offer_placeholder_rows": 0,
+            "courses_pending_sections": [],
+            "add_drop_sections_empty_hint": "",
+            "registration_sections_empty_hint": (
+                "Öğrenci kaydına bölüm atanmamış; ders listesi oluşturulamıyor."
+            ),
+        }
+        return tid, [], meta_side_early_reg
+
     tcands_list: list[str] = []
-    q = """
+    params: dict[str, Any] = {"spid": spid}
+    # Kayıt + ekle-bırakta öğrenci bölümü ve dönem uygunsa liste ``obs_courses`` + LEFT JOIN şube:
+    # katalog mantığı — şubesiz kodlar da tabloda satır olarak görünür.
+    listing_catalog = False
+    if tid:
+        tcands_raw = candidate_term_ids_for_student_dropdown(db, spid, str(tid).strip())
+        tcands_list = [_str_id(x) for x in (tcands_raw or []) if _str_id(x)]
+        anchor = _str_id(tid)
+        if anchor and anchor not in tcands_list:
+            tcands_list.insert(0, anchor)
+        if not tcands_list and anchor:
+            tcands_list = [anchor]
+        term_ph = ",".join(f":tsec{i}" for i in range(len(tcands_list)))
+        for i, xid in enumerate(tcands_list):
+            params[f"tsec{i}"] = xid
+
+        listing_catalog = bool(
+            listing_mode in ("add_drop", "registration") and bool(stud_dept)
+        )
+
+        if listing_catalog:
+            # PostgreSQL: IN (('a','b')) bir satır (record) sayılır; IN ('a','b') olmalı.
+            enr_clause = "'active', 'pending', 'draft', 'pending_drop'"
+            q = f"""
+        SELECT cs.id AS id,
+               c.id AS course_id,
+               CAST(c.department_id AS TEXT) AS course_department_id,
+               c.code AS course_code,
+               c.name AS course_name,
+               c.credits,
+               c.akts,
+               c.class_year,
+               c.curriculum_semester,
+               c.semester_no,
+               COALESCE(c.type, '') AS course_type,
+               c.is_mandatory,
+               cs.day_of_week,
+               cs.start_time,
+               cs.end_time,
+               COALESCE(cs.capacity, 0) AS capacity,
+               cr.code AS classroom_code,
+               ins_u.name AS instructor_name,
+               CASE WHEN cs.id IS NULL THEN 0 ELSE (
+                   (SELECT COUNT(*) FROM obs_course_enrollments ce2
+                    WHERE ce2.course_section_id = cs.id
+                      AND ce2.status IN ({enr_clause})
+                   )
+               ) END AS enrolled
+        FROM obs_courses c
+        INNER JOIN obs_departments dep ON dep.id = c.department_id
+        LEFT JOIN obs_course_sections cs
+          ON cs.course_id = c.id
+         AND cs.term_id IN ({term_ph})
+         AND NOT EXISTS (
+            SELECT 1 FROM obs_course_enrollments ce_own
+            WHERE ce_own.course_section_id = cs.id
+              AND ce_own.student_id = :spid
+              AND ce_own.status IN ({enr_clause})
+         )
+        LEFT JOIN obs_classrooms cr ON cs.classroom_id = cr.id
+        LEFT JOIN obs_academic_profiles ap ON cs.instructor_id = ap.id
+        LEFT JOIN "user" ins_u ON ins_u.id = ap.user_id
+        WHERE CAST(c.department_id AS TEXT) = CAST(:ad_student_dept AS TEXT)
+          AND NOT EXISTS (
+            SELECT 1 FROM obs_course_enrollments cex
+            JOIN obs_course_sections csx ON cex.course_section_id = csx.id
+            WHERE cex.student_id = :spid
+              AND csx.course_id = c.id
+              AND csx.term_id IN ({term_ph})
+              AND cex.status IN ({enr_clause})
+          )
+        ORDER BY COALESCE(dep.name, ''),
+                 c.class_year NULLS LAST,
+                 c.semester_no NULLS LAST,
+                 c.is_mandatory DESC NULLS LAST,
+                 COALESCE(TRIM(BOTH FROM c.name), '')
+        """
+            params["ad_student_dept"] = stud_dept
+
+    if not listing_catalog:
+        q = """
         SELECT cs.id, c.id AS course_id,
                CAST(c.department_id AS TEXT) AS course_department_id,
                c.code AS course_code, c.name AS course_name,
@@ -2822,30 +3101,16 @@ def available_sections(
               AND ce.status IN ('active', 'pending', 'draft', 'pending_drop')
         )
         """
-    params: dict[str, Any] = {"spid": spid}
-    if tid:
-        # Liste sayfasında süre FK'si enrolment satırlarından farklı UUID olabilir;
-        # ``list_enrollments`` ile aynı obs_terms öbeğini kullan ki şube listesi bomboş kalmasın.
-        tcands_raw = candidate_term_ids_for_student_dropdown(db, spid, str(tid).strip())
-        tcands_list = [_str_id(x) for x in (tcands_raw or []) if _str_id(x)]
-        anchor = _str_id(tid)
-        if anchor and anchor not in tcands_list:
-            tcands_list.insert(0, anchor)
-        if not tcands_list and anchor:
-            tcands_list = [anchor]
-
-        term_ph = ",".join(f":tsec{i}" for i in range(len(tcands_list)))
-        for i, xid in enumerate(tcands_list):
-            params[f"tsec{i}"] = xid
-
-        q += f" AND cs.term_id IN ({term_ph})"
-        q += f"""
+        if tid:
+            term_ph_l = ",".join(f":tsec{i}" for i in range(len(tcands_list)))
+            q += f" AND cs.term_id IN ({term_ph_l})"
+            q += f"""
         AND NOT EXISTS (
             SELECT 1 FROM obs_course_enrollments cex
             JOIN obs_course_sections csx ON cex.course_section_id = csx.id
             WHERE cex.student_id = :spid
               AND csx.course_id = c.id
-              AND csx.term_id IN ({term_ph})
+              AND csx.term_id IN ({term_ph_l})
               AND cex.status IN ('active', 'pending', 'draft', 'pending_drop')
         )
         """
@@ -2886,12 +3151,33 @@ def available_sections(
             if bcod:
                 backlog_bypass_codes.add(bcod)
 
-    rows = db.execute(text(q), params).mappings().all()
+    # Öğrenci listesi sorgusu, aynı dönemde o dersten zaten kayıtlı/taaslak varsa TÜM şubeleri
+    # dışarı atar; kümeği bu satırlardan doldurmak «şube yok» placeholder'ını yanlış tetikler.
+    # Placeholder yalnızca seçilen süre öbeğinde gerçekten hiç şube satırı yoksa gösterilir.
     codes_with_section_in_sql_query: set[str] = set()
-    for r_cs in rows:
-        qccc = str(r_cs.get("course_code") or "").strip()
-        if qccc:
-            codes_with_section_in_sql_query.add(qccc)
+    if tcands_list:
+        tcode_ph = ",".join(f":tccd{i}" for i in range(len(tcands_list)))
+        pb_codes = {f"tccd{i}": tcands_list[i] for i in range(len(tcands_list))}
+        if listing_mode in ("add_drop", "registration") and stud_dept:
+            pb_codes["cc_dept_ad"] = stud_dept
+        for cr in db.execute(
+            text(
+                f"""
+                SELECT DISTINCT c.code AS course_code
+                FROM obs_course_sections cs
+                JOIN obs_courses c ON cs.course_id = c.id
+                WHERE cs.term_id IN ({tcode_ph})
+                  AND COALESCE(TRIM(c.code), '') <> ''
+                  {"" if not (listing_mode in ("add_drop", "registration") and stud_dept) else "AND CAST(c.department_id AS TEXT) = CAST(:cc_dept_ad AS TEXT) "}
+                """
+            ),
+            pb_codes,
+        ).mappings().all():
+            qccc = str(cr.get("course_code") or "").strip()
+            if qccc:
+                codes_with_section_in_sql_query.add(qccc)
+
+    rows = db.execute(text(q), params).mappings().all()
 
     ccy_can, csn_half_can = _canonical_half_from_program_semester(int(psn_student))
     meta_side = {
@@ -2923,7 +3209,7 @@ def available_sections(
         )
         cur_sem_disp: Optional[int] = eff_cs_ix
 
-        placement_ok = _course_placement_visible_for_student(
+        placement_ok = listing_catalog or _course_placement_visible_for_student(
             stud_dept,
             psn_student,
             cdept,
@@ -2970,12 +3256,23 @@ def available_sections(
                 n_drop_pass_code_dept += 1
                 continue
 
-        ptier, plab = (
+        ptier, _ = (
             registration_priority_tier(db, spid, cid) if cid else (3, "")
+        )
+        sec_id_here = _str_id(r.get("id"))
+        no_section_catalog = bool(listing_catalog and not sec_id_here)
+        plab_eff = "Şube yok" if no_section_catalog else ""
+        catalog_ps_display = _catalog_display_program_semester_index(
+            cs_raw, r.get("semester_no"), r.get("class_year")
+        )
+        cat_cls_tr, cat_half_tr = _catalog_row_labels_tr(
+            catalog_ps_display,
+            r.get("semester_no"),
+            r.get("class_year"),
         )
         out.append(
             {
-                "id": _str_id(r["id"]),
+                "id": sec_id_here,
                 "course_id": cid or "",
                 "course_code": r.get("course_code") or "",
                 "course_name": r.get("course_name") or "",
@@ -2984,6 +3281,8 @@ def available_sections(
                 "type": ct_avail,
                 "curriculum_semester": cur_sem_disp,
                 "is_mandatory_course": man_flag,
+                "catalog_class_label": cat_cls_tr,
+                "catalog_half_label": cat_half_tr,
                 "instructor_name": r.get("instructor_name") or "",
                 "day_of_week": normalize_weekday_tr(r.get("day_of_week")),
                 "start_time": _fmt_time(r.get("start_time")),
@@ -2992,13 +3291,13 @@ def available_sections(
                 "capacity": cap,
                 "enrolled": enr,
                 "registration_priority_tier": ptier,
-                "registration_priority_label": plab,
+                "registration_priority_label": plab_eff,
+                **({"offer_placeholder": True} if no_section_catalog else {}),
             }
         )
 
-    offer_placeholder_rows = 0
     elective_slot_locked = bool(bl_rows_ad)
-    if listing_mode in ("add_drop", "registration") and stud_dept:
+    if listing_mode in ("add_drop", "registration") and stud_dept and not listing_catalog:
         codes_seen_offer: set[str] = {(x.get("course_code") or "").strip() for x in out if x.get("course_code")}
         mids_ps = mandatory_course_ids_program_semester(db, stud_dept, psn_student)
 
@@ -3059,6 +3358,25 @@ def available_sections(
             ptier_ph, _ = (
                 registration_priority_tier(db, spid, cid_hole) if cid_hole else (9, "")
             )
+            catalog_ps_hole = (
+                _catalog_display_program_semester_index(
+                    rb.get("curriculum_semester"),
+                    rb.get("semester_no"),
+                    rb.get("class_year"),
+                )
+                if rb
+                else None
+            )
+            if catalog_ps_hole is None and eff_hole is not None:
+                try:
+                    catalog_ps_hole = int(eff_hole)
+                except (TypeError, ValueError):
+                    catalog_ps_hole = None
+            ch_cls, ch_half = _catalog_row_labels_tr(
+                catalog_ps_hole,
+                rb.get("semester_no") if rb else None,
+                rb.get("class_year") if rb else None,
+            )
             out.append(
                 {
                     "id": "",
@@ -3070,6 +3388,8 @@ def available_sections(
                     "type": str((rb.get("course_type") or "") if rb else ""),
                     "curriculum_semester": eff_hole,
                     "is_mandatory_course": True,
+                    "catalog_class_label": ch_cls,
+                    "catalog_half_label": ch_half,
                     "instructor_name": "",
                     "day_of_week": "",
                     "start_time": "",
@@ -3078,12 +3398,11 @@ def available_sections(
                     "capacity": 0,
                     "enrolled": 0,
                     "registration_priority_tier": ptier_ph,
-                    "registration_priority_label": "Şube yok (OBS)",
+                    "registration_priority_label": "Şube yok",
                     "offer_placeholder": True,
                 }
             )
             codes_seen_offer.add(cc_plain)
-            offer_placeholder_rows += 1
 
         # Zorunlu kapısı açıkken: aynı yarıyıl kartına oturan seçmeliler (SQL’de henüz şubesi görünmeyen)
         if not elective_slot_locked:
@@ -3144,6 +3463,16 @@ def available_sections(
                 ptier_e, _ = registration_priority_tier(db, spid, cid_e)
                 ct_e = str(crw.get("course_type") or "")
                 em_flag = False
+                disp_e = _catalog_display_program_semester_index(
+                    crw.get("curriculum_semester"),
+                    crw.get("semester_no"),
+                    crw.get("class_year"),
+                )
+                ec_cls, ec_half = _catalog_row_labels_tr(
+                    disp_e,
+                    crw.get("semester_no"),
+                    crw.get("class_year"),
+                )
                 out.append(
                     {
                         "id": "",
@@ -3155,6 +3484,8 @@ def available_sections(
                         "type": ct_e,
                         "curriculum_semester": eff_e,
                         "is_mandatory_course": em_flag,
+                        "catalog_class_label": ec_cls,
+                        "catalog_half_label": ec_half,
                         "instructor_name": "",
                         "day_of_week": "",
                         "start_time": "",
@@ -3163,24 +3494,25 @@ def available_sections(
                         "capacity": 0,
                         "enrolled": 0,
                         "registration_priority_tier": ptier_e,
-                        "registration_priority_label": "Şube yok (OBS)",
+                        "registration_priority_label": "Şube yok",
                         "offer_placeholder": True,
                     }
                 )
                 codes_seen_offer.add(cc_e)
-                offer_placeholder_rows += 1
 
-    real_section_rows = sum(1 for x in out if not x.get("offer_placeholder"))
-
-    # Gerçek şubeler önce; sonra kart + öncelik + kod
-    out.sort(
-        key=lambda x: (
-            0 if x.get("offer_placeholder") else 1,
-            0 if x.get("is_mandatory_course") else 1,
-            x.get("registration_priority_tier", 9),
-            (x.get("course_code") or "").strip().lower(),
+    # Katalog (kayıt + ekle-bırak) SQL sırasını korur; diğer listede sıra özetlenir.
+    if not listing_catalog:
+        out.sort(
+            key=lambda x: (
+                0 if x.get("offer_placeholder") else 1,
+                0 if x.get("is_mandatory_course") else 1,
+                x.get("registration_priority_tier", 9),
+                (x.get("course_code") or "").strip().lower(),
+            )
         )
-    )
+
+    offer_placeholder_rows = sum(1 for x in out if x.get("offer_placeholder"))
+    real_section_rows = len(out) - offer_placeholder_rows
 
     log.info(
         "available_sections student=%s mode=%s term_resolved=%s term_cands=%d ps=%d dept=%s "
@@ -3213,29 +3545,22 @@ def available_sections(
         if real_section_rows > 0:
             if offer_placeholder_rows > 0:
                 add_drop_sections_empty_hint = (
-                    f"Bazı müfredat satırlarının seçilen sürede `obs_course_sections` bağlantısı yok ({offer_placeholder_rows} placeholder). "
-                    "«Ders ekle» yalnızca gerçek şube için çalışır."
+                    f"Bazı ders kodları şube satırı olmadan görünüyor ({offer_placeholder_rows}). «Ders ekle» için şube gereklidir."
                 )
         elif offer_placeholder_rows > 0:
             add_drop_sections_empty_hint = (
-                f"Müfredatınızdaki uygun dersler listelendi; ancak seçilen süre için `obs_course_sections` "
-                f"sayfasında bunlara bağlı şube satırı yok ({offer_placeholder_rows} kod). OBS’e şube girilene "
-                "kadar seçim yapamazsınız."
+                f"Liste yalnızca müfredat yer tutucu ({offer_placeholder_rows} kod); bu dönemde şube açılmış satır çıkmıyor."
             )
         elif sections_in_terms_total == 0:
-            add_drop_sections_empty_hint = (
-                "Bu akademik süre öbeği için `obs_course_sections` kaydı görünmüyor. "
-                "Üstteki müfredat listesi `obs_courses` üzerinden; şube oluşturulmadan seçim yok."
-            )
+            add_drop_sections_empty_hint = "Seçilen dönem için açılmış şube tanımı yok."
         elif n_raw == 0:
             add_drop_sections_empty_hint = (
-                "Bu dönem öbeğinde `obs_course_sections` kaydı var; ancak size uygun seçilebilir şube "
-                "satırı çıkmıyor (aynı dersten kayıtlı/taaslak bloğu vb.)."
+                "Bu dönemde bölümünüze bağlı seçilebilir şube görünmüyor "
+                "(tüm uygun şubeler dolu/taşlakta kayıtlı veya bloklu olabilir)."
             )
         elif not out:
             add_drop_sections_empty_hint = (
-                "Şube satırları filtrelendi; müfredat yerleştirme veya geçilmiş zorunlu kontrolleri "
-                "tüm seçenekleri çıkardı."
+                "Gösterilecek seçilebilir şube satırı kalmadı (mezun olmuş kodlar dahil sıradan süzüm)."
             )
     if listing_mode == "registration":
         if real_section_rows > 0:
@@ -4944,16 +5269,7 @@ def upsert_draft_enrollments(
                     db, spid, stud_dept, psn_student, planned_course_ids
                 )
                 if bl_nonempty:
-                    preview = ",".join(
-                        (x.get("course_code") or "").strip()
-                        for x in bl_rows[:10]
-                        if x.get("course_code")
-                    )
-                    return [], (
-                        "Bu programa ait, program yarıyılınızdaki bazı zorunlu dersler "
-                        "henüz bu dönem planınıza eklenmedi. Önce zorunluları seçin"
-                        + (f": {preview}" if preview else ".")
-                    )
+                    return [], OBS_MANDATORY_PLAN_DENIED_MSG_TR
         dup = db.execute(
             text("""
             SELECT 1 FROM obs_course_enrollments ce
@@ -5165,6 +5481,14 @@ def submit_schedule_to_advisor(
                         "etiketlenmiş ders seçilebilir."
                     )
 
+        planned_mand_reg = planned_course_ids_for_mandatory_gate_submit(
+            db, spid, term_id, flow="registration"
+        )
+        if stud_reg and mandate_backlog_remaining(
+            db, spid, stud_reg, ps_reg, planned_mand_reg
+        )[0]:
+            return None, OBS_MANDATORY_PLAN_DENIED_MSG_TR
+
         akts_max, _, _ = effective_akts_limit_for_student(db, spid, term_id)
         load = student_term_scheduled_akts(db, spid, term_id)
         if load > akts_max:
@@ -5285,6 +5609,14 @@ def submit_schedule_to_advisor(
         ok_ak, msg_ak = validate_add_drop_akts_bounds(db, spid, term_id, proj)
         if not ok_ak:
             return None, msg_ak
+
+        planned_mand_ad = planned_course_ids_for_mandatory_gate_submit(
+            db, spid, term_id, flow="add_drop", enrollment_ids_to_drop=eids_drop
+        )
+        if stud_ad and mandate_backlog_remaining(
+            db, spid, stud_ad, ps_ad, planned_mand_ad
+        )[0]:
+            return None, OBS_MANDATORY_PLAN_DENIED_MSG_TR
 
         # İşlemleri Gerçekleştir (Bırakma)
         if eids_drop:

@@ -193,8 +193,7 @@
 	}
 
 	/**
-	 * `curriculum_semester`: müfredat kartı sırası (çoğu lisans 4×2 blok).
-	 * Yerleştirme: 1→2 ilk sınıfın iki yarıyılı, sonra üst sınıfa geçilir.
+	 * Kart sırası (müfredat yarıyılı indeksi, çoğu 4×2) → «X. sınıf · Güz/Bahar».
 	 */
 	function obsCurriculumPlacementHint(raw: unknown): string | null {
 		if (raw === null || raw === undefined || raw === '') return null;
@@ -208,7 +207,8 @@
 		const ki = Math.floor(k);
 		const sinif = Math.floor((ki - 1) / 2) + 1;
 		const yariylInSinif = ((ki - 1) % 2) + 1;
-		return `${sinif}. sınıf — bu sınıfın ${yariylInSinif}. yarıyılı (müfredat sırası ${ki})`;
+		const halfTr = yariylInSinif === 1 ? 'Güz' : 'Bahar';
+		return `${sinif}. sınıf · ${halfTr}`;
 	}
 
 	function normMandatoryCourseCode(raw: string): string {
@@ -2011,7 +2011,7 @@
 							<li class="[&::marker]:text-violet-500">
 								<span class="font-mono font-semibold">{m.course_code}</span>
 								— {m.course_name}
-								<span class="opacity-90"> ({m.akts} AKTS)</span>{#if mPl}<span class="font-normal italic text-[10px] leading-snug text-violet-800/95 dark:text-violet-300/90 whitespace-normal"> · {mPl}</span>{/if}
+								<span class="opacity-90"> ({m.akts} AKTS)</span>{#if mPl}<span class="text-xs font-medium text-violet-900/95 dark:text-violet-300/95"> · {mPl}</span>{/if}
 							</li>
 						{/each}
 					</ul>
@@ -2180,16 +2180,17 @@
 					</div>
 				{:else}
 					<div class="overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
-						<table class="min-w-[940px] w-full text-sm">
+						<table class="min-w-[1040px] w-full text-sm">
 							<thead
 								class="bg-slate-50 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
 							>
 								<tr>
 									<th class="whitespace-nowrap px-4 py-3 text-left">Kod</th>
 									<th class="whitespace-nowrap px-4 py-3 text-left">Tür</th>
+									<th class="whitespace-nowrap px-4 py-3 text-left">Sınıf</th>
+									<th class="whitespace-nowrap px-4 py-3 text-left">Yarıyıl</th>
 									<th class="min-w-[11rem] px-4 py-3 text-left">Ders Adı</th>
 									<th class="whitespace-nowrap px-4 py-3 text-center">AKTS</th>
-									<th class="min-w-[5rem] px-4 py-3 text-left text-xs">Öncelik</th>
 									<th class="min-w-[8rem] px-4 py-3 text-left">Öğr. Elemanı</th>
 									<th class="whitespace-nowrap px-4 py-3 text-left">Gün/Saat</th>
 									<th class="whitespace-nowrap px-4 py-3 text-center">Kontenjan</th>
@@ -2208,7 +2209,6 @@
 												(x.enrollment_reason || '') !== 'add_drop'
 										)}
 									{@const full = !ophRg && c.enrolled >= c.capacity}
-									{@const curPlReg = obsCurriculumPlacementHint(c.curriculum_semester)}
 									<tr
 										class="border-t border-black/5 dark:border-white/10 {ophRg
 											? 'bg-amber-50/35 dark:bg-amber-950/15'
@@ -2220,27 +2220,12 @@
 											>{c.course_code}</td
 										>
 										<td class="whitespace-nowrap px-4 py-3 text-xs font-medium text-slate-600 dark:text-slate-400">{curriculumKindColumnLabel(c)}</td>
-										<td class="max-w-[20rem] px-4 py-3 font-medium leading-snug break-words">
+										<td class="whitespace-nowrap px-4 py-3 text-xs text-slate-600 dark:text-slate-400">{c.catalog_class_label ?? '—'}</td>
+										<td class="whitespace-nowrap px-4 py-3 text-xs text-slate-600 dark:text-slate-400">{c.catalog_half_label ?? '—'}</td>
+										<td class="min-w-[12rem] max-w-[22rem] px-4 py-3 text-sm font-semibold leading-snug break-words text-slate-900 dark:text-slate-50">
 											{c.course_name}
-											{#if curPlReg}
-												<div
-													class="mt-1 font-normal italic text-[10px] leading-snug text-slate-500 dark:text-slate-400"
-													title="Müfredat kartı sırasına göre konum"
-												>
-													{curPlReg}
-												</div>
-											{/if}
 										</td>
 										<td class="whitespace-nowrap px-4 py-3 text-center font-semibold">{c.akts}</td>
-										<td
-											class="px-4 py-3 text-[10px] leading-tight text-slate-600 dark:text-slate-400"
-											title={c.registration_priority_label ?? ''}
-										>
-											<span class="font-mono font-semibold">{c.registration_priority_tier ?? '—'}</span>
-											{#if c.registration_priority_label}
-												<div class="max-w-[7rem] break-words sm:truncate">{c.registration_priority_label}</div>
-											{/if}
-										</td>
 										<td class="min-w-[8rem] px-4 py-3 text-xs leading-snug break-words text-slate-500">{ophRg ? '—' : c.instructor_name}</td>
 										<td class="whitespace-nowrap px-4 py-3 text-xs">{ophRg ? '—' : `${c.day_of_week ?? ''} ${c.start_time ?? ''}–${c.end_time ?? ''}`.trim() || '—'}</td>
 										<td
@@ -2252,21 +2237,25 @@
 													>Dolu</span
 												>{/if}
 										</td>
-										<td class="px-4 py-3 text-center">
-											{#if ophRg || !String(c.id || '').trim()}
-												<div class="flex flex-col items-center gap-1">
-													<button
-														type="button"
-														disabled
-														title="Bu ders için seçilen sürede `obs_course_sections` oluşturulmalıdır; oluşunca seçim yapılabilir."
-														class="cursor-not-allowed rounded-lg border border-dashed border-amber-400/70 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900/85 opacity-95 dark:border-amber-500/45 dark:bg-amber-950/40 dark:text-amber-100"
-													>
-														Ders ekle
-													</button>
-													<span
-														class="max-w-[7.5rem] text-center text-[10px] font-medium leading-tight text-amber-700 dark:text-amber-300/95"
-														>OBS şubesiz</span>
-												</div>
+										<td class="whitespace-nowrap px-4 py-3 text-center align-middle">
+											{#if !String(c.id || '').trim()}
+												<button
+													type="button"
+													on:click={() => toggleCart(c)}
+													class="inline-flex shrink-0 items-center justify-center rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors bg-slate-100 text-slate-600 hover:bg-sky-50 hover:text-sky-700 dark:bg-white/10 dark:hover:bg-sky-900/20 whitespace-nowrap"
+													title="Şube seçilebilmesi için `obs_course_sections` kaydı gerekir; yine de denediğinizde sistem uyarısı alırsınız."
+												>
+													Ders ekle
+												</button>
+											{:else if ophRg}
+												<button
+													type="button"
+													on:click={() => toggleCart(c)}
+													class="inline-flex shrink-0 items-center justify-center rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors bg-slate-100 text-slate-600 hover:bg-sky-50 hover:text-sky-700 dark:bg-white/10 dark:hover:bg-sky-900/20 whitespace-nowrap"
+													title="Bu satır OBS’te şubesiz görünüyor; eklemeden önce şube oluşturulmalıdır."
+												>
+													Ders ekle
+												</button>
 											{:else if full && !inCart}
 												<span class="text-xs text-slate-300">—</span>
 											{:else if hasPendingRegistration}
@@ -2275,7 +2264,7 @@
 												<button
 													type="button"
 													on:click={() => toggleCart(c)}
-													class="rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors
+													class="inline-flex shrink-0 items-center justify-center rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap
 													{inCart
 														? 'bg-sky-100 text-sky-700 ring-1 ring-sky-300 dark:bg-sky-900/40 dark:text-sky-300'
 														: 'bg-slate-100 text-slate-600 hover:bg-sky-50 hover:text-sky-700 dark:bg-white/10 dark:hover:bg-sky-900/20'}"
@@ -2326,7 +2315,7 @@
 							<li class="[&::marker]:text-violet-500">
 								<span class="font-mono font-semibold">{m.course_code}</span>
 								— {m.course_name}
-								<span class="opacity-90"> ({m.akts} AKTS)</span>{#if mPlAd}<span class="font-normal italic text-[10px] leading-snug text-violet-800/95 dark:text-violet-300/90 whitespace-normal"> · {mPlAd}</span>{/if}
+								<span class="opacity-90"> ({m.akts} AKTS)</span>{#if mPlAd}<span class="text-xs font-medium text-violet-900/95 dark:text-violet-300/95"> · {mPlAd}</span>{/if}
 							</li>
 						{/each}
 					</ul>
@@ -2417,7 +2406,7 @@
 					<p class="px-5 py-8 text-center text-sm text-slate-400">Henüz satır yok.</p>
 				{:else}
 					<div class="overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
-						<table class="min-w-[900px] w-full text-sm">
+						<table class="min-w-[860px] w-full text-sm">
 							<thead
 								class="bg-slate-50 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
 							>
@@ -2428,7 +2417,6 @@
 									<th class="min-w-[11rem] px-4 py-3 text-left">Ders Adı</th>
 									<th class="min-w-[7rem] px-4 py-3 text-left">Durum</th>
 									<th class="whitespace-nowrap px-4 py-3 text-center">AKTS</th>
-									<th class="whitespace-nowrap px-4 py-3 text-left text-xs">Önc.</th>
 									<th class="min-w-[8rem] px-4 py-3 text-left">Öğr. Elemanı</th>
 									<th class="whitespace-nowrap px-4 py-3 text-left">Gün/Saat</th>
 									<th class="whitespace-nowrap px-4 py-3 text-right"></th>
@@ -2513,15 +2501,6 @@
 											</div>
 										</td>
 										<td class="whitespace-nowrap px-4 py-3 text-center">{e.akts}</td>
-										<td
-											class="px-4 py-3 text-[10px] leading-tight text-slate-500"
-											title={e.registration_priority_label ?? ''}
-										>
-											<span class="font-mono font-semibold">{e.registration_priority_tier ?? '—'}</span>
-											{#if e.registration_priority_label}
-												<div class="max-w-[6.5rem] break-words sm:truncate">{e.registration_priority_label}</div>
-											{/if}
-										</td>
 										<td class="min-w-[8rem] px-4 py-3 text-xs leading-snug break-words text-slate-500">{e.instructor_name ?? '—'}</td>
 										<td class="whitespace-nowrap px-4 py-3 text-xs">
 											{e.day_of_week ?? '—'} {e.start_time ?? ''}
@@ -2572,7 +2551,7 @@
 				<p
 					class="border-b border-black/5 bg-slate-50/90 px-4 py-2 text-[11px] leading-snug text-slate-600 dark:border-white/10 dark:bg-white/5 dark:text-slate-400 sm:px-5"
 				>
-					Aynı akademik sürede açılmış şubeler; program yarıyılınızdaki uygun zorunlu ve seçmeli kartlara göre süzülür (bölüm ve müfredat etiketi).
+					Öğrenci <strong>bölümünüzün</strong> katalog sırasına göre dersler; bu döneme şube tanımlandıysa satır seçilebilir olur (aksi halde OBS şubesiz satır olarak görünür).
 				</p>
 				{#if addDropSectionsEmptyHint}
 					<p
@@ -2589,18 +2568,6 @@
 						class="space-y-3 px-5 py-6 text-center text-sm leading-relaxed text-slate-500 dark:text-slate-400"
 					>
 						<p>Açılan ders bulunamadı.</p>
-						{#if addDropSectionsInTermTotal !== null || addDropSectionsQueryRowsStudent !== null}
-							<p class="text-[11px] leading-snug text-slate-400">
-								Dönem öbeğinde toplam
-								<span class="font-mono text-slate-500 dark:text-slate-300"
-									>obs_course_sections</span
-								>
-								kayıdı:
-								<strong>{addDropSectionsInTermTotal ?? '—'}</strong>
-								· Büyük liste sorgusu sonrası siz için kalan uygun şube satırı:
-								<strong>{addDropSectionsQueryRowsStudent ?? '—'}</strong>
-							</p>
-						{/if}
 						{#if addDropCoursesPendingSections.length > 0}
 							<div class="text-left text-xs text-slate-600 dark:text-slate-300">
 								<p class="font-semibold text-slate-700 dark:text-slate-200">
@@ -2626,16 +2593,17 @@
 					</div>
 				{:else}
 					<div class="overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
-						<table class="min-w-[940px] w-full text-sm">
+						<table class="min-w-[1040px] w-full text-sm">
 							<thead
 								class="bg-slate-50 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
 							>
 								<tr>
 									<th class="whitespace-nowrap px-4 py-3 text-left">Kod</th>
 									<th class="whitespace-nowrap px-4 py-3 text-left">Tür</th>
+									<th class="whitespace-nowrap px-4 py-3 text-left">Sınıf</th>
+									<th class="whitespace-nowrap px-4 py-3 text-left">Yarıyıl</th>
 									<th class="min-w-[11rem] px-4 py-3 text-left">Ders Adı</th>
 									<th class="whitespace-nowrap px-4 py-3 text-center">AKTS</th>
-									<th class="min-w-[5rem] px-4 py-3 text-left text-xs">Öncelik</th>
 									<th class="min-w-[8rem] px-4 py-3 text-left">Öğr. Elemanı</th>
 									<th class="whitespace-nowrap px-4 py-3 text-left">Gün/Saat</th>
 									<th class="whitespace-nowrap px-4 py-3 text-center">Kontenjan</th>
@@ -2654,7 +2622,6 @@
 												(x.enrollment_reason || '') === 'add_drop'
 										)}
 									{@const full = !oph && c.enrolled >= c.capacity}
-									{@const curPlDrop = obsCurriculumPlacementHint(c.curriculum_semester)}
 									<tr
 										class="border-t border-black/5 dark:border-white/10 {oph
 											? 'bg-amber-50/35 dark:bg-amber-950/15'
@@ -2666,27 +2633,12 @@
 											>{c.course_code}</td
 										>
 										<td class="whitespace-nowrap px-4 py-3 text-xs font-medium text-slate-600 dark:text-slate-400">{curriculumKindColumnLabel(c)}</td>
-										<td class="max-w-[20rem] px-4 py-3 font-medium leading-snug break-words">
+										<td class="whitespace-nowrap px-4 py-3 text-xs text-slate-600 dark:text-slate-400">{c.catalog_class_label ?? '—'}</td>
+										<td class="whitespace-nowrap px-4 py-3 text-xs text-slate-600 dark:text-slate-400">{c.catalog_half_label ?? '—'}</td>
+										<td class="min-w-[12rem] max-w-[22rem] px-4 py-3 text-sm font-semibold leading-snug break-words text-slate-900 dark:text-slate-50">
 											{c.course_name}
-											{#if curPlDrop}
-												<div
-													class="mt-1 font-normal italic text-[10px] leading-snug text-slate-500 dark:text-slate-400"
-													title="Müfredat kartı sırasına göre konum"
-												>
-													{curPlDrop}
-												</div>
-											{/if}
 										</td>
 										<td class="whitespace-nowrap px-4 py-3 text-center font-semibold">{c.akts}</td>
-										<td
-											class="px-4 py-3 text-[10px] leading-tight text-slate-600 dark:text-slate-400"
-											title={c.registration_priority_label ?? ''}
-										>
-											<span class="font-mono font-semibold">{c.registration_priority_tier ?? '—'}</span>
-											{#if c.registration_priority_label}
-												<div class="max-w-[7rem] break-words sm:truncate">{c.registration_priority_label}</div>
-											{/if}
-										</td>
 										<td class="min-w-[8rem] px-4 py-3 text-xs leading-snug break-words text-slate-500">{oph ? '—' : c.instructor_name}</td>
 										<td class="whitespace-nowrap px-4 py-3 text-xs">{oph ? '—' : `${c.day_of_week ?? ''} ${c.start_time ?? ''}–${c.end_time ?? ''}`.trim() || '—'}</td>
 										<td
@@ -2698,21 +2650,25 @@
 													>Dolu</span
 												>{/if}
 										</td>
-										<td class="px-4 py-3 text-center">
-											{#if oph || !String(c.id || '').trim()}
-												<div class="flex flex-col items-center gap-1">
-													<button
-														type="button"
-														disabled
-														title="OBS’te bu kod için seçtiğiniz dönemde `obs_course_sections` kaydı oluşturulmadı. Şube oluşturulunca bu liste gerçek şubeyle güncellenir ve bu buton tıklanabilir olur; taslak kayıt için `course_section_id` şart."
-														class="cursor-not-allowed rounded-lg border border-dashed border-amber-400/70 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900/85 opacity-95 dark:border-amber-500/45 dark:bg-amber-950/40 dark:text-amber-100"
-													>
-														Ders ekle
-													</button>
-													<span
-														class="max-w-[7.5rem] text-center text-[10px] leading-tight font-medium text-amber-700 dark:text-amber-300/95"
-														>OBS şubesi bekleniyor</span>
-												</div>
+										<td class="whitespace-nowrap px-4 py-3 text-center align-middle">
+											{#if !String(c.id || '').trim()}
+												<button
+													type="button"
+													on:click={() => toggleAddDropCart(c)}
+													class="inline-flex shrink-0 items-center justify-center rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors bg-slate-100 text-slate-600 hover:bg-sky-50 hover:text-sky-700 dark:bg-white/10 dark:hover:bg-sky-900/20 whitespace-nowrap"
+													title="Şube seçilebilmesi için `obs_course_sections` kaydı gerekir; yine de denediğinizde sistem uyarısı alırsınız."
+												>
+													Ders ekle
+												</button>
+											{:else if oph}
+												<button
+													type="button"
+													on:click={() => toggleAddDropCart(c)}
+													class="inline-flex shrink-0 items-center justify-center rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors bg-slate-100 text-slate-600 hover:bg-sky-50 hover:text-sky-700 dark:bg-white/10 dark:hover:bg-sky-900/20 whitespace-nowrap"
+													title="OBS’te bu kod için seçtiğiniz dönemde henüz şube satırı yok; yönetici şube açınca bu buton doğrudan taslak ekleyebilir."
+												>
+													Ders ekle
+												</button>
 											{:else if full && !inCart}
 												<span class="text-xs text-slate-300">—</span>
 											{:else if hasPendingAddDrop}
@@ -2721,7 +2677,7 @@
 												<button
 													type="button"
 													on:click={() => toggleAddDropCart(c)}
-													class="rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors
+													class="inline-flex shrink-0 items-center justify-center rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap
 													{inCart
 														? 'bg-sky-100 text-sky-700 ring-1 ring-sky-300 dark:bg-sky-900/40 dark:text-sky-300'
 														: 'bg-slate-100 text-slate-600 hover:bg-sky-50 hover:text-sky-700 dark:bg-white/10 dark:hover:bg-sky-900/20'}"

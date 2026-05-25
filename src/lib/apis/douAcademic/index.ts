@@ -1318,6 +1318,10 @@ export type AvailableCourse = {
 	is_mandatory_course?: boolean;
 	/** obs_courses.curriculum_semester (müfredat yarıyılı indeksi). */
 	curriculum_semester?: number | null;
+	/** Tablo için: «4. sınıf» (API: catalog_class_label). */
+	catalog_class_label?: string;
+	/** Tablo için: Güz / Bahar (API: catalog_half_label). */
+	catalog_half_label?: string;
 	/** Ekle-bırak: seçilen süre için obs_course_sections satırı yok; seçim yapılamaz. */
 	offer_placeholder?: boolean;
 };
