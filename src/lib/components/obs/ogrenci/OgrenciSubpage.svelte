@@ -2839,12 +2839,12 @@
 					Tabloyu yatay kaydırarak tüm sütunları görebilirsiniz.
 				</p>
 				<div class="overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
-					<table class="min-w-[600px] w-full text-sm">
+					<table class="min-w-[720px] w-full text-sm">
 						<thead
 							class="bg-slate-50 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
 						>
 							<tr>
-								<th class="whitespace-nowrap px-4 py-3 text-left">Ders</th>
+								<th class="min-w-[11rem] px-4 py-3 text-left">Ders</th>
 								<th class="whitespace-nowrap px-4 py-3 text-left">Tür</th>
 								<th class="whitespace-nowrap px-4 py-3 text-left">Tarih</th>
 								<th class="whitespace-nowrap px-4 py-3 text-left">Saat</th>
@@ -2857,7 +2857,14 @@
 								<tr
 									class="border-t border-black/5 dark:border-white/10 hover:bg-slate-50/50 transition-colors"
 								>
-									<td class="whitespace-nowrap px-4 py-3 font-mono text-xs font-semibold">{ex.course_code}</td>
+									<td class="min-w-[11rem] max-w-[22rem] px-4 py-3">
+										<div class="font-mono text-xs font-semibold text-slate-600 dark:text-slate-300">
+											{ex.course_code}
+										</div>
+										<div class="mt-0.5 text-xs leading-snug break-words text-slate-700 dark:text-slate-200">
+											{ex.course_name || '—'}
+										</div>
+									</td>
 									<td class="whitespace-nowrap px-4 py-3">
 										<span
 											class="rounded-full px-2 py-0.5 text-xs font-medium
@@ -2865,13 +2872,17 @@
 												? 'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300'
 												: ex.exam_type === 'final'
 													? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
-													: 'bg-slate-100 text-slate-600'}"
+													: ex.exam_type === 'makeup'
+														? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200'
+														: 'bg-slate-100 text-slate-600'}"
 										>
 											{ex.exam_type === 'midterm'
 												? 'Vize'
 												: ex.exam_type === 'final'
 													? 'Final'
-													: ex.exam_type}
+													: ex.exam_type === 'makeup'
+														? 'Bütünleme'
+														: ex.exam_type}
 										</span>
 									</td>
 									<td class="whitespace-nowrap px-4 py-3 font-medium">{ex.exam_date}</td>
