@@ -924,8 +924,24 @@ export const deleteDouAdminAnnouncement = (token: string | null, id: string) =>
 		{ method: 'DELETE' }
 	);
 
-export const getDouAdminAuditLogs = (token: string | null, limit = 20) =>
+export const getDouAdminAuditLogs = (token: string | null, limit = 200) =>
 	authFetch<{ logs: unknown[]; total: number }>(`/admin/audit-logs?limit=${limit}`, token);
+
+export type DouClientAuditPayload = {
+	action: string;
+	entity_type?: string | null;
+	entity_id?: string | null;
+	label?: string | null;
+	path?: string | null;
+	details?: Record<string, unknown> | null;
+};
+
+/** Navigasyon / arayüz olayları (`source=client`). */
+export const postDouClientAuditEvent = (token: string | null, body: DouClientAuditPayload) =>
+	authFetch<object>('/audit/event', token, {
+		method: 'POST',
+		body: JSON.stringify(body)
+	});
 
 export const getDouAdminDocumentRequests = (token: string | null, statusFilter?: string) => {
 	const q = statusFilter ? `?status=${encodeURIComponent(statusFilter)}` : '';

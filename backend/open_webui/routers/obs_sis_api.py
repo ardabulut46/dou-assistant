@@ -12,7 +12,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import text
 from sqlalchemy.exc import DataError, IntegrityError, SQLAlchemyError
@@ -30,6 +30,11 @@ from open_webui.models.auths import Auths
 from open_webui.models.users import Users
 from open_webui.routers import obs_sis_repository as repo
 from open_webui.utils.auth import get_password_hash, get_verified_user
+from open_webui.utils.obs_audit_http import (
+    _audit_display_label,
+    _student_no_for_webui_user,
+    obs_ui_path_label,
+)
 
 log = logging.getLogger(__name__)
 
@@ -83,6 +88,64 @@ def _parse_grade_upsert_return(raw: Any) -> tuple[int, Optional[str]]:
         return int(raw), None
     except (TypeError, ValueError):
         return 0, None
+
+
+def _audit_actor(user) -> tuple[str, str]:
+    a = _audit_actor_full(user)
+    return str(a.get("user_id") or ""), str(a.get("display") or "")
+
+
+def _audit_actor_full(user) -> dict[str, Any]:
+    uid = str(getattr(user, "id", "") or "").strip()
+    name = str(getattr(user, "name", "") or "").strip()
+    email = str(getattr(user, "email", "") or "").strip()
+    student_no = _student_no_for_webui_user(uid) if uid else ""
+    return {
+        "user_id": uid,
+        "name": name,
+        "email": email,
+        "student_no": student_no,
+        "display": _audit_display_label(name, email, student_no, uid),
+    }
+
+
+def audit_log(
+    user,
+    action: str,
+    *,
+    entity_type: Optional[str] = None,
+    entity_id: Optional[str] = None,
+    details: Optional[dict[str, Any]] = None,
+    source: str = "api",
+    plain_message: Optional[str] = None,
+) -> None:
+    a = _audit_actor_full(user)
+    det: dict[str, Any] = dict(details or {})
+    det.setdefault("email", a.get("email"))
+    det.setdefault("name", a.get("name"))
+    det.setdefault("student_no", a.get("student_no"))
+    det.setdefault("user_id", a.get("user_id"))
+    repo.record_obs_audit_event_isolated(
+        actor_user_id=a.get("user_id") or None,
+        actor_label=str(a.get("display") or ""),
+        action=action,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        details=det or None,
+        source=source,
+        plain_message=plain_message,
+    )
+
+
+class ClientAuditEventBody(BaseModel):
+    """İstemciden navigasyon / buton düzeyi olay günlükleri."""
+
+    action: str = Field(..., min_length=1, max_length=160)
+    entity_type: Optional[str] = Field(None, max_length=128)
+    entity_id: Optional[str] = Field(None, max_length=128)
+    label: Optional[str] = Field(None, max_length=512)
+    path: Optional[str] = Field(None, max_length=512)
+    details: Optional[dict[str, Any]] = None
 
 
 public_router = APIRouter(tags=["dou-obs-public"])
@@ -320,6 +383,41 @@ async def delete_message(
     if not ok:
         raise HTTPException(status_code=404, detail="Mesaj bulunamadı")
     return {"id": message_id, "status": "deleted"}
+
+
+@public_router.post("/audit/event", status_code=status.HTTP_204_NO_CONTENT)
+async def post_client_audit_event(
+    body: ClientAuditEventBody,
+    user=Depends(get_verified_user),
+):
+    details: dict[str, Any] = dict(body.details or {})
+    path = (body.path or "").strip()
+    if body.label:
+        details["label"] = body.label
+    if path:
+        details["path"] = path
+        details["page_label"] = obs_ui_path_label(path)
+    a = _audit_actor_full(user)
+    details.update(
+        {
+            "user_name": a.get("name"),
+            "user_email": a.get("email"),
+            "student_no": a.get("student_no"),
+            "user_id": a.get("user_id"),
+        }
+    )
+    page_lbl = str(details.get("page_label") or body.label or path or "").strip()
+    plain = f"{a.get('display')} | Sayfa görüntüleme | {page_lbl or path}"
+    audit_log(
+        user,
+        body.action.strip(),
+        entity_type=(page_lbl[:128] if page_lbl else None) or body.entity_type or "obs_sayfa",
+        entity_id=(path[:128] if path else None) or body.entity_id,
+        details=details or None,
+        source="client",
+        plain_message=plain,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ---------------------------------------------------------------------------
@@ -2675,7 +2773,7 @@ async def admin_doc_patch(
 
 @admin_router.get("/audit-logs")
 async def admin_audit(
-    limit: int = 20,
+    limit: int = Query(20, ge=1, le=2000),
     obs_db: Session = Depends(get_obs_session),
     _u=Depends(get_obs_admin_user),
 ):

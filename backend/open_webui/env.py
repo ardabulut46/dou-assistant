@@ -331,6 +331,15 @@ DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DATA_DIR}/webui.db")
 # ana uygulamanin DATABASE_URL baglantisi üzerinden okunur (tek PostgreSQL önerilir).
 OBS_DATABASE_URL = os.environ.get("OBS_DATABASE_URL", "")
 
+# OBS audit: HTTP düzeyinde obs_audit_logs (admin / öğrenci / akademisyen API uçları)
+OBS_AUDIT_HTTP_ENABLED = os.environ.get(
+    "OBS_AUDIT_HTTP_ENABLED", "true"
+).strip().lower() not in ("0", "false", "no")
+# Çok kayıt oluşmasın diye yalnız mutasyonları yaz: OBS_AUDIT_HTTP_SKIP_GET=1
+OBS_AUDIT_HTTP_SKIP_GET = os.environ.get(
+    "OBS_AUDIT_HTTP_SKIP_GET", ""
+).strip().lower() in ("1", "true", "yes")
+
 DATABASE_TYPE = os.environ.get("DATABASE_TYPE")
 DATABASE_USER = os.environ.get("DATABASE_USER")
 DATABASE_PASSWORD = os.environ.get("DATABASE_PASSWORD")

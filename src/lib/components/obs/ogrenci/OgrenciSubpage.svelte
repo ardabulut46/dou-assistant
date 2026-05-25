@@ -536,37 +536,16 @@
 		}
 		return s;
 	}, 0);
-	/** Yalnızca yanlış yarıyıl taslakları — gönderim ve özet uyarısı için. */
-	$: hasAddDropCurriculumMismatch = enrollments.some(
-		(e) =>
-			e.add_drop_curriculum_slot_match === false &&
-			e.status === 'draft' &&
-			(e.enrollment_reason || '') === 'add_drop'
-	);
-	$: hasEnrollmentCurriculumFootnote = enrollments.some(
-		(e) =>
-			e.add_drop_curriculum_slot_match === false &&
-			e.status === 'active'
-	);
 	$: addDropAktsBoundsOk =
 		addDropProjectedAkts >= addDropAktsMin && addDropProjectedAkts <= addDropAktsMax;
-	$: addDropAktsOk = addDropAktsBoundsOk && !hasAddDropCurriculumMismatch;
+	$: addDropAktsOk = addDropAktsBoundsOk;
 	$: addDropAktsRuleHint = (() => {
 		const g =
 			registrationLimits?.gpa_computed ??
 			registrationLimits?.gpa ??
 			registrationLimits?.gpa_profile;
 		const gtxt = g != null ? g.toFixed(2) : '—';
-		let t = `Ders ekle-bırak: planlanan dönem yükü ${addDropProjectedAkts} AKTS (zorunlu aralık ${addDropAktsMin}–${addDropAktsMax} AKTS). GNO: ${gtxt}.`;
-		if (hasAddDropCurriculumMismatch) {
-			t +=
-				' «Eklenecek» taslaklarınızdan bazıları mevcut program yarıyıl kartınıza uygun değil; bunlar özette sayılmaz — «Eklemeyi iptal edin».';
-		}
-		if (hasEnrollmentCurriculumFootnote) {
-			t +=
-				' Bazı kayıtlı satırlarınızda OBS etiketi profil kartınızdan sapıyor olabilir; dönem yükü özete yine dahildir — gerekiyorsa danışmanınıza danışın.';
-		}
-		return t;
+		return `Ders ekle-bırak: planlanan dönem yükü ${addDropProjectedAkts} AKTS (zorunlu aralık ${addDropAktsMin}–${addDropAktsMax} AKTS). GNO: ${gtxt}.`;
 	})();
 
 	// Kayıt Penceresi Kontrolü
@@ -2349,11 +2328,9 @@
 								? 'Gönderiliyor…'
 								: hasPendingAddDrop
 									? 'Talep işlemde'
-									: hasAddDropCurriculumMismatch
-										? 'Uyumsuz müfredat taslakları düzeltin'
-										: !addDropAktsBoundsOk
-											? 'AKTS aralığı uygun değil'
-											: 'Danışman onayına gönder'}
+									: !addDropAktsBoundsOk
+										? 'AKTS aralığı uygun değil'
+										: 'Danışman onayına gönder'}
 						</button>
 					{/if}
 				</div>
@@ -2378,24 +2355,6 @@
 						class="mx-5 mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300"
 					>
 						{dropError}
-					</div>
-				{/if}
-
-				{#if hasAddDropCurriculumMismatch}
-					<div
-						class="mx-5 mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-200"
-					>
-						<strong>Eklenecek</strong> taslakların bazısı mevcut program yarıyılı kartınıza uygun değil — paket gönderimi
-						için «Eklemeyi iptal edin» ile kaldırın; bunlar planlanan yük özetine girmez.
-					</div>
-				{/if}
-				{#if hasEnrollmentCurriculumFootnote}
-					<div
-						class="mx-5 mt-3 rounded-lg border border-amber-200 bg-amber-50/90 px-3 py-2 text-xs text-amber-950 dark:border-amber-900/35 dark:bg-amber-950/25 dark:text-amber-100"
-					>
-						Kayıtlı ders satırlarınızda <strong>OBS müfredat etiketi</strong> ile profilinizdeki program yılı
-						bilgisi uyuşmuyor gibi görünebilir; <strong>planlanan yük özeti kayıtlı AKTS'i yine sayar</strong>.
-						Profil kartınızın güncel olduğundan emin değilseniz danışmanınıza danışın.
 					</div>
 				{/if}
 
@@ -2485,18 +2444,6 @@
 													>
 												{:else}
 													<span class="text-xs text-slate-400">Kayıtlı</span>
-												{/if}
-												{#if e.add_drop_curriculum_slot_match === false && st === 'draft'}
-													<span
-														class="text-[10px] font-medium leading-tight text-red-600 dark:text-red-400"
-														>Kartınıza uygun değil (taslak özete girmez)</span
-													>
-												{/if}
-												{#if e.add_drop_curriculum_slot_match === false && st === 'active'}
-													<span
-														class="text-[10px] font-medium leading-tight text-amber-800 dark:text-amber-200/90"
-														>OBS etiketi profil PS ile farklı görünüyor (yük hesabında sayılır)</span
-													>
 												{/if}
 											</div>
 										</td>

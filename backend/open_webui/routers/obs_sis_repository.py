@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
+import re
 import unicodedata
 import uuid
 from datetime import date, datetime, time, timedelta
@@ -13,6 +15,7 @@ from typing import Any, Optional
 from collections import defaultdict
 
 from sqlalchemy import func, or_, text
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
 log = logging.getLogger(__name__)
@@ -6532,18 +6535,998 @@ def upsert_registration_settings(
     return registration_settings_row(db, term_id) or {}
 
 
-def list_audit_logs(db: Session, limit: int) -> tuple[list, int]:
-    rows = (
-        db.execute(
+# --- Audit kayıtları (obs_audit_logs): kritik işlemler izole bağlantıda yazılır ---
+
+OBS_AUDIT_DETAILS_MAX_CHARS = 12_000
+_obs_audit_col_cache: dict[int, dict[str, str]] = {}
+_obs_audit_schema_committed_bindings: set[int] = set()
+_obs_audit_migration_done: set[int] = set()
+_obs_audit_standalone_bootstrapped = False
+_UUID_LIKE_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
+def _audit_quote_ident(raw: str) -> str:
+    s = str(raw or "").strip()
+    return '"' + s.replace('"', "") + '"'
+
+
+def _audit_looks_like_uuid(value: Any) -> bool:
+    s = str(value or "").strip()
+    return bool(s and _UUID_LIKE_RE.match(s))
+
+
+def _audit_err_is_uuid_mismatch(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "invalid input syntax for type uuid" in msg
+
+
+def _pg_obs_audit_column_udt(db: Session, column_name: str) -> Optional[str]:
+    """PostgreSQL: information_schema.columns.udt_name (uuid, text, ...)."""
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return None
+    try:
+        row = db.execute(
             text(
-                "SELECT * FROM obs_audit_logs ORDER BY created_at DESC NULLS LAST LIMIT :lim"
+                """
+                SELECT udt_name::text
+                FROM information_schema.columns
+                WHERE table_schema = ANY (current_schemas(true))
+                  AND table_name = 'obs_audit_logs'
+                  AND lower(column_name) = lower(:cn)
+                LIMIT 1
+                """
             ),
-            {"lim": limit},
-        )
-        .mappings()
-        .all()
+            {"cn": column_name},
+        ).fetchone()
+        return str(row[0]).lower() if row and row[0] else None
+    except Exception:
+        return None
+
+
+def _migrate_obs_audit_logs_text_columns(
+    db: Session, *, commit_now: bool, force: bool = False
+) -> None:
+    """Eski şemada UUID olan kolonları TEXT'e çevirir (URL yolu kaydı için)."""
+    bind = db.get_bind()
+    key = id(bind)
+    if not force and key in _obs_audit_migration_done:
+        return
+    if bind.dialect.name != "postgresql":
+        _obs_audit_migration_done.add(key)
+        return
+    cols_to_check = (
+        "entity_id",
+        "resource_id",
+        "object_id",
+        "target_id",
+        "actor_user_id",
+        "user_id",
+        "impersonated_by_user_id",
     )
-    return [dict(r) for r in rows], len(rows)
+    migrated: list[str] = []
+    try:
+        for logical in cols_to_check:
+            row = db.execute(
+                text(
+                    """
+                    SELECT column_name::text, udt_name::text
+                    FROM information_schema.columns
+                    WHERE table_schema = ANY (current_schemas(true))
+                      AND table_name = 'obs_audit_logs'
+                      AND lower(column_name) = lower(:cn)
+                    LIMIT 1
+                    """
+                ),
+                {"cn": logical},
+            ).fetchone()
+            if not row:
+                continue
+            actual_name, udt = str(row[0]), str(row[1]).lower()
+            if udt != "uuid":
+                continue
+            qcol = _audit_quote_ident(actual_name)
+            db.execute(
+                text(
+                    f"ALTER TABLE obs_audit_logs ALTER COLUMN {qcol} "
+                    f"TYPE TEXT USING {qcol}::text"
+                )
+            )
+            migrated.append(actual_name)
+        if migrated:
+            log.info(
+                "[OBS Audit] obs_audit_logs kolonları UUID→TEXT: %s",
+                ", ".join(migrated),
+            )
+        if commit_now:
+            db.commit()
+        _obs_audit_col_cache.pop(key, None)
+        _obs_audit_migration_done.add(key)
+    except Exception:
+        log.exception("[OBS Audit] UUID→TEXT migrasyonu başarısız")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
+def _audit_safe_entity_id_value(
+    db: Session, colmap: dict[str, str], value: Optional[str]
+) -> Optional[str]:
+    """entity_id hâlâ UUID ise yalnızca gerçek UUID değerlerini döndürür."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    actual = colmap.get("entity_id")
+    if not actual:
+        return s[:128]
+    udt = _pg_obs_audit_column_udt(db, actual)
+    if udt == "uuid" and not _audit_looks_like_uuid(s):
+        return None
+    return s[:128]
+
+
+def obs_audit_logs_column_map(db: Session) -> dict[str, str]:
+    """Kolon adları: küçük harf anahtar → veritabanındaki gerçek ad."""
+    bind = db.get_bind()
+    key = id(bind)
+    if key in _obs_audit_col_cache:
+        return _obs_audit_col_cache[key]
+    names: list[str] = []
+    try:
+        if bind.dialect.name == "sqlite":
+            rows = db.execute(text("PRAGMA table_info(obs_audit_logs)")).fetchall()
+            names = [str(r[1]) for r in rows]
+        else:
+            rows = db.execute(
+                text(
+                    """
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_schema = ANY (current_schemas(true))
+                      AND table_name = 'obs_audit_logs'
+                    """
+                )
+            ).fetchall()
+            names = [str(r[0]) for r in rows]
+            if not names:
+                rows2 = db.execute(
+                    text(
+                        """
+                        SELECT a.attname::text
+                        FROM pg_attribute a
+                        JOIN pg_class c ON c.oid = a.attrelid
+                        JOIN pg_namespace n ON n.oid = c.relnamespace
+                        WHERE c.relname = 'obs_audit_logs'
+                          AND n.nspname = ANY (current_schemas(true))
+                          AND a.attnum > 0
+                          AND NOT a.attisdropped
+                        """
+                    )
+                ).fetchall()
+                names = [str(r[0]) for r in rows2]
+    except Exception:
+        log.exception("[OBS Audit] obs_audit_logs kolonları okunamadı")
+    colmap = {n.lower(): n for n in names if n.strip()}
+    _obs_audit_col_cache[key] = colmap
+    return colmap
+
+
+def _audit_add_mapping(
+    colmap: dict[str, str],
+    out: dict[str, Any],
+    candidates: tuple[str, ...],
+    value: Any,
+    *,
+    skip_none: bool = True,
+) -> None:
+    if skip_none and value is None:
+        return
+    for c in candidates:
+        actual = colmap.get(c.lower())
+        if actual and actual not in out:
+            out[actual] = value
+            return
+
+
+def _audit_display_label_from_parts(
+    name: str, email: str, student_no: str, user_id: str
+) -> str:
+    name = (name or "").strip()
+    email = (email or "").strip()
+    student_no = (student_no or "").strip()
+    parts: list[str] = []
+    if name:
+        parts.append(name)
+    if email:
+        parts.append(f"<{email}>")
+    if student_no:
+        parts.append(f"№{student_no}")
+    if parts:
+        return " ".join(parts)
+    return (user_id or "Bilinmeyen kullanıcı")[:512]
+
+
+def _audit_parse_display_identity(label: str) -> tuple[str, str]:
+    """'Ad Soyad <e@posta.com>' veya yalnızca e-posta → (ad, e-posta)."""
+    s = (label or "").strip()
+    if not s:
+        return "", ""
+    m = re.search(r"<([^>@\s]+@[^>]+)>", s)
+    if m:
+        return s[: m.start()].strip(), m.group(1).strip()
+    if "@" in s and " " not in s:
+        return "", s.strip()
+    return s, ""
+
+
+def _audit_webui_user_lookup(user_ids: list[str]) -> dict[str, dict[str, str]]:
+    """obs_audit_logs.user_id → Open WebUI kullanıcı e-posta/ad."""
+    unique = list({str(x).strip() for x in user_ids if x and str(x).strip()})
+    if not unique:
+        return {}
+    try:
+        from open_webui.models.users import Users
+
+        out: dict[str, dict[str, str]] = {}
+        for u in Users.get_users_by_user_ids(unique):
+            uid = str(u.id)
+            out[uid] = {
+                "email": str(getattr(u, "email", "") or "").strip(),
+                "name": str(getattr(u, "name", "") or "").strip(),
+            }
+        return out
+    except Exception:
+        log.debug("[OBS Audit] webui kullanıcı lookup başarısız", exc_info=True)
+        return {}
+
+
+def _enrich_audit_row_identity(
+    row: dict[str, Any], user_lookup: dict[str, dict[str, str]]
+) -> dict[str, Any]:
+    uid = _str_id(
+        row.get("actor_user_id") or row.get("user_id") or row.get("subject_id")
+    )
+    email = str(row.get("email") or "").strip()
+    name = str(row.get("name") or "").strip()
+
+    if uid and uid in user_lookup:
+        if not email:
+            email = user_lookup[uid].get("email", "")
+        if not name:
+            name = user_lookup[uid].get("name", "")
+
+    if not email or not name:
+        for src in (
+            row.get("user"),
+            row.get("actor_display"),
+            row.get("actor_name"),
+            row.get("username"),
+            row.get("user_name"),
+        ):
+            n2, e2 = _audit_parse_display_identity(str(src or ""))
+            if not name and n2:
+                name = n2
+            if not email and e2:
+                email = e2
+            if name and email:
+                break
+
+    msg = str(row.get("summary") or row.get("message") or "").strip()
+    if (not email or not name) and " | " in msg:
+        n3, e3 = _audit_parse_display_identity(msg.split(" | ", 1)[0])
+        if not name and n3:
+            name = n3
+        if not email and e3:
+            email = e3
+
+    row["email"] = email
+    row["name"] = name
+    if email or name:
+        row["user"] = _audit_display_label_from_parts(
+            name,
+            email,
+            str(row.get("student_no") or ""),
+            uid or "",
+        )
+    elif uid and not row.get("user"):
+        row["user"] = uid
+    return row
+
+
+def _audit_action_label_tr(action: str) -> str:
+    a = (action or "").strip()
+    labels = {
+        "obs.crud.read": "Veri okuma (GET)",
+        "obs.crud.create": "Oluşturma (POST)",
+        "obs.crud.update": "Güncelleme (PUT/PATCH)",
+        "obs.crud.delete": "Silme (DELETE)",
+        "ui.page_view": "Sayfa görüntüleme",
+    }
+    if a in labels:
+        return labels[a]
+    if a.startswith("obs.http."):
+        return f"API isteği ({a.replace('obs.http.', '')})"
+    return a
+
+
+def _audit_summary_line(
+    *,
+    action: str,
+    actor_label: str,
+    actor_user_id: Optional[str],
+    entity_type: Optional[str],
+    entity_id: Optional[str],
+    details: Optional[dict[str, Any]],
+    source: str,
+) -> str:
+    """Admin listesinde okunacak tek satır özet (Türkçe)."""
+    if details and isinstance(details, dict):
+        em = str(details.get("email") or "").strip()
+        nm = str(details.get("name") or "").strip()
+        sno = str(details.get("student_no") or "").strip()
+        if em or nm or sno:
+            who = _audit_display_label_from_parts(
+                nm, em, sno, str(actor_user_id or "")
+            )
+        else:
+            who = (actor_label or "").strip()
+    else:
+        who = (actor_label or "").strip()
+    if not who and actor_user_id:
+        who = str(actor_user_id)[:36]
+    if not who:
+        who = "Bilinmeyen kullanıcı"
+    act_tr = _audit_action_label_tr(action)
+    target = ""
+    if details and isinstance(details, dict):
+        target = (
+            str(details.get("page_label") or "")
+            or str(details.get("label") or "")
+            or str(details.get("path") or "")
+            or str(details.get("api_label") or "")
+        ).strip()
+    if not target and entity_id:
+        eid = str(entity_id)
+        if not eid.startswith("GET:") and not eid.startswith("POST:"):
+            target = eid
+        elif ":" in eid:
+            target = eid.split(":", 1)[1]
+    if not target and entity_type:
+        target = str(entity_type)
+    src = (source or "").strip()
+    src_tr = {"http": "API", "client": "Arayüz", "api": "Sistem"}.get(src, src)
+    parts = [who, act_tr]
+    if target:
+        parts.append(target)
+    if src_tr:
+        parts.append(f"({src_tr})")
+    if details and isinstance(details, dict):
+        crud = details.get("crud")
+        method = details.get("http_method")
+        status = details.get("status_code")
+        if method and crud:
+            parts.append(f"[{method} → {crud}]")
+        if status is not None:
+            parts.append(f"HTTP {status}")
+    return " · ".join(p for p in parts if p)
+
+
+def ensure_obs_audit_logs_schema(db: Session, *, commit_now: bool) -> None:
+    """Tabloyu oluşturur. commit_now=True ise ayrı izole oturumlarda kullanılmalıdır."""
+    bind = db.get_bind()
+    key = id(bind)
+    need_create = key not in _obs_audit_schema_committed_bindings
+    if need_create:
+        dialect = bind.dialect.name
+        if dialect == "sqlite":
+            db.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS obs_audit_logs (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        action TEXT NOT NULL,
+                        entity_type TEXT,
+                        entity_id TEXT,
+                        actor_display TEXT NOT NULL DEFAULT '',
+                        actor_user_id TEXT,
+                        details TEXT,
+                        source TEXT,
+                        impersonated_by_user_id TEXT,
+                        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    )
+                    """
+                )
+            )
+        else:
+            db.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS obs_audit_logs (
+                        id UUID PRIMARY KEY,
+                        action TEXT NOT NULL,
+                        entity_type TEXT,
+                        entity_id TEXT,
+                        actor_display TEXT NOT NULL DEFAULT '',
+                        actor_user_id TEXT,
+                        details TEXT,
+                        source TEXT,
+                        impersonated_by_user_id TEXT,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+            )
+        if commit_now:
+            db.commit()
+        _obs_audit_schema_committed_bindings.add(key)
+        _obs_audit_col_cache.pop(key, None)
+    _migrate_obs_audit_logs_text_columns(db, commit_now=commit_now)
+
+
+def ensure_obs_audit_logs_schema_standalone() -> None:
+    """Liste uçları mevcut request oturumuna dokunmadan tabloyu garanti altına alır."""
+    global _obs_audit_standalone_bootstrapped
+    if _obs_audit_standalone_bootstrapped:
+        return
+    from open_webui.internal.obs_db import ObsSessionLocal
+
+    session = ObsSessionLocal()
+    try:
+        ensure_obs_audit_logs_schema(session, commit_now=True)
+        _obs_audit_standalone_bootstrapped = True
+    except Exception:
+        log.exception("[OBS Audit] standalone şema oluşturulamadı")
+        try:
+            session.rollback()
+        except Exception:
+            pass
+    finally:
+        session.close()
+
+
+def record_obs_audit_event_isolated(
+    *,
+    actor_user_id: Optional[str] = None,
+    actor_label: str = "",
+    action: str,
+    entity_type: Optional[str] = None,
+    entity_id: Optional[str] = None,
+    details: Optional[dict[str, Any]] = None,
+    source: str = "api",
+    impersonated_by_user_id: Optional[str] = None,
+    plain_message: Optional[str] = None,
+) -> None:
+    """Ana OBS işlemini etkilememek için ayrı Session ile audit INSERT + commit."""
+    from open_webui.internal.obs_db import ObsSessionLocal
+
+    act = (action or "").strip()
+    if not act:
+        return
+    details_str: Optional[str] = None
+    if details is not None:
+        try:
+            details_str = json.dumps(details, ensure_ascii=False, default=str)
+        except TypeError:
+            details_str = json.dumps({"_raw": str(details)}, ensure_ascii=False)
+        if len(details_str) > OBS_AUDIT_DETAILS_MAX_CHARS:
+            details_str = json.dumps(
+                {
+                    "_truncated": True,
+                    "preview": details_str[:8000],
+                },
+                ensure_ascii=False,
+                default=str,
+            )
+
+    det_dict = details if isinstance(details, dict) else None
+    if det_dict:
+        em = str(det_dict.get("email") or "").strip()
+        nm = str(det_dict.get("name") or "").strip()
+        sno = str(det_dict.get("student_no") or "").strip()
+        if em or nm or sno:
+            label = _audit_display_label_from_parts(
+                nm, em, sno, str(actor_user_id or "")
+            )
+        else:
+            label = (actor_label or actor_user_id or "").strip() or "—"
+    else:
+        label = (actor_label or actor_user_id or "").strip() or "—"
+    src = (source or "api").strip() or "api"
+    summary_line = (plain_message or "").strip() or _audit_summary_line(
+        action=act,
+        actor_label=label,
+        actor_user_id=actor_user_id,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        details=det_dict,
+        source=src,
+    )
+
+    session = ObsSessionLocal()
+    try:
+        ensure_obs_audit_logs_schema(session, commit_now=True)
+        colmap = obs_audit_logs_column_map(session)
+        if not colmap:
+            log.warning("[OBS Audit] tablo kolonları okunamadı, kayıt atlanıyor")
+            return
+
+        row_vals: dict[str, Any] = {}
+        eid = str(uuid.uuid4())
+        _audit_add_mapping(
+            colmap, row_vals, ("id",), eid, skip_none=False
+        )
+        _audit_add_mapping(
+            colmap,
+            row_vals,
+            ("action", "event", "event_type", "operation", "type"),
+            act[:512],
+            skip_none=False,
+        )
+        et_display = (entity_type or "")[:255] or None
+        eid_display = _audit_safe_entity_id_value(session, colmap, entity_id)
+        if details and isinstance(details, dict):
+            pl = str(details.get("page_label") or details.get("api_label") or "").strip()
+            pp = str(details.get("path") or "").strip()
+            if pl and not et_display:
+                et_display = pl[:255]
+            if pp and not eid_display:
+                eid_display = _audit_safe_entity_id_value(session, colmap, pp)
+        _audit_add_mapping(
+            colmap,
+            row_vals,
+            ("entity_type", "resource_type", "object_type", "target_type"),
+            et_display,
+        )
+        _audit_add_mapping(
+            colmap,
+            row_vals,
+            ("entity_id", "resource_id", "object_id", "target_id"),
+            eid_display,
+        )
+        _audit_add_mapping(
+            colmap, row_vals, ("user",), label[:512], skip_none=False
+        )
+        _audit_add_mapping(
+            colmap,
+            row_vals,
+            ("actor_display", "actor_name", "username", "user_name", "full_name"),
+            label[:512],
+            skip_none=False,
+        )
+        _audit_add_mapping(
+            colmap, row_vals, ("actor_user_id", "user_id", "subject_id"), actor_user_id
+        )
+        _audit_add_mapping(
+            colmap,
+            row_vals,
+            ("details", "payload", "metadata", "log_data", "changes"),
+            details_str,
+        )
+        for text_col in ("message", "description", "note", "comment"):
+            _audit_add_mapping(colmap, row_vals, (text_col,), summary_line[:4000])
+        _audit_add_mapping(colmap, row_vals, ("source", "origin"), src[:64], skip_none=False)
+        _audit_add_mapping(
+            colmap, row_vals, ("impersonated_by_user_id",), impersonated_by_user_id
+        )
+
+        if not row_vals:
+            return
+
+        def _execute_insert(rows: dict[str, Any]) -> None:
+            qc = ", ".join(_audit_quote_ident(c) for c in rows.keys())
+            params_i: dict[str, Any] = {}
+            php: list[str] = []
+            for i, (c, v) in enumerate(rows.items()):
+                key_i = f"p{i}"
+                php.append(f":{key_i}")
+                params_i[key_i] = v
+            session.execute(
+                text(f"INSERT INTO obs_audit_logs ({qc}) VALUES ({', '.join(php)})"),
+                params_i,
+            )
+
+        inserted = False
+        last_exc: Optional[BaseException] = None
+        try:
+            _execute_insert(row_vals)
+            session.commit()
+            inserted = True
+        except Exception as e0:
+            last_exc = e0
+            session.rollback()
+            if _audit_err_is_uuid_mismatch(e0):
+                _migrate_obs_audit_logs_text_columns(
+                    session, commit_now=True, force=True
+                )
+                colmap = obs_audit_logs_column_map(session)
+                eid_display = _audit_safe_entity_id_value(
+                    session, colmap, entity_id
+                )
+                if details and isinstance(details, dict):
+                    pl = str(
+                        details.get("page_label")
+                        or details.get("api_label")
+                        or ""
+                    ).strip()
+                    pp = str(details.get("path") or "").strip()
+                    if pl and not et_display:
+                        et_display = pl[:255]
+                    if pp and not eid_display:
+                        eid_display = _audit_safe_entity_id_value(
+                            session, colmap, pp
+                        )
+                row_vals = {}
+                _audit_add_mapping(
+                    colmap, row_vals, ("id",), eid, skip_none=False
+                )
+                _audit_add_mapping(
+                    colmap,
+                    row_vals,
+                    ("action", "event", "event_type", "operation", "type"),
+                    act[:512],
+                    skip_none=False,
+                )
+                _audit_add_mapping(
+                    colmap,
+                    row_vals,
+                    ("entity_type", "resource_type", "object_type", "target_type"),
+                    et_display,
+                )
+                _audit_add_mapping(
+                    colmap,
+                    row_vals,
+                    ("entity_id", "resource_id", "object_id", "target_id"),
+                    eid_display,
+                )
+                _audit_add_mapping(
+                    colmap, row_vals, ("user",), label[:512], skip_none=False
+                )
+                _audit_add_mapping(
+                    colmap,
+                    row_vals,
+                    (
+                        "actor_display",
+                        "actor_name",
+                        "username",
+                        "user_name",
+                        "full_name",
+                    ),
+                    label[:512],
+                    skip_none=False,
+                )
+                _audit_add_mapping(
+                    colmap,
+                    row_vals,
+                    ("actor_user_id", "user_id", "subject_id"),
+                    actor_user_id,
+                )
+                _audit_add_mapping(
+                    colmap,
+                    row_vals,
+                    ("details", "payload", "metadata", "log_data", "changes"),
+                    details_str,
+                )
+                for text_col in ("message", "description", "note", "comment"):
+                    _audit_add_mapping(
+                        colmap, row_vals, (text_col,), summary_line[:4000]
+                    )
+                _audit_add_mapping(
+                    colmap, row_vals, ("source", "origin"), src[:64], skip_none=False
+                )
+                _audit_add_mapping(
+                    colmap,
+                    row_vals,
+                    ("impersonated_by_user_id",),
+                    impersonated_by_user_id,
+                )
+                try:
+                    _execute_insert(row_vals)
+                    session.commit()
+                    inserted = True
+                    last_exc = None
+                except Exception as e_retry:
+                    last_exc = e_retry
+                    session.rollback()
+            if not inserted and "id" in row_vals:
+                without_id = {k: v for k, v in row_vals.items() if k != "id"}
+                if without_id:
+                    try:
+                        _execute_insert(without_id)
+                        session.commit()
+                        inserted = True
+                    except Exception as e1:
+                        last_exc = e1
+                        session.rollback()
+            if not inserted:
+                mini = {}
+                _audit_add_mapping(
+                    colmap,
+                    mini,
+                    ("action", "event", "event_type", "operation", "type"),
+                    act[:512],
+                    skip_none=False,
+                )
+                _audit_add_mapping(
+                    colmap,
+                    mini,
+                    ("user", "actor_display", "username", "user_name"),
+                    label[:512],
+                    skip_none=False,
+                )
+                _audit_add_mapping(
+                    colmap,
+                    mini,
+                    ("actor_user_id", "user_id", "subject_id"),
+                    actor_user_id,
+                )
+                _audit_add_mapping(
+                    colmap,
+                    mini,
+                    ("entity_type", "resource_type"),
+                    et_display,
+                )
+                _audit_add_mapping(
+                    colmap,
+                    mini,
+                    ("entity_id", "resource_id"),
+                    eid_display,
+                )
+                for text_col in (
+                    "message",
+                    "description",
+                    "details",
+                    "payload",
+                    "metadata",
+                    "note",
+                ):
+                    _audit_add_mapping(
+                        colmap,
+                        mini,
+                        (text_col,),
+                        summary_line[:4000] if not details_str else summary_line[:2000],
+                    )
+                if details_str:
+                    _audit_add_mapping(
+                        colmap,
+                        mini,
+                        ("details", "payload", "metadata"),
+                        details_str,
+                    )
+                if mini:
+                    try:
+                        _execute_insert(mini)
+                        session.commit()
+                        inserted = True
+                    except Exception as e2:
+                        last_exc = e2
+                        session.rollback()
+            if not inserted and last_exc is not None:
+                raise last_exc
+    except Exception:
+        log.warning(
+            "[OBS Audit] kayıt yazılamadı action=%s",
+            act,
+            exc_info=True,
+        )
+        try:
+            session.rollback()
+        except Exception:
+            pass
+    finally:
+        session.close()
+
+
+def _audit_parse_details_blob(raw: Any) -> dict[str, Any]:
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return {}
+        try:
+            parsed = json.loads(s)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def normalize_audit_log_row(r: dict[str, Any]) -> dict[str, Any]:
+    out = {k: v for k, v in r.items()}
+    out["id"] = _str_id(out.get("id")) or ""
+    disp = (
+        out.get("user")
+        or out.get("actor_display")
+        or out.get("actor_name")
+        or out.get("username")
+        or out.get("user_label")
+        or ""
+    )
+    uid = out.get("actor_user_id") or out.get("user_id") or out.get("subject_id")
+    if not disp and uid:
+        disp = str(uid)
+    out["user"] = str(disp) if disp is not None else ""
+    action_raw = str(
+        out.get("action")
+        or out.get("event")
+        or out.get("event_type")
+        or out.get("operation")
+        or ""
+    )
+    out["action"] = action_raw
+    out["action_label"] = _audit_action_label_tr(action_raw)
+    et = (
+        out.get("entity_type")
+        or out.get("resource_type")
+        or out.get("object_type")
+        or ""
+    )
+    out["entity_type"] = str(et)
+    eid = (
+        out.get("entity_id")
+        or out.get("resource_id")
+        or out.get("object_id")
+        or ""
+    )
+    out["entity_id"] = str(eid) if eid else ""
+    ca = out.get("created_at")
+    if hasattr(ca, "isoformat"):
+        out["created_at"] = ca.isoformat()
+    else:
+        out["created_at"] = str(ca or "")
+
+    det_parsed = _audit_parse_details_blob(out.get("details"))
+    if not det_parsed:
+        for alt in ("payload", "metadata", "log_data", "changes"):
+            det_parsed = _audit_parse_details_blob(out.get(alt))
+            if det_parsed:
+                break
+    page_path = (
+        str(det_parsed.get("path") or "")
+        or str(det_parsed.get("route") or "")
+        or ""
+    ).strip()
+    if not page_path and out["entity_id"] and not str(out["entity_id"]).startswith(
+        ("GET:", "POST:", "PUT:", "PATCH:", "DELETE:")
+    ):
+        page_path = str(out["entity_id"])
+    if page_path.startswith("GET:") or page_path.startswith("POST:"):
+        if ":" in page_path:
+            page_path = page_path.split(":", 1)[1]
+    page_label = (
+        str(det_parsed.get("page_label") or "")
+        or str(det_parsed.get("api_label") or "")
+        or str(det_parsed.get("label") or "")
+        or str(et or "")
+    ).strip()
+    out["page_path"] = page_path
+    out["page_label"] = page_label
+
+    msg = str(
+        out.get("message") or out.get("description") or out.get("note") or ""
+    ).strip()
+    if det_parsed:
+        out["details"] = json.dumps(det_parsed, ensure_ascii=False, default=str)
+    elif out.get("details") is not None:
+        out["details"] = str(out.get("details") or "")
+    else:
+        out["details"] = ""
+
+    email = str(det_parsed.get("email") or "").strip()
+    name = str(det_parsed.get("name") or "").strip()
+    student_no = str(det_parsed.get("student_no") or "").strip()
+    if email or name or student_no:
+        out["user"] = _audit_display_label_from_parts(
+            name, email, student_no, _str_id(uid) or ""
+        )
+    out["email"] = email
+    out["name"] = name
+    out["student_no"] = student_no
+    out["http_method"] = str(det_parsed.get("http_method") or "")
+
+    if msg:
+        out["summary"] = msg
+        if " | " in msg:
+            segments = [s.strip() for s in msg.split(" | ") if s.strip()]
+            if segments and (
+                not out["user"] or out["user"] == _str_id(uid)
+            ):
+                out["user"] = segments[0]
+            for seg in segments:
+                up = seg.upper()
+                if up.startswith(("GET ", "POST ", "PUT ", "PATCH ", "DELETE ")):
+                    bits = seg.split(None, 1)
+                    if len(bits) == 2:
+                        out["http_method"] = bits[0]
+                        if not page_path:
+                            page_path = bits[1].split("?", 1)[0]
+                            out["page_path"] = page_path
+                elif seg.startswith("HTTP ") and not out.get("status_code"):
+                    try:
+                        out["status_code"] = int(seg.replace("HTTP ", "").strip())
+                    except ValueError:
+                        pass
+                elif not page_label and seg and seg != segments[0] and not seg.upper().startswith("HTTP"):
+                    if not seg.startswith("?"):
+                        page_label = seg
+                        out["page_label"] = page_label
+    else:
+        out["summary"] = _audit_summary_line(
+            action=action_raw,
+            actor_label=out["user"],
+            actor_user_id=_str_id(uid),
+            entity_type=et or None,
+            entity_id=out["entity_id"] or None,
+            details=det_parsed or None,
+            source=str(out.get("source") or out.get("origin") or ""),
+        )
+    uid_str = _str_id(uid)
+    if uid_str:
+        out["actor_user_id"] = uid_str
+        out["user_id"] = uid_str
+    return _enrich_audit_row_identity(out, {})
+
+
+def _normalize_audit_log_rows(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    lookup_ids: list[str] = []
+    for r in rows:
+        uid = r.get("actor_user_id") or r.get("user_id") or r.get("subject_id")
+        if uid:
+            lookup_ids.append(str(uid))
+    user_lookup = _audit_webui_user_lookup(lookup_ids)
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        n = normalize_audit_log_row(dict(r))
+        out.append(_enrich_audit_row_identity(n, user_lookup))
+    return out
+
+
+def list_audit_logs(db: Session, limit: int) -> tuple[list, int]:
+    try:
+        rows = (
+            db.execute(
+                text(
+                    "SELECT * FROM obs_audit_logs ORDER BY created_at DESC NULLS LAST LIMIT :lim"
+                ),
+                {"lim": limit},
+            )
+            .mappings()
+            .all()
+        )
+        raw = [dict(r) for r in rows]
+        normalized = _normalize_audit_log_rows(raw)
+        return normalized, len(normalized)
+    except (ProgrammingError, OperationalError):
+        ensure_obs_audit_logs_schema_standalone()
+        try:
+            rows = (
+                db.execute(
+                    text(
+                        "SELECT * FROM obs_audit_logs ORDER BY created_at DESC NULLS LAST LIMIT :lim"
+                    ),
+                    {"lim": limit},
+                )
+                .mappings()
+                .all()
+            )
+            raw = [dict(r) for r in rows]
+            normalized = _normalize_audit_log_rows(raw)
+            return normalized, len(normalized)
+        except Exception:
+            log.exception("[OBS Audit] liste okunamadı (retry sonrası)")
+            return [], 0
+    except Exception:
+        log.exception("[OBS Audit] liste okunamadı")
+        return [], 0
 
 
 def list_document_requests_admin(

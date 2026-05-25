@@ -510,6 +510,8 @@ from open_webui.env import (
     WEBUI_ADMIN_NAME,
     ENABLE_EASTER_EGGS,
     LOG_FORMAT,
+    OBS_AUDIT_HTTP_ENABLED,
+    OBS_AUDIT_HTTP_SKIP_GET,
 )
 
 
@@ -551,6 +553,13 @@ from open_webui.utils.oauth import (
 )
 from open_webui.utils.security_headers import SecurityHeadersMiddleware
 from open_webui.utils.redis import get_redis_connection
+
+from open_webui.utils.obs_audit_http import (
+    OBS_AUDIT_ACTOR_STATE_KEY,
+    obs_http_path_matches_audit,
+    record_obs_audit_http_row_sync,
+    resolve_obs_audit_actor_dict,
+)
 
 from open_webui.tasks import (
     redis_task_command_listener,
@@ -1476,6 +1485,14 @@ async def check_url(request: Request, call_next):
             )
 
     request.state.enable_api_keys = app.state.config.ENABLE_API_KEYS
+    try:
+        setattr(
+            request.state,
+            OBS_AUDIT_ACTOR_STATE_KEY,
+            resolve_obs_audit_actor_dict(request),
+        )
+    except Exception:
+        setattr(request.state, OBS_AUDIT_ACTOR_STATE_KEY, {})
     response = await call_next(request)
     process_time = int(time.time()) - start_time
     response.headers["X-Process-Time"] = str(process_time)
@@ -1505,25 +1522,43 @@ obs_http_log = logging.getLogger("open_webui.obs_http")
 
 @app.middleware("http")
 async def log_obs_http_requests(request: Request, call_next):
-    """OBS / akademik uçlar: her istek konsolda kaynak DB ile izlenir (PostgreSQL obs_*)."""
+    """OBS / akademik uçlar: konsol + isteğe bağlı obs_audit_logs (HTTP düzeyinde)."""
     path = request.url.path
-    prefixes = (
-        "/api/v1/admin",
-        "/api/v1/student",
-        "/api/v1/academic",
-        "/api/v1/dev/",
-        "/api/v1/terms",
-    )
-    if not any(path.startswith(p) for p in prefixes):
+    method = request.method
+    if method in ("HEAD", "OPTIONS") or not obs_http_path_matches_audit(path):
         return await call_next(request)
-    obs_http_log.info("[OBS-HTTP] --> %s %s", request.method, path)
+
+    obs_http_log.info("[OBS-HTTP] --> %s %s", method, path)
+    started = time.perf_counter()
     try:
         response = await call_next(request)
     except Exception:
-        obs_http_log.exception("[OBS-HTTP] istisna %s %s", request.method, path)
+        obs_http_log.exception("[OBS-HTTP] istisna %s %s", method, path)
         raise
-    sc = getattr(response, "status_code", "?")
-    obs_http_log.info("[OBS-HTTP] <-- %s %s status=%s", request.method, path, sc)
+    status_code = int(getattr(response, "status_code", 0) or 0)
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    obs_http_log.info(
+        "[OBS-HTTP] <-- %s %s status=%s %sms", method, path, status_code, elapsed_ms
+    )
+
+    if OBS_AUDIT_HTTP_ENABLED and not (OBS_AUDIT_HTTP_SKIP_GET and method == "GET"):
+        actor = getattr(request.state, OBS_AUDIT_ACTOR_STATE_KEY, None)
+        if not isinstance(actor, dict) or not actor.get("user_id"):
+            actor = resolve_obs_audit_actor_dict(request)
+        query = request.url.query or ""
+
+        def _fire():
+            record_obs_audit_http_row_sync(
+                actor=actor,
+                method=method,
+                path=path,
+                query=query,
+                status_code=status_code,
+                duration_ms=elapsed_ms,
+            )
+
+        await asyncio.to_thread(_fire)
+
     return response
 
 

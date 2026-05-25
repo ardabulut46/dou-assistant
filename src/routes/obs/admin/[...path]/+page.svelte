@@ -622,7 +622,7 @@
 					docRequests = (r as unknown as { requests: unknown[] }).requests ?? [];
 				}),
 			audit: (t) =>
-				getDouAdminAuditLogs(t).then((r) => {
+				getDouAdminAuditLogs(t, 500).then((r) => {
 					auditLogs = (r as unknown as { logs: unknown[] }).logs ?? [];
 				}),
 			'student-advisors': async (t) => {
@@ -3810,34 +3810,60 @@
 							class="bg-slate-50 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
 						>
 							<tr>
-								<th class="px-4 py-3 text-left">#</th>
-								<th class="px-4 py-3 text-left">Eylem</th>
-								<th class="px-4 py-3 text-left">Varlık</th>
-								<th class="px-4 py-3 text-left">Kullanıcı</th>
 								<th class="px-4 py-3 text-left">Tarih</th>
+								<th class="px-4 py-3 text-left">E-posta</th>
+								<th class="px-4 py-3 text-left">Ad</th>
+								<th class="px-4 py-3 text-left">İşlem</th>
+								<th class="px-4 py-3 text-left">Sayfa / API</th>
+								<th class="px-4 py-3 text-left">İstek</th>
 							</tr>
 						</thead>
 						<tbody>
-							{#each auditLogs as { id: string; action: string; entity_type: string; user: string; created_at: string }[] as log}
+							{#each auditLogs as log, auditIdx (((log && typeof log === 'object') && ('id' in log) && ((log as { id?: unknown }).id != null) && `${(log as { id?: unknown }).id}`) ||
+								`i-${auditIdx}`)}
 								<tr
 									class="border-t border-black/5 dark:border-white/10 hover:bg-slate-50/50 transition-colors"
 								>
-									<td class="px-4 py-3 font-mono text-xs text-slate-400">{log.id}</td>
+									<td class="whitespace-nowrap px-4 py-3 text-xs text-slate-400"
+										>{String((log as { created_at?: string }).created_at ?? '')
+											.slice(0, 16)
+											.replace('T', ' ')}</td
+									>
+									<td class="max-w-[10rem] px-4 py-3 text-xs break-all text-slate-700 dark:text-slate-200"
+										>{String((log as { email?: string }).email ?? '—')}</td
+									>
+									<td class="max-w-[9rem] px-4 py-3 text-xs font-medium break-words text-slate-800 dark:text-slate-100"
+										>{String((log as { name?: string }).name ?? '—')}</td
+									>
 									<td class="px-4 py-3">
 										<span
-											class="rounded-full bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-600 dark:bg-white/10 dark:text-slate-300"
-											>{log.action}</span
+											class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700 dark:bg-white/10 dark:text-slate-200"
+											>{String(
+												(log as { action_label?: string }).action_label ??
+													(log as { action?: string }).action ??
+													''
+											)}</span
 										>
 									</td>
-									<td class="px-4 py-3 font-mono text-xs text-slate-500">{log.entity_type}</td>
-									<td class="px-4 py-3 text-xs font-medium">{log.user}</td>
-									<td class="px-4 py-3 text-xs text-slate-400"
-										>{log.created_at?.slice(0, 16).replace('T', ' ')}</td
+									<td class="max-w-[11rem] px-4 py-3 text-xs text-slate-600 dark:text-slate-300 break-words"
+										>{String(
+											(log as { page_label?: string }).page_label ??
+												(log as { entity_type?: string }).entity_type ??
+												'—'
+										)}</td
+									>
+									<td
+										class="max-w-[14rem] px-4 py-3 font-mono text-[11px] text-slate-500 dark:text-slate-400 break-all"
+										>{(() => {
+											const m = String((log as { http_method?: string }).http_method ?? '');
+											const p = String((log as { page_path?: string }).page_path ?? (log as { entity_id?: string }).entity_id ?? '');
+											return m && p ? `${m} ${p}` : p || m || '—';
+										})()}</td
 									>
 								</tr>
 							{:else}
 								<tr
-									><td colspan="5" class="px-4 py-8 text-center text-sm text-slate-400"
+									><td colspan="6" class="px-4 py-8 text-center text-sm text-slate-400"
 										>Log bulunamadı.</td
 									></tr
 								>

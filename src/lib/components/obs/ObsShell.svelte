@@ -13,6 +13,7 @@
 		getDouAcademicAnnouncements,
 		getDouAdminAnnouncements,
 		getDouStudentAttendance,
+		postDouClientAuditEvent,
 		type DouAnnouncement
 	} from '$lib/apis/douAcademic';
 
@@ -179,8 +180,28 @@
 	/** Küçük ekran: yan menü çekmece; md+ masaüstü görünüm değişmez. */
 	let mobileNavOpen = false;
 
-	afterNavigate(() => {
+	/** OBS içinde sayfa görüntüleme audit (aynı pathname tekrarını tek kayıtta tutar). */
+	let lastLoggedObsPath = '';
+
+	afterNavigate(({ to }) => {
 		mobileNavOpen = false;
+		if (!browser) return;
+		const pathname = (to?.url?.pathname ?? '').replace(/\/+$/, '') || '/';
+		if (!pathname.startsWith('/obs')) {
+			lastLoggedObsPath = '';
+			return;
+		}
+		const token = typeof localStorage !== 'undefined' ? localStorage.token : '';
+		if (!token) return;
+		if (pathname === lastLoggedObsPath) return;
+		lastLoggedObsPath = pathname;
+		void postDouClientAuditEvent(token, {
+			action: 'ui.page_view',
+			entity_type: 'obs_route',
+			path: pathname,
+			label: `OBS: ${pathname}`,
+			details: { route: pathname, role }
+		}).catch(() => {});
 	});
 
 	/** Çan rozeti için markAllRead’de yazılacak son fingerprint (bir yüklemede hesaplanır). */
