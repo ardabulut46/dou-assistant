@@ -211,6 +211,117 @@
 		return `${sinif}. sınıf · ${halfTr}`;
 	}
 
+	/** Açılan şubeler tablosu: sınıf + Güz/Bahar süzümü (ders kayıt & ekle-bırak). */
+	let catalogSectionFilterKey = 'all';
+
+	function catalogSlotKeyFromParts(classLabel: string, halfLabel: string): string {
+		return `${classLabel.trim()}|${halfLabel.trim()}`;
+	}
+
+	function catalogSlotKeyFromCourse(c: AvailableCourse): string {
+		const cl = String(c.catalog_class_label ?? '').trim();
+		const hl = String(c.catalog_half_label ?? '').trim();
+		if (!cl || cl === '—' || !hl || hl === '—') return '';
+		return catalogSlotKeyFromParts(cl, hl);
+	}
+
+	function catalogSlotLabelFromKey(key: string): string {
+		if (key === 'all') return 'Tümü — tüm sınıflar ve yarıyıllar';
+		const idx = key.indexOf('|');
+		if (idx < 0) return key;
+		return `${key.slice(0, idx)} · ${key.slice(idx + 1)}`;
+	}
+
+	function catalogSectionsCountSummary(
+		filtered: number,
+		total: number,
+		opts?: { realSections?: number; placeholders?: number }
+	): string {
+		const real = opts?.realSections;
+		const ph = opts?.placeholders ?? 0;
+		if (catalogFilterActive && total > 0) {
+			let line = `${filtered} şube listeleniyor (toplam ${total})`;
+			if (ph > 0 && real != null) {
+				line = `${filtered} satır listeleniyor — ${real} şube (toplam ${total})`;
+			}
+			return line;
+		}
+		if (ph > 0 && real != null) {
+			return `${total} satır · ${real} açık şube · ${ph} müfredat satırı`;
+		}
+		return `${total} açık şube`;
+	}
+
+	function defaultCatalogSlotKeyFromLimits(
+		sections: AvailableCourse[],
+		ps: number | null | undefined
+	): string {
+		const hint = obsCurriculumPlacementHint(ps);
+		if (!hint) return 'all';
+		const parts = hint.split(' · ');
+		if (parts.length < 2) return 'all';
+		const key = catalogSlotKeyFromParts(parts[0], parts[1]);
+		if (!sections.some((c) => catalogSlotKeyFromCourse(c) === key)) return 'all';
+		return key;
+	}
+
+	function syncCatalogSectionFilterDefault() {
+		const ps =
+			registrationLimits?.program_semester_number ?? profile?.program_semester_number;
+		catalogSectionFilterKey = defaultCatalogSlotKeyFromLimits(availableCourses ?? [], ps);
+	}
+
+	$: catalogSlotFilterOptions = (() => {
+		const seen = new Map<string, string>();
+		for (const c of availableCourses ?? []) {
+			const k = catalogSlotKeyFromCourse(c);
+			if (k && !seen.has(k)) seen.set(k, catalogSlotLabelFromKey(k));
+		}
+		const slots = [...seen.entries()]
+			.sort((a, b) => {
+				const parse = (k: string) => {
+					const [cl, hl] = k.split('|');
+					const n = parseInt(cl, 10) || 0;
+					return { n, hl: hl === 'Güz' ? 0 : 1 };
+				};
+				const pa = parse(a[0]);
+				const pb = parse(b[0]);
+				return pa.n !== pb.n ? pa.n - pb.n : pa.hl - pb.hl;
+			})
+			.map(([key, label]) => ({ key, label }));
+		const ps =
+			registrationLimits?.program_semester_number ?? profile?.program_semester_number;
+		const defaultKey = defaultCatalogSlotKeyFromLimits(availableCourses ?? [], ps);
+		if (defaultKey !== 'all') {
+			const idx = slots.findIndex((s) => s.key === defaultKey);
+			if (idx > 0) {
+				const [first] = slots.splice(idx, 1);
+				slots.unshift(first);
+			}
+		}
+		return [...slots, { key: 'all', label: catalogSlotLabelFromKey('all') }];
+	})();
+
+	$: if (
+		catalogSectionFilterKey &&
+		catalogSectionFilterKey !== 'all' &&
+		!catalogSlotFilterOptions.some((o) => o.key === catalogSectionFilterKey)
+	) {
+		catalogSectionFilterKey = defaultCatalogSlotKeyFromLimits(
+			availableCourses ?? [],
+			registrationLimits?.program_semester_number ?? profile?.program_semester_number
+		);
+	}
+
+	$: filteredAvailableCourses =
+		catalogSectionFilterKey === 'all'
+			? (availableCourses ?? [])
+			: (availableCourses ?? []).filter(
+					(c) => catalogSlotKeyFromCourse(c) === catalogSectionFilterKey
+				);
+
+	$: catalogFilterActive = catalogSectionFilterKey !== 'all';
+
 	function normMandatoryCourseCode(raw: string): string {
 		return String(raw ?? '').trim().toUpperCase();
 	}
@@ -844,6 +955,7 @@
 					token,
 					regTid || undefined
 				).catch(() => null);
+				syncCatalogSectionFilterDefault();
 				if (browser && import.meta.env.DEV) {
 					const avPayload =
 						avRes.status === 'fulfilled'
@@ -944,6 +1056,7 @@
 					token,
 					regTid || undefined
 				).catch(() => null);
+				syncCatalogSectionFilterDefault();
 			}
 			if (apiKey === 'grades') {
 				const [trRes, enrRes] = await Promise.all([
@@ -2118,19 +2231,43 @@
 					class="flex flex-wrap items-start justify-between gap-2 border-b border-black/5 px-4 py-3 dark:border-white/10 sm:items-center sm:px-5"
 				>
 					<div class="text-sm font-bold text-slate-600 dark:text-slate-300">Açılan Dersler</div>
-					<div class="shrink-0 text-xs text-slate-400">
-						{#if registrationOfferPlaceholderRowsMeta > 0}
-							<span title="Gerçek şube ve yer tutucu satır ayrımı"
-								>{availableCourses.length} satır · {registrationRealSectionRowCount} şube · {registrationOfferPlaceholderRowsMeta} müfredat</span>
-						{:else}
-							<span>{availableCourses.length} ders mevcut</span>
-						{/if}
+					<div class="flex flex-wrap items-center gap-3">
+						<label class="flex min-w-0 flex-col gap-0.5 sm:flex-row sm:items-center sm:gap-2">
+							<span class="shrink-0 text-[11px] font-medium text-slate-500 dark:text-slate-400"
+								>Sınıf ve yarıyıl</span
+							>
+							<select
+								bind:value={catalogSectionFilterKey}
+								class="max-w-[16rem] rounded-lg border border-black/10 bg-white px-2 py-1.5 text-xs font-medium text-slate-800 shadow-sm dark:border-white/10 dark:bg-white/10 dark:text-slate-100"
+							>
+								{#each catalogSlotFilterOptions as opt (opt.key)}
+									<option value={opt.key}>{opt.label}</option>
+								{/each}
+							</select>
+						</label>
+						<div class="shrink-0 text-xs text-slate-500 dark:text-slate-400">
+							<span
+								>{catalogSectionsCountSummary(
+									filteredAvailableCourses.length,
+									availableCourses.length,
+									registrationOfferPlaceholderRowsMeta > 0
+										? {
+												realSections: registrationRealSectionRowCount,
+												placeholders: registrationOfferPlaceholderRowsMeta
+											}
+										: undefined
+								)}</span
+							>
+						</div>
 					</div>
 				</div>
 				<p
 					class="border-b border-black/5 bg-slate-50/90 px-4 py-2 text-[11px] leading-snug text-slate-600 dark:border-white/10 dark:bg-white/5 dark:text-slate-400 sm:px-5"
 				>
-					Aynı akademik süre öbeğinde açılmış şubeler listelenir; müfredatta bu yarıyılda yer alması gereken ancak seçilen sürede şubesiz kodlar için satır gösterilir (zorunlu delikleri önce seçin, seçmeliler sonra).
+					Derslerinizi sınıf ve yarıyılınıza göre listeleyebilirsiniz. Bölümünüzdeki tüm açılan şubeleri
+					görmek için listeden <strong>Tümü — tüm sınıflar ve yarıyıllar</strong> seçeneğini kullanın.
+					Şubesi tanımlı dersler kayıt için seçilebilir; şubesiz satırlar yalnızca müfredat planı
+					bilgisini gösterir.
 				</p>
 				{#if registrationSectionsEmptyHint}
 					<p
@@ -2142,19 +2279,32 @@
 				<p class="border-b border-black/5 bg-slate-50/90 px-3 py-1.5 text-[11px] text-slate-500 dark:border-white/10 dark:bg-white/5 dark:text-slate-400 sm:hidden">
 					Tabloyu yatay kaydırarak tüm sütunları görebilirsiniz.
 				</p>
-				{#if !availableCourses.length}
+				{#if !filteredAvailableCourses.length}
 					<div
 						class="space-y-3 px-5 py-6 text-center text-sm leading-relaxed text-slate-500 dark:text-slate-400"
 					>
-						<p>Açılan ders bulunamadı.</p>
-						{#if registrationSectionsInTermTotal !== null || registrationSectionsQueryRowsStudent !== null}
-							<p class="text-[11px] leading-snug text-slate-400">
-								Dönem öbeğinde toplam
-								<span class="font-mono text-slate-500 dark:text-slate-300">obs_course_sections</span>:
-								<strong>{registrationSectionsInTermTotal ?? '—'}</strong>
-								· Uygun şube satırı (öğrenci sorgusu):
-								<strong>{registrationSectionsQueryRowsStudent ?? '—'}</strong>
+						{#if availableCourses.length && catalogFilterActive}
+							<p>
+								Seçtiğiniz <strong>{catalogSlotLabelFromKey(catalogSectionFilterKey)}</strong> için
+								açılmış şube bulunmuyor.
 							</p>
+							<button
+								type="button"
+								class="text-xs font-semibold text-sky-600 underline hover:text-sky-700 dark:text-sky-400"
+								on:click={() => (catalogSectionFilterKey = 'all')}
+								>Tüm açılan şubeleri listele ({availableCourses.length})</button
+							>
+						{:else}
+							<p>Açılan ders bulunamadı.</p>
+							{#if registrationSectionsInTermTotal !== null || registrationSectionsQueryRowsStudent !== null}
+								<p class="text-[11px] leading-snug text-slate-400">
+									Dönem öbeğinde toplam
+									<span class="font-mono text-slate-500 dark:text-slate-300">obs_course_sections</span>:
+									<strong>{registrationSectionsInTermTotal ?? '—'}</strong>
+									· Uygun şube satırı (öğrenci sorgusu):
+									<strong>{registrationSectionsQueryRowsStudent ?? '—'}</strong>
+								</p>
+							{/if}
 						{/if}
 					</div>
 				{:else}
@@ -2177,7 +2327,7 @@
 								</tr>
 							</thead>
 							<tbody>
-								{#each availableCourses as c}
+								{#each filteredAvailableCourses as c}
 									{@const ophRg = !!(c as AvailableCourse & { offer_placeholder?: boolean }).offer_placeholder}
 									{@const inCart =
 										!ophRg &&
@@ -2486,19 +2636,43 @@
 					<div class="min-w-0 text-sm font-bold text-slate-600 dark:text-slate-300">
 						Ders ekle-bırak için açılan şubeler
 					</div>
-					<div class="shrink-0 text-xs text-slate-400">
-						{#if addDropOfferPlaceholderRowsMeta > 0}
-							<span title="Gerçek şube ve müfredat yer tutucu satırları ayrımı"
-								>{availableCourses.length} satır · {addDropRealSectionRowCount ?? 0} şube · {addDropOfferPlaceholderRowsMeta} müfredat</span>
-						{:else}
-							<span>{availableCourses.length} şube</span>
-						{/if}
+					<div class="flex flex-wrap items-center gap-3">
+						<label class="flex min-w-0 flex-col gap-0.5 sm:flex-row sm:items-center sm:gap-2">
+							<span class="shrink-0 text-[11px] font-medium text-slate-500 dark:text-slate-400"
+								>Sınıf ve yarıyıl</span
+							>
+							<select
+								bind:value={catalogSectionFilterKey}
+								class="max-w-[16rem] rounded-lg border border-black/10 bg-white px-2 py-1.5 text-xs font-medium text-slate-800 shadow-sm dark:border-white/10 dark:bg-white/10 dark:text-slate-100"
+							>
+								{#each catalogSlotFilterOptions as opt (opt.key)}
+									<option value={opt.key}>{opt.label}</option>
+								{/each}
+							</select>
+						</label>
+						<div class="shrink-0 text-xs text-slate-500 dark:text-slate-400">
+							<span
+								>{catalogSectionsCountSummary(
+									filteredAvailableCourses.length,
+									availableCourses.length,
+									addDropOfferPlaceholderRowsMeta > 0
+										? {
+												realSections: addDropRealSectionRowCount ?? 0,
+												placeholders: addDropOfferPlaceholderRowsMeta
+											}
+										: undefined
+								)}</span
+							>
+						</div>
 					</div>
 				</div>
 				<p
 					class="border-b border-black/5 bg-slate-50/90 px-4 py-2 text-[11px] leading-snug text-slate-600 dark:border-white/10 dark:bg-white/5 dark:text-slate-400 sm:px-5"
 				>
-					Öğrenci <strong>bölümünüzün</strong> katalog sırasına göre dersler; bu döneme şube tanımlandıysa satır seçilebilir olur (aksi halde OBS şubesiz satır olarak görünür).
+					Derslerinizi sınıf ve yarıyılınıza göre listeleyebilirsiniz. Bölümünüzdeki tüm açılan şubeleri
+					görmek için listeden <strong>Tümü — tüm sınıflar ve yarıyıllar</strong> seçeneğini kullanın.
+					Şubesi tanımlı dersler ekle-bırak için seçilebilir; şubesiz satırlar yalnızca müfredat planı
+					bilgisini gösterir.
 				</p>
 				{#if addDropSectionsEmptyHint}
 					<p
@@ -2510,32 +2684,45 @@
 				<p class="border-b border-black/5 bg-slate-50/90 px-3 py-1.5 text-[11px] text-slate-500 dark:border-white/10 dark:bg-white/5 dark:text-slate-400 sm:hidden">
 					Tabloyu yatay kaydırarak tüm sütunları görebilirsiniz.
 				</p>
-				{#if !availableCourses.length}
+				{#if !filteredAvailableCourses.length}
 					<div
 						class="space-y-3 px-5 py-6 text-center text-sm leading-relaxed text-slate-500 dark:text-slate-400"
 					>
-						<p>Açılan ders bulunamadı.</p>
-						{#if addDropCoursesPendingSections.length > 0}
-							<div class="text-left text-xs text-slate-600 dark:text-slate-300">
-								<p class="font-semibold text-slate-700 dark:text-slate-200">
-									Müfredatta eksik; bu süre sorgusunda şube çıkmayan zorunlular
-								</p>
-								<ul
-									class="mt-2 max-h-48 list-disc space-y-1 overflow-y-auto pl-5 marker:text-slate-400"
-								>
-									{#each addDropCoursesPendingSections as p}
-										<li>
-											<span class="font-mono font-semibold text-slate-500 dark:text-slate-400"
-												>{p.course_code ?? '?'}</span
-											>
-											{#if p.course_name}
-												<span class="text-slate-500 dark:text-slate-400">
-													— {p.course_name}</span>
-											{/if}
-										</li>
-									{/each}
-								</ul>
-							</div>
+						{#if availableCourses.length && catalogFilterActive}
+							<p>
+								Seçtiğiniz <strong>{catalogSlotLabelFromKey(catalogSectionFilterKey)}</strong> için
+								açılmış şube bulunmuyor.
+							</p>
+							<button
+								type="button"
+								class="text-xs font-semibold text-sky-600 underline hover:text-sky-700 dark:text-sky-400"
+								on:click={() => (catalogSectionFilterKey = 'all')}
+								>Tüm açılan şubeleri listele ({availableCourses.length})</button
+							>
+						{:else}
+							<p>Açılan ders bulunamadı.</p>
+							{#if addDropCoursesPendingSections.length > 0}
+								<div class="text-left text-xs text-slate-600 dark:text-slate-300">
+									<p class="font-semibold text-slate-700 dark:text-slate-200">
+										Müfredatta eksik; bu süre sorgusunda şube çıkmayan zorunlular
+									</p>
+									<ul
+										class="mt-2 max-h-48 list-disc space-y-1 overflow-y-auto pl-5 marker:text-slate-400"
+									>
+										{#each addDropCoursesPendingSections as p}
+											<li>
+												<span class="font-mono font-semibold text-slate-500 dark:text-slate-400"
+													>{p.course_code ?? '?'}</span
+												>
+												{#if p.course_name}
+													<span class="text-slate-500 dark:text-slate-400">
+														— {p.course_name}</span>
+												{/if}
+											</li>
+										{/each}
+									</ul>
+								</div>
+							{/if}
 						{/if}
 					</div>
 				{:else}
@@ -2558,7 +2745,7 @@
 								</tr>
 							</thead>
 							<tbody>
-								{#each availableCourses as c}
+								{#each filteredAvailableCourses as c}
 									{@const oph = !!(c as AvailableCourse & { offer_placeholder?: boolean }).offer_placeholder}
 									{@const inCart =
 										!oph &&
@@ -3395,11 +3582,9 @@
 							></div>
 						</div>
 						<p class="mt-3 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-							Bu liste yalnızca <strong class="font-semibold text-slate-600 dark:text-slate-300"
-								>obs_course_enrollments</strong
-							> tablosundaki şube kayıtlarınızdan üretilir. Tam diploma müfredatı (alınmamış tüm zorunlu/seçmeli
-							dersler) ayrı bir program tablosu olmadan gösterilmez; gördüğünüz her satır için veritabanında
-							kayıt vardır.
+							Kayıtlı derslerinizin tamamlanma özeti. Genel ilerleme, bu listede yer alan dersler
+							içinde başarıyla tamamladıklarınızın oranına göre hesaplanır. Programınızda henüz
+							alınmamış dersler bu ekranda ayrıca listelenmez.
 						</p>
 					</div>
 
