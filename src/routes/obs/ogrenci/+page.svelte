@@ -86,8 +86,7 @@
 			title: 'Belge Talebi',
 			desc: 'Transkript, öğrenci belgesi',
 			icon: ''
-		},
-		{ href: '/obs/ogrenci/transkript', title: 'Transkript', desc: 'Tüm dönemler', icon: '' }
+		}
 	];
 </script>
 

@@ -50,7 +50,6 @@
 				{ label: 'Not Listesi', href: '/obs/ogrenci/not-listesi' },
 				{ label: 'Dönem Ortalamaları', href: '/obs/ogrenci/donem-ortalamalari' },
 				{ label: 'Not Hesaplama', href: '/obs/ogrenci/not-hesaplama' },
-				{ label: 'Transkript', href: '/obs/ogrenci/transkript' },
 				{ label: 'Devamsızlık Durumu', href: '/obs/ogrenci/devamsizlik-durumu' }
 			]
 		},
