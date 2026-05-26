@@ -3717,30 +3717,16 @@
 									class="inline-flex size-5 items-center justify-center rounded-full bg-slate-100 text-[11px] font-bold text-slate-600 dark:bg-white/10 dark:text-slate-200"
 									>i</span
 								>
-								%~30 kota
+								Devamsızlık hakkı
 							</span>
 						</summary>
 						<div
-							class="absolute right-0 z-30 mt-2 w-[min(100vw-1.25rem,20rem)] space-y-2 rounded-xl border border-black/10 bg-white p-3 text-[11px] leading-snug text-slate-600 shadow-lg dark:border-white/15 dark:bg-slate-900 dark:text-slate-300"
+							class="absolute right-0 z-30 mt-2 w-[min(100vw-1.25rem,18rem)] rounded-xl border border-black/10 bg-white p-3 text-[11px] leading-relaxed text-slate-600 shadow-lg dark:border-white/15 dark:bg-slate-900 dark:text-slate-300"
 						>
 							<p>
-								Yaklaşık <strong>%30 devamsızlık kotası:</strong> her ders satırında, o ana kadar
-								işlenen hafta sayısı (Toplam) için tabana yuvarlanmış ⌊Toplam × 0,30⌋ kadar oturuma
-								devamsız kalınabilir.
-							</p>
-							<p class="font-mono tabular-nums text-[11px] text-slate-500 dark:text-slate-400">
-								Örnek: 4 hafta → 1 · 10 hafta → 3 · 14 hafta → 4 eksik serbest kabataslak olarak
-								alanır (kurum düzenlemesi değişebilir).
-							</p>
-							<p>
-								Bu kota <strong>Devamsız</strong> sütunundaki sayı ile karşılaştırılır. <strong>Durum</strong>
-								rozeti ise sadece <strong>Devam %</strong> ile belirlenir: İyi ≥%85 · Uyarı %70–84 · Kritik
-								&lt;%70.
-								<span class="block pt-1 opacity-90">
-									Tabloda sarı kullanılmıyor: kota uygunsa yeşil ton; kotayı 1 oturumla aşan satırlarda
-									kırmızımsı pembemsi; kotayı iki veya daha fazla aşan veya katılımın %70 altı olduğu
-									satırlarda daha sert kırmızı.
-								</span>
+								Kayıtlı olduğunuz her ders için, o güne kadar işlenen hafta sayısının yaklaşık
+								<strong>%30’una</strong> karşılık gelen devamsızlık hakkınız bulunur. Bu hakkın
+								kullanımı tabloda <strong>Devamsız</strong> sütununda görüntülenir.
 							</p>
 						</div>
 					</details>

@@ -25,8 +25,6 @@
 		getDouAcademicApprovalRequests,
 		resolveDouApprovalRequest,
 		getDouAdviseeEnrollments,
-		finalizeDouAdviseeSchedule,
-		rejectDouAdviseeSchedule,
 		getDouTerms,
 		getDouAcademicConsultingHours,
 		putDouAcademicConsultingHours,
@@ -43,6 +41,8 @@
 		type DouTerm,
 		type DouAnnouncement,
 		type DouApprovalRequest,
+		type DouAddDropCourseLine,
+		type DouAddDropApprovalDetail,
 		type DouEnrollment,
 		type AcademicGradeRow,
 		type AcademicStudent,
@@ -112,6 +112,8 @@
 	let examClassroomsErr: string | null = null;
 	let advisees: unknown[] = [];
 	let adviseeDetailUserId: string | null = null;
+	let adviseeDetailName = '';
+	let adviseeDetailStudentNo = '';
 	let adviseeEnrollments: DouEnrollment[] = [];
 	let adviseeSchedBusy = false;
 	let adviseeSchedErr: string | null = null;
@@ -565,6 +567,8 @@
 							: 'Danışmanlık saatleri yüklenemedi (Şema güncellenmemiş olabilir: consulting_hours kolonu).';
 				}
 				adviseeDetailUserId = null;
+				adviseeDetailName = '';
+				adviseeDetailStudentNo = '';
 				adviseeEnrollments = [];
 			}
 			if (apiKey === 'approvals') {
@@ -705,10 +709,121 @@
 		}
 	}
 
+	function adviseeEnrollmentStatusLabel(status: string): string {
+		const s = (status || '').toLowerCase();
+		if (s === 'draft') return 'Taslak';
+		if (s === 'pending') return 'Onay bekliyor';
+		if (s === 'active') return 'Kayıtlı';
+		if (s === 'pending_drop') return 'Bırakma bekliyor';
+		return status || '—';
+	}
+
+	function adviseeEnrollmentStatusClass(status: string): string {
+		const s = (status || '').toLowerCase();
+		if (s === 'pending' || s === 'pending_drop') {
+			return 'font-medium text-amber-700 dark:text-amber-300';
+		}
+		if (s === 'active') {
+			return 'font-medium text-emerald-700 dark:text-emerald-300';
+		}
+		return 'text-slate-600 dark:text-slate-400';
+	}
+
+	function closeAdviseeDetail() {
+		adviseeDetailUserId = null;
+		adviseeDetailName = '';
+		adviseeDetailStudentNo = '';
+		adviseeEnrollments = [];
+		adviseeSchedErr = null;
+	}
+
 	function adviseeGpaTextClass(gpa: number): string {
 		return gpa >= 2.0
 			? 'text-emerald-600 dark:text-emerald-400'
 			: 'text-red-600 dark:text-red-400';
+	}
+
+	function stripApprovalSystemNote(note: string): string {
+		let s = note;
+		const cut = s.search(/\n---\n/);
+		if (cut >= 0) s = s.slice(0, cut);
+		const sys = s.search(/Sistem Notu:/i);
+		if (sys >= 0) s = s.slice(0, sys);
+		return s.trim();
+	}
+
+	function studentMessageFromApprovalNote(note: string | null | undefined): string | null {
+		if (!note) return null;
+		const idx = note.indexOf('Öğrenci Notu:');
+		if (idx < 0) return null;
+		let msg = note.slice(idx + 'Öğrenci Notu:'.length).trim();
+		return stripApprovalSystemNote(msg) || null;
+	}
+
+	function parseAddDropChangesFromNote(note: string | null | undefined): {
+		added: DouAddDropCourseLine[];
+		dropped: DouAddDropCourseLine[];
+	} {
+		const added: DouAddDropCourseLine[] = [];
+		const dropped: DouAddDropCourseLine[] = [];
+		if (!note) return { added, dropped };
+		const human = stripApprovalSystemNote(note);
+		for (const line of human.split('\n')) {
+			const t = line.trim();
+			// Kodda boşluk olabilir: «İŞ 400», «YBS 314»
+			const addM = t.match(/^(?:•\s*)?\[EKLE\]\s+(.+?)\s+-\s+(.+?)\s*\((\d+)\s*AKTS\)\s*$/i);
+			if (addM) {
+				added.push({
+					enrollment_id: '',
+					course_code: addM[1].trim(),
+					course_name: addM[2].trim(),
+					akts: Number(addM[3]) || 0
+				});
+				continue;
+			}
+			const dropM = t.match(/^(?:•\s*)?\[BIRAK\]\s+(.+?)\s+-\s+(.+?)\s*$/i);
+			if (dropM) {
+				dropped.push({
+					enrollment_id: '',
+					course_code: dropM[1].trim(),
+					course_name: dropM[2].trim(),
+					akts: 0
+				});
+			}
+		}
+		return { added, dropped };
+	}
+
+	function mergeAddDropCourseLines(
+		fromApi: DouAddDropCourseLine[] | undefined,
+		fromNote: DouAddDropCourseLine[]
+	): DouAddDropCourseLine[] {
+		const api = fromApi ?? [];
+		if (api.length) return api;
+		return fromNote;
+	}
+
+	function effectiveAddDropCourses(req: DouApprovalRequest): {
+		added: DouAddDropCourseLine[];
+		dropped: DouAddDropCourseLine[];
+		kept: DouAddDropCourseLine[];
+	} {
+		const det = req.add_drop_detail;
+		const parsed = parseAddDropChangesFromNote(req.note);
+		return {
+			added: mergeAddDropCourseLines(det?.added_courses, parsed.added),
+			dropped: mergeAddDropCourseLines(det?.dropped_courses, parsed.dropped),
+			kept: det?.kept_courses ?? []
+		};
+	}
+
+	function registrationSummaryFromNote(note: string | null | undefined): string | null {
+		if (!note) return null;
+		const s = stripApprovalSystemNote(note);
+		if (/Ders Ekle\/Bırak Talebi/i.test(s) && /\[EKLE\]|\[BIRAK\]/i.test(s)) {
+			return null;
+		}
+		return s.replace(/^Ders Ekle\/Bırak Talebi\s*/i, '').trim() || null;
 	}
 
 	function cancelEditAnn() {
@@ -1157,8 +1272,14 @@
 		}
 	}
 
-	async function loadAdviseeEnrollments(studentUserId: string) {
+	async function loadAdviseeEnrollments(
+		studentUserId: string,
+		studentName?: string,
+		studentNo?: string
+	) {
 		adviseeDetailUserId = studentUserId;
+		adviseeDetailName = (studentName || '').trim();
+		adviseeDetailStudentNo = (studentNo || '').trim();
 		adviseeSchedErr = null;
 		const token = localStorage.token ?? null;
 		if (!token || !activeTermId) {
@@ -1196,36 +1317,6 @@
 				e instanceof Error ? e.message : 'Kaydedilemedi (kolon eksik mi kontrol edin).';
 		} finally {
 			consultingHoursSaveBusy = false;
-		}
-	}
-
-	async function runFinalizeSched(studentUserId: string) {
-		const token = localStorage.token ?? null;
-		adviseeSchedErr = null;
-		if (!token || !activeTermId) return;
-		adviseeSchedBusy = true;
-		try {
-			await finalizeDouAdviseeSchedule(token, studentUserId, activeTermId);
-			await loadAdviseeEnrollments(studentUserId);
-		} catch (e: unknown) {
-			adviseeSchedErr = e instanceof Error ? e.message : 'Kesinleştirilemedi.';
-		} finally {
-			adviseeSchedBusy = false;
-		}
-	}
-
-	async function runRejectSched(studentUserId: string) {
-		const token = localStorage.token ?? null;
-		adviseeSchedErr = null;
-		if (!token || !activeTermId) return;
-		adviseeSchedBusy = true;
-		try {
-			await rejectDouAdviseeSchedule(token, studentUserId, activeTermId);
-			await loadAdviseeEnrollments(studentUserId);
-		} catch (e: unknown) {
-			adviseeSchedErr = e instanceof Error ? e.message : 'İşlem yapılamadı.';
-		} finally {
-			adviseeSchedBusy = false;
 		}
 	}
 
@@ -2074,14 +2165,12 @@
 							</svg>
 						</div>
 						<div class="min-w-0 flex-1">
-							<h3
-								class="text-xs font-bold uppercase tracking-wide text-indigo-800/70 dark:text-indigo-200/80 sm:text-sm"
-							>
-								Danışmanlık / ofis görüşme saatleri
+							<h3 class="text-sm font-bold text-slate-800 dark:text-slate-100">
+								Ofis görüşme saatleri
 							</h3>
-							<p class="mt-1 text-xs text-slate-600 dark:text-slate-400">
-								Aşağıdaki metni danışmanı olduğunuz öğrenciler <strong>Danışman Bilgileri</strong> sayfasında görür;
-								yalnızca siz güncellersiniz (PUT).
+							<p class="mt-1 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
+								Danışmanlık öğrencileriniz bu bilgiyi <strong>Danışman Bilgileri</strong> sayfasında
+								görür. Metni düzenledikten sonra kaydedin.
 							</p>
 						</div>
 					</div>
@@ -2095,7 +2184,9 @@
 					</button>
 				</div>
 				<label class="mt-4 block">
-					<span class="sr-only">Görüşme saatleri</span>
+					<span class="mb-1 block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
+						>Görüşme saatleri ve iletişim</span
+					>
 					<textarea
 						bind:value={consultingHoursDraft}
 						rows="4"
@@ -2144,7 +2235,12 @@
 						<div class="text-right">
 							<button
 								type="button"
-								on:click={() => loadAdviseeEnrollments(adv.student_user_id ?? '')}
+								on:click={() =>
+									loadAdviseeEnrollments(
+										adv.student_user_id ?? '',
+										adv.name,
+										adv.student_no
+									)}
 								class="rounded-lg bg-sky-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-sky-400"
 							>
 								Ders yükü
@@ -2157,91 +2253,82 @@
 			</div>
 
 			{#if adviseeDetailUserId}
+				{@const adviseeAktsTotal = adviseeEnrollments.reduce((s, e) => s + (e.akts ?? 0), 0)}
 				<div
-					class="mt-4 space-y-3 rounded-xl border border-indigo-200 bg-indigo-50/50 p-5 dark:border-indigo-900/40 dark:bg-indigo-950/20"
+					class="mt-4 overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5"
 				>
-					<div class="flex flex-wrap items-center justify-between gap-2">
-						<span class="text-sm font-bold text-indigo-900 dark:text-indigo-100">
-							Öğrencinin ders yükü — kullanıcı:
-							<span class="font-mono text-xs">{adviseeDetailUserId}</span>
-						</span>
+					<div
+						class="flex flex-wrap items-start justify-between gap-3 border-b border-black/5 px-5 py-4 dark:border-white/10"
+					>
+						<div class="min-w-0">
+							<div class="text-sm font-bold text-slate-800 dark:text-slate-100">
+								Ders yükü — {adviseeDetailName || 'Öğrenci'}
+							</div>
+							{#if adviseeDetailStudentNo}
+								<div class="mt-0.5 font-mono text-xs text-slate-500 dark:text-slate-400">
+									{adviseeDetailStudentNo}
+								</div>
+							{/if}
+						</div>
 						<button
 							type="button"
-							on:click={() => {
-								adviseeDetailUserId = null;
-								adviseeEnrollments = [];
-							}}
-							class="text-xs text-indigo-600 hover:underline"
+							on:click={closeAdviseeDetail}
+							class="shrink-0 rounded-lg border border-black/10 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/10"
 						>
 							Kapat
 						</button>
 					</div>
-					{#if adviseeSchedErr}
-						<div class="rounded-lg bg-red-100 px-3 py-2 text-sm text-red-800">{adviseeSchedErr}</div>
-					{/if}
-					{#if adviseeSchedBusy}
-						<div class="text-sm text-slate-500">Yükleniyor…</div>
-					{:else if adviseeEnrollments.length}
-						<div class="overflow-x-auto rounded-lg border border-indigo-100 bg-white dark:border-indigo-900/30 dark:bg-white/5">
-							<table class="w-full text-sm">
-								<thead class="bg-slate-50 text-xs font-bold text-slate-500 dark:bg-white/5">
-									<tr>
-										<th class="px-3 py-2 text-left">Kod</th>
-										<th class="px-3 py-2 text-left">Ders</th>
-										<th class="px-3 py-2 text-center">AKTS</th>
-										<th class="px-3 py-2 text-left">DB durumu</th>
-									</tr>
-								</thead>
-								<tbody>
-									{#each adviseeEnrollments as e}
-										<tr class="border-t border-black/5 dark:border-white/10">
-											<td class="px-3 py-2 font-mono text-xs">{e.course_code}</td>
-											<td class="px-3 py-2">{e.course_name}</td>
-											<td class="px-3 py-2 text-center">{e.akts}</td>
-											<td class="px-3 py-2">
-												{#if e.status === 'draft'}
-													<span class="text-slate-500">taslak</span>
-												{:else if e.status === 'pending'}
-													<span class="font-semibold text-amber-700 dark:text-amber-300">
-														danışmanda
-													</span>
-												{:else if e.status === 'active'}
-													<span class="font-semibold text-emerald-700 dark:text-emerald-300">
-														kesinleştirildi (obs_course_enrollments.active)
-													</span>
-												{:else}
-													{e.status}
-												{/if}
-											</td>
+					<div class="px-5 py-4">
+						{#if adviseeSchedErr}
+							<div
+								class="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800 dark:bg-red-950/40 dark:text-red-300"
+							>
+								{adviseeSchedErr}
+							</div>
+						{:else if adviseeSchedBusy}
+							<div class="text-sm text-slate-500">Yükleniyor…</div>
+						{:else if adviseeEnrollments.length}
+							<div
+								class="overflow-x-auto rounded-lg border border-black/10 dark:border-white/10"
+							>
+								<table class="w-full text-sm">
+									<thead
+										class="bg-slate-50 text-xs font-bold text-slate-500 dark:bg-white/5 dark:text-slate-400"
+									>
+										<tr>
+											<th class="px-4 py-3 text-left">Kod</th>
+											<th class="px-4 py-3 text-left">Ders</th>
+											<th class="px-4 py-3 text-center">AKTS</th>
+											<th class="px-4 py-3 text-left">Durum</th>
 										</tr>
-									{/each}
-								</tbody>
-							</table>
-						</div>
-						<div class="flex flex-wrap gap-2">
-							<button
-								type="button"
-								disabled={adviseeSchedBusy}
-								on:click={() => adviseeDetailUserId && runFinalizeSched(adviseeDetailUserId)}
-								class="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
-							>
-								Kesinleştir (onaylanmış ders değişiklik talebi → kayıt)
-							</button>
-							<button
-								type="button"
-								disabled={adviseeSchedBusy}
-								on:click={() => adviseeDetailUserId && runRejectSched(adviseeDetailUserId)}
-								class="rounded-lg border border-red-300 bg-white px-4 py-2 text-xs font-bold text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:bg-transparent"
-							>
-								Listeyi iade et (pending → taslak)
-							</button>
-						</div>
-						<p class="text-xs text-indigo-800/80 dark:text-indigo-200/80">
-							Aynı işlem <strong>Onay Talepleri</strong> sayfasındaki talepler için <strong>Onayla</strong> veya
-							<strong>Reddet</strong> ile de yapılabilir; kayıtlar <code>obs_approval_requests</code> ve
-							<code>obs_course_enrollments</code> üzerinden güncellenir.
-						</p>
-					{/if}
+									</thead>
+									<tbody>
+										{#each adviseeEnrollments as e}
+											<tr
+												class="border-t border-black/5 hover:bg-slate-50/50 dark:border-white/10 dark:hover:bg-white/5"
+											>
+												<td class="px-4 py-3 font-mono text-xs font-semibold text-slate-600 dark:text-slate-300"
+													>{e.course_code}</td
+												>
+												<td class="px-4 py-3">{e.course_name}</td>
+												<td class="px-4 py-3 text-center font-medium">{e.akts}</td>
+												<td class="px-4 py-3">
+													<span class={adviseeEnrollmentStatusClass(e.status)}
+														>{adviseeEnrollmentStatusLabel(e.status)}</span
+													>
+												</td>
+											</tr>
+										{/each}
+									</tbody>
+								</table>
+							</div>
+							<p class="mt-3 text-right text-xs font-semibold text-slate-600 dark:text-slate-300">
+								Toplam {adviseeAktsTotal} AKTS · {adviseeEnrollments.length} ders
+							</p>
+						{:else}
+							<p class="text-sm text-slate-500">Bu dönem için kayıtlı ders bulunamadı.</p>
+						{/if}
+					</div>
 				</div>
 			{/if}
 
@@ -2258,111 +2345,144 @@
 					</div>
 				{/if}
 				{#each approvals as req}
+					{@const addDrop = req.add_drop_detail}
+					{@const courses = addDrop ? effectiveAddDropCourses(req) : null}
+					{@const studentNote = studentMessageFromApprovalNote(req.note)}
+					{@const regSummary = !addDrop ? registrationSummaryFromNote(req.note) : null}
 					<div
 						class="rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5"
 					>
 						<div class="flex items-start justify-between gap-4">
 							<div class="min-w-0 flex-1">
 								<div class="text-sm font-bold text-slate-800 dark:text-slate-100">
-									{#if req.add_drop_detail}
+									{#if addDrop}
 										Öğrencinin ders değişiklik talebi
 									{:else if req.request_type === 'schedule_batch'}
-										Ders kayıt / değişiklik talebi
+										Ders kayıt talebi
 									{:else}
-										{req.request_type}
+										Onay talebi
 									{/if}
 								</div>
 								<div class="mt-1 text-sm font-semibold text-slate-800 dark:text-slate-200">
-									{req.add_drop_detail?.student_name ?? req.student_name ?? 'Öğrenci'}
+									{addDrop?.student_name ?? req.student_name ?? 'Öğrenci'}
 									<span class="ml-2 font-mono text-xs font-normal text-slate-500"
-										>{req.add_drop_detail?.student_no ?? req.student_no}</span
+										>{addDrop?.student_no ?? req.student_no}</span
 									>
 								</div>
-								{#if req.add_drop_detail}
+								{#if addDrop}
 									<div class="mt-1 text-xs text-slate-500">
-										{req.add_drop_detail.department_name} · Dönem:
-										{req.add_drop_detail.term_name || req.add_drop_detail.term_id}
+										{addDrop.department_name} · Dönem: {addDrop.term_name || addDrop.term_id}
 									</div>
-									<div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 dark:text-slate-400">
+									<div
+										class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 dark:text-slate-400"
+									>
 										<span
 											><span class="font-semibold text-slate-800 dark:text-slate-200"
 												>Planlanan AKTS:</span
 											>
-											{req.add_drop_detail.projected_akts}</span
+											{addDrop.projected_akts}</span
 										>
 										<span
 											><span class="font-semibold text-slate-800 dark:text-slate-200">GNO:</span>
-											{req.add_drop_detail.agno != null
-												? req.add_drop_detail.agno.toFixed(2)
-												: '—'}</span
+											{addDrop.agno != null ? addDrop.agno.toFixed(2) : '—'}</span
 										>
 										<span
 											><span class="font-semibold text-slate-800 dark:text-slate-200"
 												>İzin verilen aralık:</span
 											>
-											{req.add_drop_detail.akts_min}–{req.add_drop_detail.akts_max} AKTS</span
+											{addDrop.akts_min}–{addDrop.akts_max} AKTS</span
 										>
 									</div>
 								{/if}
 								<div class="mt-1 text-xs text-slate-400">
-									{req.request_type === 'schedule_batch' && req.add_drop_detail
+									{addDrop
 										? 'Ders ekle-bırak (danışman onayı)'
 										: req.request_type === 'schedule_batch'
 											? 'Ders kayıt (danışman onayı)'
-											: req.request_type} · {req.created_at?.slice(0, 10)}
+											: req.request_type}
+									· {req.created_at?.slice(0, 10)}
 								</div>
-								{#if req.note}
-									<div class="mt-2 whitespace-pre-wrap text-sm text-slate-600 dark:text-slate-300">
-										{req.note}
-									</div>
-								{/if}
-								{#if req.add_drop_detail}
+								{#if courses}
 									<div
-										class="mt-4 grid gap-4 rounded-lg border border-slate-100 bg-slate-50/60 p-4 text-sm dark:border-white/10 dark:bg-white/5"
+										class="mt-4 grid gap-4 rounded-lg border border-slate-100 bg-slate-50/60 p-4 text-sm sm:grid-cols-2 lg:grid-cols-3 dark:border-white/10 dark:bg-white/5"
 									>
 										<div>
 											<div
-												class="mb-1 text-[11px] font-bold uppercase tracking-wide text-emerald-800 dark:text-emerald-200"
+												class="mb-1.5 text-xs font-bold text-emerald-800 dark:text-emerald-200"
 											>
-												Eklenen dersler
+												Eklenecek
 											</div>
-											<ul class="list-inside list-disc text-slate-700 dark:text-slate-300">
-												{#each req.add_drop_detail.added_courses as c}
-													<li>{c.course_code} — {c.course_name} ({c.akts} AKTS)</li>
+											<ul class="space-y-1 text-slate-700 dark:text-slate-300">
+												{#each courses.added as c}
+													<li>
+														<span class="font-mono text-xs text-slate-500">{c.course_code}</span>
+														— {c.course_name}
+														{#if c.akts > 0}<span class="text-slate-500">
+																({c.akts} AKTS)</span
+															>{/if}
+													</li>
 												{:else}
-													<li class="list-none text-slate-400">—</li>
+													<li class="text-slate-400">—</li>
 												{/each}
 											</ul>
 										</div>
 										<div>
 											<div
-												class="mb-1 text-[11px] font-bold uppercase tracking-wide text-amber-800 dark:text-amber-200"
+												class="mb-1.5 text-xs font-bold text-amber-800 dark:text-amber-200"
 											>
-												Bırakılacak dersler
+												Bırakılacak
 											</div>
-											<ul class="list-inside list-disc text-slate-700 dark:text-slate-300">
-												{#each req.add_drop_detail.dropped_courses as c}
-													<li>{c.course_code} — {c.course_name} ({c.akts} AKTS)</li>
+											<ul class="space-y-1 text-slate-700 dark:text-slate-300">
+												{#each courses.dropped as c}
+													<li>
+														<span class="font-mono text-xs text-slate-500">{c.course_code}</span>
+														— {c.course_name}
+														{#if c.akts > 0}<span class="text-slate-500">
+																({c.akts} AKTS)</span
+															>{/if}
+													</li>
 												{:else}
-													<li class="list-none text-slate-400">—</li>
+													<li class="text-slate-400">—</li>
 												{/each}
 											</ul>
 										</div>
-										<div>
+										<div class="sm:col-span-2 lg:col-span-1">
 											<div
-												class="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-600 dark:text-slate-400"
+												class="mb-1.5 text-xs font-bold text-slate-700 dark:text-slate-300"
 											>
-												Mevcut (korunan) dersler
+												Son durum
+												<span class="font-normal text-slate-500 dark:text-slate-400"
+													>(onay sonrası kayıtlı)</span
+												>
 											</div>
-											<ul class="list-inside list-disc text-slate-700 dark:text-slate-300">
-												{#each req.add_drop_detail.kept_courses as c}
-													<li>{c.course_code} — {c.course_name} ({c.akts} AKTS)</li>
+											<ul class="space-y-1 text-slate-700 dark:text-slate-300">
+												{#each courses.kept as c}
+													<li>
+														<span class="font-mono text-xs text-slate-500">{c.course_code}</span>
+														— {c.course_name}
+														{#if c.akts > 0}<span class="text-slate-500">
+																({c.akts} AKTS)</span
+															>{/if}
+													</li>
 												{:else}
-													<li class="list-none text-slate-400">—</li>
+													<li class="text-slate-400">—</li>
 												{/each}
 											</ul>
 										</div>
 									</div>
+								{:else if regSummary}
+									<div
+										class="mt-2 whitespace-pre-wrap text-sm text-slate-600 dark:text-slate-300"
+									>
+										{regSummary}
+									</div>
+								{/if}
+								{#if studentNote}
+									<p class="mt-2 text-sm text-slate-600 dark:text-slate-300">
+										<span class="font-semibold text-slate-700 dark:text-slate-200">Öğrenci notu:</span
+										>
+										{studentNote}
+									</p>
 								{/if}
 							</div>
 							{#if req.status === 'pending'}
