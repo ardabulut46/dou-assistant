@@ -5,6 +5,14 @@
 	import { tick } from 'svelte';
 	import ObsShell from '$lib/components/obs/ObsShell.svelte';
 	import { user } from '$lib/stores';
+	import { WEBUI_API_BASE_URL } from '$lib/constants';
+	import { uploadFile } from '$lib/apis/files';
+	import {
+		addFileToKnowledgeById,
+		createNewKnowledge,
+		searchKnowledgeBases,
+		searchKnowledgeFilesById
+	} from '$lib/apis/knowledge';
 	import {
 		getDouAdminUsers,
 		createDouAdminUser,
@@ -65,6 +73,8 @@
 		type AdvisorAssignmentInstructorRow,
 		type AdminStudentAdvisorRow
 	} from '$lib/apis/douAcademic';
+
+	const ACADEMIC_CAL_KB_NAME = 'Akademik Takvim';
 
 	/** `user` tablosu role — API ile aynı stringler (filtre/liste/create uyumu) */
 	const ADMIN_USER_ROLE_OPTIONS: { value: string; label: string }[] = [
@@ -259,6 +269,87 @@
 	let termWindowsErr: string | null = null;
 	let calendarEvents: DouCalendarEvent[] = [];
 	let calendarTermId = '';
+	let calDocUploading = false;
+	let calDocErr: string | null = null;
+	let calDocs: Array<{ id: string; filename: string; meta?: Record<string, unknown> }> = [];
+
+	async function resolveOrCreateAcademicCalendarKbId(token: string): Promise<string | null> {
+		const res = await searchKnowledgeBases(token, ACADEMIC_CAL_KB_NAME, null, 1).catch(() => null);
+		const items = (res?.items ?? res?.knowledges ?? res?.knowledge_bases ?? []) as Array<{
+			id: string;
+			name?: string;
+		}>;
+		const exact = items.find((k) => (k?.name ?? '').trim() === ACADEMIC_CAL_KB_NAME);
+		if (exact?.id) return exact.id;
+
+		const created = await createNewKnowledge(
+			token,
+			ACADEMIC_CAL_KB_NAME,
+			'OBS Akademik Takvim PDF dosyaları',
+			[
+				{
+					principal_type: 'user',
+					principal_id: '*',
+					permission: 'read'
+				}
+			]
+		).catch(() => null);
+		return (created?.id as string) ?? null;
+	}
+
+	function fileTermId(file: { meta?: Record<string, unknown> } | null | undefined): string {
+		const m = (file?.meta ?? {}) as Record<string, unknown>;
+		return String((m.term_id ?? m.calendar_term_id ?? '') as string);
+	}
+
+	async function reloadCalendarDocs() {
+		if (!browser) return;
+		const token = localStorage.token ?? null;
+		if (!token) return;
+		const kbId = await resolveOrCreateAcademicCalendarKbId(token);
+		if (!kbId) {
+			calDocs = [];
+			return;
+		}
+		const res = await searchKnowledgeFilesById(token, kbId, null, null, 'updated_at', 'desc', 1).catch(
+			() => null
+		);
+		const items = (res?.items ?? res?.files ?? []) as Array<{
+			id: string;
+			filename: string;
+			meta?: Record<string, unknown>;
+		}>;
+		calDocs = items
+			.filter((f) => !calendarTermId || !fileTermId(f) || fileTermId(f) === calendarTermId)
+			.map((f) => ({ id: f.id, filename: f.filename, meta: f.meta }));
+	}
+
+	async function uploadCalendarPdf(file: File | null) {
+		if (!browser || !file) return;
+		const token = localStorage.token ?? null;
+		if (!token || !calendarTermId) return;
+		calDocUploading = true;
+		calDocErr = null;
+		try {
+			const kbId = await resolveOrCreateAcademicCalendarKbId(token);
+			if (!kbId) throw new Error('Dosya alanı hazırlanamadı.');
+
+			const uploaded = await uploadFile(token, file, {
+				feature: 'academic_calendar',
+				term_id: calendarTermId
+			}).catch((e) => {
+				throw new Error(typeof e === 'string' ? e : 'Yüklenemedi.');
+			});
+			if (!uploaded?.id) throw new Error('Dosya yükleme yanıtı alınamadı.');
+
+			await addFileToKnowledgeById(token, kbId, uploaded.id);
+			await reloadCalendarDocs();
+		} catch (e: unknown) {
+			calDocErr = e instanceof Error ? e.message : 'Takvim dosyası yüklenemedi.';
+		} finally {
+			calDocUploading = false;
+		}
+	}
 
 	const CAL_EVENT_STYLES = [
 		'bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200',
@@ -799,6 +890,7 @@
 		if (!token || !calendarTermId) return;
 		try {
 			calendarEvents = await getDouAdminCalendarEvents(token, calendarTermId);
+			await reloadCalendarDocs();
 		} catch {
 			/* ignore */
 		}
@@ -3402,6 +3494,45 @@
 						</label>
 					{/if}
 				</div>
+
+				<!-- Takvim PDF dosyaları -->
+				<div class="mb-4 rounded-xl border border-black/10 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/5">
+					<div class="mb-2 text-xs font-bold tracking-widest text-slate-400 dark:text-slate-500">
+						TAKVİM DOSYALARI (PDF)
+					</div>
+					{#if calDocErr}
+						<div class="mb-2 text-xs text-red-600 dark:text-red-300">{calDocErr}</div>
+					{/if}
+					<div class="flex flex-wrap items-center gap-2">
+						<input
+							type="file"
+							accept="application/pdf"
+							class="block w-full max-w-xs text-xs"
+							on:change={(e) => uploadCalendarPdf((e.target as HTMLInputElement).files?.[0] ?? null)}
+							disabled={calDocUploading}
+						/>
+						{#if calDocUploading}
+							<span class="text-xs text-slate-500">Yükleniyor…</span>
+						{/if}
+					</div>
+					{#if calDocs.length}
+						<div class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+							{#each calDocs as f}
+								<a
+									class="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-white/10 dark:bg-slate-900/40 dark:text-slate-200 dark:hover:bg-white/10"
+									href={`${WEBUI_API_BASE_URL}/files/${f.id}/content`}
+									target="_blank"
+									rel="noreferrer"
+								>
+									{f.filename}
+								</a>
+							{/each}
+						</div>
+					{:else}
+						<div class="mt-3 text-xs text-slate-400">Bu dönem için dosya eklenmemiş.</div>
+					{/if}
+				</div>
+
 				{#if !calendarEvents.length}
 					<div class="py-8 text-center text-sm text-slate-400">
 						Bu dönem için takvim kaydı yok. Veriler veritabanından gelir.

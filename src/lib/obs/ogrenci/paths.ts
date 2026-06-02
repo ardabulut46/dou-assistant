@@ -1,7 +1,7 @@
 /** OBS öğrenci alt sayfa meta (URL → başlık + veri anahtarı) */
 export const OGRENCI_PAGES = {
 	'/obs/ogrenci/ozluk-bilgileri': { title: 'Özlük Bilgileri', apiKey: 'profile' },
-	'/obs/ogrenci/akademik-takvim': { title: 'Akademik Takvim', apiKey: 'terms' },
+	'/obs/ogrenci/akademik-takvim': { title: 'Akademik Takvim', apiKey: 'calendar' },
 	'/obs/ogrenci/danisman-bilgileri': { title: 'Danışman Bilgileri', apiKey: 'advisor' },
 	'/obs/ogrenci/mufredat': { title: 'Müfredat Durumu', apiKey: 'curriculum' },
 	'/obs/ogrenci/alinan-dersler': { title: 'Alınan Dersler', apiKey: 'enrollments' },

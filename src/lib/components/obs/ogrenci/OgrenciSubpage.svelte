@@ -4,11 +4,14 @@
 	import { tick } from 'svelte';
 	import { user } from '$lib/stores';
 	import type { OgrenciPageMeta, OgrenciPath } from '$lib/obs/ogrenci/paths';
+	import { WEBUI_API_BASE_URL } from '$lib/constants';
+	import { searchKnowledgeBases, searchKnowledgeFilesById } from '$lib/apis/knowledge';
 
 	export let activePath: OgrenciPath;
 	export let meta: OgrenciPageMeta;
 	import {
 		getDouTerms,
+		getDouTermCalendar,
 		getDouStudentProfile,
 		getDouStudentAdvisor,
 		getDouStudentRegistrationLimits,
@@ -42,6 +45,7 @@
 		type DouScheduleRow,
 		type DouAnnouncement,
 		type DouMessage,
+		type DouCalendarEvent,
 		type DouDocumentRequest,
 		type AvailableCourse,
 		type DouAvailableCoursesResponse,
@@ -61,6 +65,9 @@
 	// veritipleri
 	let profile: DouStudentProfile | null = null;
 	let terms: DouTerm[] = [];
+	let calendarEvents: DouCalendarEvent[] = [];
+	let calendarTermId = '';
+	let calendarDocs: Array<{ id: string; filename: string; meta?: Record<string, unknown> }> = [];
 	let advisor: DouAdvisorResponse | null = null;
 	let enrollments: DouEnrollment[] = [];
 	let totalAkts = 0;
@@ -76,6 +83,59 @@
 	let selectedGradesTermId = '';
 	/** Ders programı sekmesi: API `term_id` filtresi */
 	let selectedScheduleTermId = '';
+
+	const ACADEMIC_CAL_KB_NAME = 'Akademik Takvim';
+
+	async function resolveAcademicCalendarKbId(token: string): Promise<string | null> {
+		const res = await searchKnowledgeBases(token, ACADEMIC_CAL_KB_NAME, null, 1).catch(() => null);
+		const items = (res?.items ?? res?.knowledges ?? res?.knowledge_bases ?? []) as Array<{
+			id: string;
+			name?: string;
+		}>;
+		const exact = items.find((k) => (k?.name ?? '').trim() === ACADEMIC_CAL_KB_NAME);
+		return exact?.id ?? null;
+	}
+
+	function fileTermId(file: { meta?: Record<string, unknown> } | null | undefined): string {
+		const m = (file?.meta ?? {}) as Record<string, unknown>;
+		return String((m.term_id ?? m.calendar_term_id ?? '') as string);
+	}
+
+	async function reloadCalendar() {
+		if (!browser) return;
+		const token = localStorage.token ?? null;
+		if (!token) return;
+		if (!calendarTermId) {
+			calendarEvents = [];
+			calendarDocs = [];
+			return;
+		}
+
+		const [calRes, kbId] = await Promise.all([
+			getDouTermCalendar(token, calendarTermId).catch(() => null),
+			resolveAcademicCalendarKbId(token)
+		]);
+
+		calendarEvents = (calRes?.events ?? []) as DouCalendarEvent[];
+
+		if (!kbId) {
+			calendarDocs = [];
+			return;
+		}
+
+		const filesRes = await searchKnowledgeFilesById(token, kbId, null, null, 'updated_at', 'desc', 1).catch(
+			() => null
+		);
+		const items = (filesRes?.items ?? filesRes?.files ?? []) as Array<{
+			id: string;
+			filename: string;
+			meta?: Record<string, unknown>;
+		}>;
+
+		calendarDocs = items
+			.filter((f) => !fileTermId(f) || fileTermId(f) === calendarTermId)
+			.map((f) => ({ id: f.id, filename: f.filename, meta: f.meta }));
+	}
 
 	function floorPct30Quota(weeks: number): number {
 		return weeks > 0 ? Math.floor(weeks * 0.3 + 1e-9) : 0;
@@ -903,7 +963,12 @@
 					};
 				}
 			}
-			if (apiKey === 'terms') terms = await getDouTerms(token).catch(() => []);
+			if (apiKey === 'terms' || apiKey === 'calendar') terms = await getDouTerms(token).catch(() => []);
+			if (apiKey === 'calendar') {
+				const active = terms.find((t) => t.is_active) ?? terms[terms.length - 1] ?? null;
+				calendarTermId = calendarTermId || active?.id || (terms[0]?.id ?? '');
+				await reloadCalendar();
+			}
 			if (apiKey === 'advisor') advisor = await getDouStudentAdvisor(token).catch(() => null);
 			if (apiKey === 'enrollments') {
 				const r = await getDouStudentEnrollments(token).catch(() => null);
@@ -1848,6 +1913,62 @@
 			<!-- ================================================================ -->
 			<!-- AKADEMİK TAKVİM                                                  -->
 			<!-- ================================================================ -->
+		{:else if apiKey === 'calendar' && terms.length}
+			<div class="space-y-4">
+				<div class="flex flex-wrap items-center gap-3">
+					<span class="text-sm font-semibold text-slate-700 dark:text-slate-200">Dönem</span>
+					<select
+						bind:value={calendarTermId}
+						on:change={() => void reloadCalendar()}
+						class="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+					>
+						{#each terms as tm}
+							<option value={tm.id}>{tm.name}{tm.is_active ? ' (Aktif)' : ''}</option>
+						{/each}
+					</select>
+				</div>
+
+				{#if calendarDocs.length}
+					<div class="rounded-xl border border-black/10 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/5">
+						<div class="mb-2 text-xs font-bold tracking-widest text-slate-400 dark:text-slate-500">
+							TAKVİM DOSYALARI
+						</div>
+						<div class="space-y-2">
+							{#each calendarDocs as f}
+								<a
+									class="block rounded-lg border border-black/10 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-white/10 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10"
+									href={`${WEBUI_API_BASE_URL}/files/${f.id}/content`}
+									target="_blank"
+									rel="noreferrer"
+								>
+									{f.filename}
+								</a>
+							{/each}
+						</div>
+					</div>
+				{/if}
+
+				<div class="rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5">
+					<div class="mb-3 text-xs font-bold tracking-widest text-slate-400 dark:text-slate-500">
+						ETKİNLİKLER
+					</div>
+					{#if !calendarEvents.length}
+						<div class="py-6 text-center text-sm text-slate-400">Bu dönem için takvim kaydı yok.</div>
+					{:else}
+						<div class="space-y-2">
+							{#each calendarEvents as ev}
+								<div class="rounded-lg border border-black/10 px-3 py-2 text-sm dark:border-white/10">
+									<div class="font-semibold">{ev.title}</div>
+									<div class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+										{ev.start_date}{ev.end_date && ev.end_date !== ev.start_date ? ` → ${ev.end_date}` : ''}
+										{ev.event_type ? ` · ${ev.event_type}` : ''}
+									</div>
+								</div>
+							{/each}
+						</div>
+					{/if}
+				</div>
+			</div>
 		{:else if apiKey === 'terms' && terms.length}
 			<div
 				class="-mx-1 overflow-hidden rounded-xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white/5 sm:mx-0"
