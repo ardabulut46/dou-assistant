@@ -352,7 +352,7 @@
 	async function uploadCalendarPdfs() {
 		if (!browser) return;
 		const token = localStorage.token ?? null;
-		if (!token || !calendarTermId || !calDocPickedFiles.length) return;
+		if (!token || !calDocPickedFiles.length) return;
 		calDocUploading = true;
 		calDocErr = null;
 		try {
@@ -369,7 +369,7 @@
 					file,
 					{
 						feature: 'academic_calendar',
-						term_id: calendarTermId,
+						term_id: calendarTermId || '',
 						display_name: displayName
 					},
 					false
@@ -3465,11 +3465,17 @@
 			<!-- AKADEMİK TAKVİM                                              -->
 			<!-- ============================================================ -->
 		{:else if apiKey === 'calendar'}
-			<div
-				class="rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5"
-			>
-				<div class="mb-4 flex flex-wrap items-center gap-3">
-					<span class="font-semibold">Akademik takvim</span>
+			<div class="space-y-4">
+				<!-- Başlık + dönem seçimi -->
+				<div
+					class="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-black/10 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/5"
+				>
+					<div class="min-w-0">
+						<div class="text-sm font-bold text-slate-800 dark:text-slate-100">Akademik Takvim</div>
+						<div class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+							PDF yükle; öğrenciler bu dosyaları görüntüleyip indirebilir.
+						</div>
+					</div>
 					{#if terms.length}
 						<label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
 							<span class="text-xs font-semibold text-slate-500">Dönem</span>
@@ -3477,7 +3483,7 @@
 								bind:value={calendarTermId}
 								on:change={(e) =>
 									void onAdminCalendarTermChange((e.target as HTMLSelectElement).value)}
-								class="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+								class="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-400/20 dark:border-white/10 dark:bg-white/5"
 							>
 								{#each terms as tm}
 									<option value={tm.id}>{tm.name}{tm.is_active ? ' (Aktif)' : ''}</option>
@@ -3487,33 +3493,41 @@
 					{/if}
 				</div>
 
-				<!-- Takvim PDF dosyaları (Admin) -->
-				<div class="mb-4 rounded-2xl border border-black/10 bg-slate-50 p-4 shadow-sm dark:border-white/10 dark:bg-white/5">
-					<div class="flex flex-wrap items-center justify-between gap-3">
-						<div>
-							<div class="text-xs font-bold tracking-widest text-slate-400 dark:text-slate-500">
-								TAKVİM PDF’LERİ
-							</div>
-							<div class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
-								Seçili döneme göre yüklenir ve öğrenci ekranında görünür.
-							</div>
-						</div>
-					</div>
-
+				<!-- Yükleme alanı -->
+				<div class="rounded-2xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5">
 					{#if calDocErr}
-						<div class="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-950/25 dark:text-red-200">
+						<div class="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700 dark:border-red-900/40 dark:bg-red-950/25 dark:text-red-200">
 							{calDocErr}
 						</div>
 					{/if}
 
-					<div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-12">
-						<label class="md:col-span-10 block">
-							<span class="mb-1 block text-xs font-semibold text-slate-600 dark:text-slate-300">PDF seç</span>
+					<!-- Dropzone benzeri dosya seçici -->
+					<div
+						class="flex flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-black/15 bg-slate-50 px-4 py-8 text-center dark:border-white/15 dark:bg-white/5"
+					>
+						<div class="flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-100 text-sky-600 dark:bg-sky-900/30 dark:text-sky-300">
+							<svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M12 16V4m0 0L8 8m4-4l4 4M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2" />
+							</svg>
+						</div>
+						<div class="text-sm font-semibold text-slate-700 dark:text-slate-200">
+							PDF dosyalarını seç
+						</div>
+						<div class="text-[11px] text-slate-500 dark:text-slate-400">
+							Birden fazla PDF seçebilirsin. Sadece .pdf desteklenir.
+						</div>
+						<label
+							class="mt-1 inline-flex cursor-pointer items-center gap-2 rounded-xl bg-slate-800 px-4 py-2 text-sm font-bold text-white transition-colors hover:bg-slate-700 dark:bg-sky-600 dark:hover:bg-sky-500 {calDocUploading ? 'pointer-events-none opacity-50' : ''}"
+						>
+							<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+							</svg>
+							PDF Seç
 							<input
 								type="file"
 								multiple
 								accept="application/pdf"
-								class="block w-full text-xs"
+								class="hidden"
 								on:change={(e) => {
 									const files = (e.target as HTMLInputElement).files;
 									calDocPickedFiles = files
@@ -3522,39 +3536,34 @@
 								}}
 								disabled={calDocUploading}
 							/>
-							{#if calDocPickedFiles.length}
-								<div class="mt-1 text-[11px] text-slate-500">
-									{calDocPickedFiles.length} dosya seçildi. Aşağıdan görünen adları düzenleyebilirsin.
-								</div>
-							{/if}
 						</label>
-						<div class="md:col-span-2 flex items-end">
-							<button
-								type="button"
-								on:click={() => void uploadCalendarPdfs()}
-								disabled={calDocUploading || !calDocPickedFiles.length || !calendarTermId}
-								class="w-full rounded-xl bg-sky-500 px-3 py-2 text-sm font-bold text-white hover:bg-sky-400 disabled:opacity-50"
-							>
-								{calDocUploading ? 'Yükleniyor…' : 'Yükle'}
-							</button>
-						</div>
+						{#if calDocPickedFiles.length}
+							<div class="text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+								{calDocPickedFiles.length} dosya seçildi
+							</div>
+						{:else}
+							<div class="text-[11px] text-slate-400">Henüz dosya seçilmedi</div>
+						{/if}
 					</div>
 
 					{#if calDocPickedFiles.length}
-						<div class="mt-3 space-y-2">
+						<div class="mt-4 space-y-2">
 							{#each calDocPickedFiles as p, idx (p.file.name + idx)}
-								<div class="grid grid-cols-1 gap-2 rounded-xl border border-black/10 bg-white p-3 dark:border-white/10 dark:bg-slate-900/30 md:grid-cols-12">
-									<div class="md:col-span-4 min-w-0">
-										<div class="truncate text-xs font-semibold text-slate-700 dark:text-slate-200">
-											{p.file.name}
-										</div>
-										<div class="mt-0.5 text-[11px] text-slate-400">
-											{p.file.type || 'application/pdf'}{p.file.size ? ` · ${fmtBytes(p.file.size)}` : ''}
+								<div class="grid grid-cols-1 gap-2 rounded-xl border border-black/10 bg-slate-50 p-3 dark:border-white/10 dark:bg-slate-900/30 md:grid-cols-12">
+									<div class="md:col-span-4 min-w-0 flex items-center gap-2">
+										<span class="shrink-0 rounded-md bg-rose-100 px-1.5 py-0.5 text-[10px] font-black text-rose-600 dark:bg-rose-900/30 dark:text-rose-300">PDF</span>
+										<div class="min-w-0">
+											<div class="truncate text-xs font-semibold text-slate-700 dark:text-slate-200">
+												{p.file.name}
+											</div>
+											<div class="mt-0.5 text-[11px] text-slate-400">
+												{p.file.size ? fmtBytes(p.file.size) : 'PDF'}
+											</div>
 										</div>
 									</div>
 									<label class="md:col-span-7 block">
 										<div class="mb-1 text-[11px] font-semibold text-slate-500">
-											Görünen ad
+											Görünen ad (öğrenciye gösterilecek)
 										</div>
 										<input
 											value={p.displayName}
@@ -3565,14 +3574,14 @@
 												);
 											}}
 											placeholder="Örn: 2025-2026 Lisansüstü Akademik Takvimi"
-											class="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-900/30"
+											class="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-sm outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-400/20 dark:border-white/10 dark:bg-slate-900/30"
 											disabled={calDocUploading}
 										/>
 									</label>
 									<div class="md:col-span-1 flex items-end">
 										<button
 											type="button"
-											class="w-full rounded-xl border border-black/10 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/5"
+											class="w-full rounded-xl border border-red-200 px-3 py-2 text-xs font-bold text-red-600 transition-colors hover:bg-red-50 disabled:opacity-50 dark:border-red-900/40 dark:text-red-300 dark:hover:bg-red-950/30"
 											on:click={() => {
 												calDocPickedFiles = calDocPickedFiles.filter((_, i) => i !== idx);
 											}}
@@ -3583,46 +3592,65 @@
 									</div>
 								</div>
 							{/each}
+
+							<div class="flex justify-end pt-1">
+								<button
+									type="button"
+									on:click={() => void uploadCalendarPdfs()}
+									disabled={calDocUploading || !calDocPickedFiles.length}
+									class="inline-flex items-center gap-2 rounded-xl bg-sky-500 px-6 py-2.5 text-sm font-bold text-white transition-colors hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
+								>
+									{#if calDocUploading}
+										<div class="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
+										Yükleniyor…
+									{:else}
+										{calDocPickedFiles.length} PDF Yükle
+									{/if}
+								</button>
+							</div>
 						</div>
 					{/if}
-
-					<div class="mt-4">
-						{#if calDocs.length}
-							<div class="grid grid-cols-1 gap-2 md:grid-cols-2">
-								{#each calDocs as f}
-									{@const title = String((f.meta?.display_name ?? '') || f.filename)}
-									<div class="flex items-center justify-between gap-3 rounded-xl border border-black/10 bg-white px-3 py-2 dark:border-white/10 dark:bg-slate-900/30">
-										<a
-											class="min-w-0 flex-1 truncate text-sm font-semibold text-slate-700 hover:underline dark:text-slate-200"
-											href={`${WEBUI_API_BASE_URL}/files/${f.id}/content`}
-											target="_blank"
-											rel="noreferrer"
-										>
-											{title}
-										</a>
-										{#if f.size}
-											<span class="shrink-0 text-[11px] text-slate-400">{fmtBytes(f.size)}</span>
-										{/if}
-										<button
-											type="button"
-											on:click={() => void deleteCalendarDoc(f.id)}
-											disabled={calDocDeletingId === f.id}
-											class="rounded-lg border border-red-200 px-2 py-1 text-xs font-bold text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-900/40 dark:text-red-300 dark:hover:bg-red-950/30"
-										>
-											{calDocDeletingId === f.id ? 'Siliniyor…' : 'Sil'}
-										</button>
-									</div>
-								{/each}
-							</div>
-						{:else}
-							<div class="rounded-xl border border-black/10 bg-white px-4 py-4 text-sm text-slate-400 dark:border-white/10 dark:bg-slate-900/30">
-								Bu dönem için henüz PDF eklenmemiş.
-							</div>
-						{/if}
-					</div>
 				</div>
 
-				<!-- Not: Admin ekranında akademik takvim sadece PDF yönetimidir. -->
+				<!-- Yüklü dosyalar -->
+				<div class="rounded-2xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5">
+					<div class="mb-3 text-xs font-bold tracking-widest text-slate-400 dark:text-slate-500">
+						YÜKLÜ PDF DOSYALARI
+					</div>
+					{#if calDocs.length}
+						<div class="grid grid-cols-1 gap-2 md:grid-cols-2">
+							{#each calDocs as f}
+								{@const title = String((f.meta?.display_name ?? '') || f.filename)}
+								<div class="flex items-center gap-3 rounded-xl border border-black/10 bg-slate-50 px-3 py-2.5 dark:border-white/10 dark:bg-slate-900/30">
+									<span class="shrink-0 rounded-md bg-rose-100 px-1.5 py-0.5 text-[10px] font-black text-rose-600 dark:bg-rose-900/30 dark:text-rose-300">PDF</span>
+									<a
+										class="min-w-0 flex-1 truncate text-sm font-semibold text-slate-700 hover:underline dark:text-slate-200"
+										href={`${WEBUI_API_BASE_URL}/files/${f.id}/content`}
+										target="_blank"
+										rel="noreferrer"
+									>
+										{title}
+									</a>
+									{#if f.size}
+										<span class="shrink-0 text-[11px] text-slate-400">{fmtBytes(f.size)}</span>
+									{/if}
+									<button
+										type="button"
+										on:click={() => void deleteCalendarDoc(f.id)}
+										disabled={calDocDeletingId === f.id}
+										class="shrink-0 rounded-lg border border-red-200 px-2.5 py-1 text-xs font-bold text-red-600 transition-colors hover:bg-red-50 disabled:opacity-50 dark:border-red-900/40 dark:text-red-300 dark:hover:bg-red-950/30"
+									>
+										{calDocDeletingId === f.id ? 'Siliniyor…' : 'Sil'}
+									</button>
+								</div>
+							{/each}
+						</div>
+					{:else}
+						<div class="rounded-xl border border-dashed border-black/15 bg-slate-50 px-4 py-8 text-center text-sm text-slate-400 dark:border-white/15 dark:bg-slate-900/30">
+							Henüz PDF eklenmemiş. Yukarıdan PDF seçip yükleyebilirsin.
+						</div>
+					{/if}
+				</div>
 			</div>
 
 			<!-- ============================================================ -->

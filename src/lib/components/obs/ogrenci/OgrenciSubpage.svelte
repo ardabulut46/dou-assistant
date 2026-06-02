@@ -1913,40 +1913,59 @@
 			<!-- ================================================================ -->
 		{:else if apiKey === 'calendar'}
 			<div class="space-y-4">
-				<div class="rounded-xl border border-black/10 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/5">
-					<div class="mb-2 text-xs font-bold tracking-widest text-slate-400 dark:text-slate-500">
-						TAKVİM DOSYALARI
+				<div class="rounded-2xl border border-black/10 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/5 sm:p-5">
+					<div class="mb-3 flex items-center gap-3">
+						<div class="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-100 text-sky-600 dark:bg-sky-900/30 dark:text-sky-300">
+							<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+							</svg>
+						</div>
+						<div>
+							<div class="text-sm font-bold text-slate-800 dark:text-slate-100">Akademik Takvim</div>
+							<div class="text-xs text-slate-500 dark:text-slate-400">
+								Takvim PDF dosyalarını görüntüleyip indirebilirsin.
+							</div>
+						</div>
 					</div>
+
 					{#if calendarDocs.length}
-						<div class="divide-y divide-black/5 overflow-hidden rounded-xl border border-black/10 dark:divide-white/10 dark:border-white/10">
+						<div class="space-y-2">
 							{#each calendarDocs as f}
 								{@const title = String((f.meta?.display_name ?? '') || f.filename)}
-								<a
-									class="flex items-center gap-3 bg-white px-3 py-3 text-sm hover:bg-slate-50 dark:bg-transparent dark:hover:bg-white/5"
-									href={`${WEBUI_API_BASE_URL}/files/${f.id}/content`}
-									target="_blank"
-									rel="noreferrer"
-								>
-									<div class="shrink-0 rounded-lg border border-black/10 bg-slate-50 px-2 py-2 text-slate-600 dark:border-white/10 dark:bg-white/5 dark:text-slate-200">
-										<span class="text-xs font-black">PDF</span>
+								<div class="flex items-center gap-3 rounded-xl border border-black/10 bg-slate-50 px-3 py-3 dark:border-white/10 dark:bg-slate-900/30">
+									<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-300">
+										<span class="text-[11px] font-black">PDF</span>
 									</div>
 									<div class="min-w-0 flex-1">
-										<div class="truncate font-semibold text-slate-800 dark:text-slate-100">
+										<div class="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">
 											{title}
 										</div>
 										<div class="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
-											{f.size ? fmtBytes(f.size) : 'PDF'}
+											{f.size ? fmtBytes(f.size) : 'PDF dosyası'}
 										</div>
 									</div>
-									<div class="shrink-0 rounded-lg border border-black/10 px-3 py-1.5 text-[11px] font-bold text-slate-600 dark:border-white/10 dark:text-slate-200">
+									<a
+										class="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-sky-500 px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-sky-400"
+										href={`${WEBUI_API_BASE_URL}/files/${f.id}/content`}
+										target="_blank"
+										rel="noreferrer"
+									>
+										<svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+											<path stroke-linecap="round" stroke-linejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M12 4v12m0 0l-4-4m4 4l4-4" />
+										</svg>
 										İndir
-									</div>
-								</a>
+									</a>
+								</div>
 							{/each}
 						</div>
 					{:else}
-						<div class="py-6 text-center text-sm text-slate-400">
-							Bu dönem için takvim dosyası yok.
+						<div class="rounded-xl border border-dashed border-black/15 bg-slate-50 px-4 py-10 text-center dark:border-white/15 dark:bg-slate-900/30">
+							<div class="text-sm font-medium text-slate-600 dark:text-slate-300">
+								Henüz takvim dosyası yüklenmemiş
+							</div>
+							<div class="mt-1 text-xs text-slate-400">
+								Akademik takvim PDF'leri eklendiğinde burada görünecek.
+							</div>
 						</div>
 					{/if}
 				</div>

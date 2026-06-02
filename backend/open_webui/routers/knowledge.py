@@ -1047,37 +1047,41 @@ async def add_files_to_knowledge_batch(
             detail=f"File {missing_ids[0]} not found",
         )
 
-    # Process files
+    # Attach files to the knowledge base first. Listing/downloading a file only
+    # requires a KnowledgeFile row, so this never depends on vector embedding.
+    for file in files:
+        Knowledges.add_file_to_knowledge_by_id(
+            knowledge_id=id, file_id=file.id, user_id=user.id, db=db
+        )
+
+    # Best-effort vector indexing. For files that only need to be downloaded
+    # (e.g. academic calendar PDFs), or when the embedding backend is unavailable,
+    # indexing is skipped silently and the files remain attached/downloadable.
+    warnings = None
     try:
         result = await process_files_batch(
             request=request,
             form_data=BatchProcessFilesForm(files=files, collection_name=id),
             user=user,
-            db=db,
         )
+        if result and result.errors:
+            error_details = [f"{err.file_id}: {err.error}" for err in result.errors]
+            warnings = {
+                "message": "Files added; some files were not indexed for search.",
+                "errors": error_details,
+            }
     except Exception as e:
-        log.error(
-            f"add_files_to_knowledge_batch: Exception occurred: {e}", exc_info=True
-        )
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        log.warning(f"add_files_to_knowledge_batch: indexing skipped: {e}")
+        warnings = {
+            "message": "Files added; search indexing skipped.",
+            "errors": [str(e)],
+        }
 
-    # Only add files that were successfully processed
-    successful_file_ids = [r.file_id for r in result.results if r.status == "completed"]
-    for file_id in successful_file_ids:
-        Knowledges.add_file_to_knowledge_by_id(
-            knowledge_id=id, file_id=file_id, user_id=user.id, db=db
-        )
-
-    # If there were any errors, include them in the response
-    if result.errors:
-        error_details = [f"{err.file_id}: {err.error}" for err in result.errors]
+    if warnings:
         return KnowledgeFilesResponse(
             **knowledge.model_dump(),
             files=Knowledges.get_file_metadatas_by_id(knowledge.id, db=db),
-            warnings={
-                "message": "Some files failed to process",
-                "errors": error_details,
-            },
+            warnings=warnings,
         )
 
     return KnowledgeFilesResponse(
