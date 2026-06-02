@@ -254,21 +254,33 @@ async def create_new_knowledge(
     # Database operations (has_permission, filter_allowed_access_grants, insert_new_knowledge) manage their own sessions.
     # This prevents holding a connection during embed_knowledge_base_metadata()
     # which makes external embedding API calls (1-5+ seconds).
-    if user.role != "admin" and not has_permission(
-        user.id, "workspace.knowledge", request.app.state.config.USER_PERMISSIONS
+    # OBS paylaşımlı alanları (akademik takvim / ders notları) herkesin
+    # erişebildiği tek ortak knowledge tabanlarıdır. Akademisyenlerin de ilk
+    # kez oluşturabilmesi için bu özel isimlerde yetki kontrolü/gizlilik
+    # filtresi atlanır; grant'ler (user:* read/write) olduğu gibi korunur.
+    OBS_SHARED_KB_NAMES = {"Ders Notları", "Akademik Takvim"}
+    is_obs_shared_kb = (form_data.name or "").strip() in OBS_SHARED_KB_NAMES
+
+    if (
+        not is_obs_shared_kb
+        and user.role != "admin"
+        and not has_permission(
+            user.id, "workspace.knowledge", request.app.state.config.USER_PERMISSIONS
+        )
     ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=ERROR_MESSAGES.UNAUTHORIZED,
         )
 
-    form_data.access_grants = filter_allowed_access_grants(
-        request.app.state.config.USER_PERMISSIONS,
-        user.id,
-        user.role,
-        form_data.access_grants,
-        "sharing.public_knowledge",
-    )
+    if not is_obs_shared_kb:
+        form_data.access_grants = filter_allowed_access_grants(
+            request.app.state.config.USER_PERMISSIONS,
+            user.id,
+            user.role,
+            form_data.access_grants,
+            "sharing.public_knowledge",
+        )
 
     knowledge = Knowledges.insert_new_knowledge(user.id, form_data)
 
