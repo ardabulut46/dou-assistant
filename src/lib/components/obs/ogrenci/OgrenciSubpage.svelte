@@ -65,6 +65,8 @@
 	let terms: DouTerm[] = [];
 	let calendarDocs: Array<{ id: string; filename: string; meta?: Record<string, unknown>; size?: number }> =
 		[];
+	/** Akademik takvim: seçilen dönem filtresi (term id). */
+	let selectedCalendarTermId = '';
 	let advisor: DouAdvisorResponse | null = null;
 	let enrollments: DouEnrollment[] = [];
 	let totalAkts = 0;
@@ -97,6 +99,16 @@
 		const m = (file?.meta ?? {}) as Record<string, unknown>;
 		return String((m.term_id ?? m.calendar_term_id ?? '') as string);
 	}
+
+	/**
+	 * Seçilen döneme göre takvim PDF'leri. Dönem bilgisi olmayan (eski) dosyalar
+	 * her dönemde görünür ki yüklenmiş takvimler kaybolmasın.
+	 */
+	$: filteredCalendarDocs = calendarDocs.filter((f) => {
+		if (!selectedCalendarTermId) return true;
+		const t = fileTermId(f);
+		return !t || t === selectedCalendarTermId;
+	});
 
 	function fmtBytes(n: number | null | undefined) {
 		const v = Number(n ?? 0);
@@ -964,6 +976,12 @@
 				}
 			}
 			if (apiKey === 'calendar') {
+				const tl = await getDouTerms(token).catch(() => [] as DouTerm[]);
+				terms = tl;
+				if (!selectedCalendarTermId) {
+					selectedCalendarTermId =
+						tl.find((t) => t.is_active)?.id ?? tl[tl.length - 1]?.id ?? '';
+				}
 				await reloadCalendarDocs();
 			}
 			if (apiKey === 'terms') terms = await getDouTerms(token).catch(() => []);
@@ -1920,17 +1938,27 @@
 								<path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
 							</svg>
 						</div>
-						<div>
+						<div class="min-w-0 flex-1">
 							<div class="text-sm font-bold text-slate-800 dark:text-slate-100">Akademik Takvim</div>
 							<div class="text-xs text-slate-500 dark:text-slate-400">
-								Takvim PDF dosyalarını görüntüleyip indirebilirsin.
+								Döneme göre takvim PDF dosyalarını görüntüleyip indirebilirsin.
 							</div>
 						</div>
+						{#if terms.length}
+							<select
+								class="shrink-0 rounded-xl border border-black/10 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm focus:border-sky-400 focus:outline-none dark:border-white/10 dark:bg-slate-900/40 dark:text-slate-200"
+								bind:value={selectedCalendarTermId}
+							>
+								{#each terms as t}
+									<option value={t.id}>{t.name}</option>
+								{/each}
+							</select>
+						{/if}
 					</div>
 
-					{#if calendarDocs.length}
+					{#if filteredCalendarDocs.length}
 						<div class="space-y-2">
-							{#each calendarDocs as f}
+							{#each filteredCalendarDocs as f}
 								{@const title = String((f.meta?.display_name ?? '') || f.filename)}
 								<div class="flex items-center gap-3 rounded-xl border border-black/10 bg-slate-50 px-3 py-3 dark:border-white/10 dark:bg-slate-900/30">
 									<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-300">
@@ -1961,10 +1989,10 @@
 					{:else}
 						<div class="rounded-xl border border-dashed border-black/15 bg-slate-50 px-4 py-10 text-center dark:border-white/15 dark:bg-slate-900/30">
 							<div class="text-sm font-medium text-slate-600 dark:text-slate-300">
-								Henüz takvim dosyası yüklenmemiş
+								Bu döneme ait takvim dosyası yok
 							</div>
 							<div class="mt-1 text-xs text-slate-400">
-								Akademik takvim PDF'leri eklendiğinde burada görünecek.
+								Seçili dönem için akademik takvim PDF'i eklendiğinde burada görünecek.
 							</div>
 						</div>
 					{/if}
