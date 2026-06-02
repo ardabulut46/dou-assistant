@@ -75,6 +75,7 @@
 	} from '$lib/apis/douAcademic';
 
 	const ACADEMIC_CAL_KB_NAME = 'Akademik Takvim';
+	const ADMIN_CAL_TERM_LS_KEY = 'dou_admin_calendar_term_id';
 
 	/** `user` tablosu role — API ile aynı stringler (filtre/liste/create uyumu) */
 	const ADMIN_USER_ROLE_OPTIONS: { value: string; label: string }[] = [
@@ -297,6 +298,24 @@
 		return (created?.id as string) ?? null;
 	}
 
+	function loadSavedAdminCalendarTermId(): string {
+		if (!browser) return '';
+		try {
+			return String(localStorage.getItem(ADMIN_CAL_TERM_LS_KEY) ?? '').trim();
+		} catch {
+			return '';
+		}
+	}
+
+	function persistAdminCalendarTermId(termId: string) {
+		if (!browser) return;
+		try {
+			localStorage.setItem(ADMIN_CAL_TERM_LS_KEY, String(termId ?? '').trim());
+		} catch {
+			/* ignore */
+		}
+	}
+
 	function fileTermId(file: { meta?: Record<string, unknown> } | null | undefined): string {
 		const m = (file?.meta ?? {}) as Record<string, unknown>;
 		return String((m.term_id ?? m.calendar_term_id ?? '') as string);
@@ -324,6 +343,12 @@
 			.map((f) => ({ id: f.id, filename: f.filename, meta: f.meta }));
 	}
 
+	async function onAdminCalendarTermChange(nextId: string) {
+		calendarTermId = nextId;
+		persistAdminCalendarTermId(nextId);
+		await reloadCalendarEvents();
+	}
+
 	async function uploadCalendarPdf(file: File | null) {
 		if (!browser || !file) return;
 		const token = localStorage.token ?? null;
@@ -334,10 +359,16 @@
 			const kbId = await resolveOrCreateAcademicCalendarKbId(token);
 			if (!kbId) throw new Error('Dosya alanı hazırlanamadı.');
 
-			const uploaded = await uploadFile(token, file, {
-				feature: 'academic_calendar',
-				term_id: calendarTermId
-			}).catch((e) => {
+			// PDF sadece görüntülenecek; içerik çıkarımı gerekmediği için process=false
+			const uploaded = await uploadFile(
+				token,
+				file,
+				{
+					feature: 'academic_calendar',
+					term_id: calendarTermId
+				},
+				false
+			).catch((e) => {
 				throw new Error(typeof e === 'string' ? e : 'Yüklenemedi.');
 			});
 			if (!uploaded?.id) throw new Error('Dosya yükleme yanıtı alınamadı.');
@@ -684,9 +715,13 @@
 			calendar: async (t) => {
 				const tr = await getDouTerms(t);
 				terms = tr;
-				const active = tr.find((x) => x.is_active) ?? tr[0];
-				calendarTermId = active?.id ?? '';
-				calendarEvents = calendarTermId ? await getDouAdminCalendarEvents(t, calendarTermId) : [];
+				const saved = loadSavedAdminCalendarTermId();
+				const resolved =
+					(saved && tr.some((x) => x.id === saved) && saved) ||
+					(tr.find((x) => x.is_active)?.id ?? tr[0]?.id ?? '');
+				calendarTermId = resolved;
+				persistAdminCalendarTermId(resolved);
+				await reloadCalendarEvents();
 			},
 			'reg-rules': async (t) => {
 				const tr = await getDouTerms(t);
@@ -3484,7 +3519,8 @@
 							<span class="text-xs font-semibold text-slate-500">Dönem</span>
 							<select
 								bind:value={calendarTermId}
-								on:change={reloadCalendarEvents}
+								on:change={(e) =>
+									void onAdminCalendarTermChange((e.target as HTMLSelectElement).value)}
 								class="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm outline-none dark:border-white/10 dark:bg-white/5"
 							>
 								{#each terms as tm}
