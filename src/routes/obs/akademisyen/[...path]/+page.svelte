@@ -363,7 +363,16 @@
 
 	function fileSectionId(file: { meta?: Record<string, unknown> } | null | undefined): string {
 		const m = (file?.meta ?? {}) as Record<string, unknown>;
-		return String((m.section_id ?? '') as string);
+		const data = (m.data ?? {}) as Record<string, unknown>;
+		return String((data.section_id ?? m.section_id ?? '') as string);
+	}
+
+	function fileDisplayName(
+		file: { filename?: string; meta?: Record<string, unknown> } | null | undefined
+	): string {
+		const m = (file?.meta ?? {}) as Record<string, unknown>;
+		const data = (m.data ?? {}) as Record<string, unknown>;
+		return String((data.display_name ?? m.display_name ?? file?.filename ?? '') as string);
 	}
 
 	/** Ders Notları paylaşımlı alanını bul; yoksa herkese okuma + yazma izniyle oluştur. */
@@ -3302,7 +3311,7 @@
 					{#if noteDocs.length}
 						<div class="space-y-2">
 							{#each noteDocs as f}
-								{@const title = String((f.meta?.display_name ?? '') || f.filename)}
+								{@const title = fileDisplayName(f)}
 								<div
 									class="flex items-center gap-3 rounded-xl border border-black/10 bg-slate-50 px-3 py-3 dark:border-white/10 dark:bg-slate-900/30"
 								>
