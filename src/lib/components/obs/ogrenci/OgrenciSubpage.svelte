@@ -67,7 +67,8 @@
 	let terms: DouTerm[] = [];
 	let calendarEvents: DouCalendarEvent[] = [];
 	let calendarTermId = '';
-	let calendarDocs: Array<{ id: string; filename: string; meta?: Record<string, unknown> }> = [];
+	let calendarDocs: Array<{ id: string; filename: string; meta?: Record<string, unknown>; size?: number }> =
+		[];
 	let advisor: DouAdvisorResponse | null = null;
 	let enrollments: DouEnrollment[] = [];
 	let totalAkts = 0;
@@ -101,6 +102,19 @@
 		return String((m.term_id ?? m.calendar_term_id ?? '') as string);
 	}
 
+	function fmtBytes(n: number | null | undefined) {
+		const v = Number(n ?? 0);
+		if (!Number.isFinite(v) || v <= 0) return '';
+		const units = ['B', 'KB', 'MB', 'GB'];
+		let idx = 0;
+		let val = v;
+		while (val >= 1024 && idx < units.length - 1) {
+			val /= 1024;
+			idx += 1;
+		}
+		return `${val.toFixed(val >= 10 || idx === 0 ? 0 : 1)} ${units[idx]}`;
+	}
+
 	async function reloadCalendar() {
 		if (!browser) return;
 		const token = localStorage.token ?? null;
@@ -130,11 +144,12 @@
 			id: string;
 			filename: string;
 			meta?: Record<string, unknown>;
+			size?: number;
 		}>;
 
 		calendarDocs = items
 			.filter((f) => !fileTermId(f) || fileTermId(f) === calendarTermId)
-			.map((f) => ({ id: f.id, filename: f.filename, meta: f.meta }));
+			.map((f) => ({ id: f.id, filename: f.filename, meta: f.meta, size: f.size }));
 	}
 
 	function floorPct30Quota(weeks: number): number {
@@ -1913,41 +1928,64 @@
 			<!-- ================================================================ -->
 			<!-- AKADEMİK TAKVİM                                                  -->
 			<!-- ================================================================ -->
-		{:else if apiKey === 'calendar' && terms.length}
+		{:else if apiKey === 'calendar'}
 			<div class="space-y-4">
-				<div class="flex flex-wrap items-center gap-3">
-					<span class="text-sm font-semibold text-slate-700 dark:text-slate-200">Dönem</span>
-					<select
-						bind:value={calendarTermId}
-						on:change={() => void reloadCalendar()}
-						class="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
-					>
-						{#each terms as tm}
-							<option value={tm.id}>{tm.name}{tm.is_active ? ' (Aktif)' : ''}</option>
-						{/each}
-					</select>
-				</div>
+				{#if terms.length}
+					<div class="flex flex-wrap items-center gap-3">
+						<span class="text-sm font-semibold text-slate-700 dark:text-slate-200">Dönem</span>
+						<select
+							bind:value={calendarTermId}
+							on:change={() => void reloadCalendar()}
+							class="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+						>
+							{#each terms as tm}
+								<option value={tm.id}>{tm.name}{tm.is_active ? ' (Aktif)' : ''}</option>
+							{/each}
+						</select>
+					</div>
+				{:else}
+					<div class="rounded-xl border border-black/10 bg-white p-5 text-sm text-slate-500 shadow-sm dark:border-white/10 dark:bg-white/5 dark:text-slate-400">
+						Dönem listesi yükleniyor…
+					</div>
+				{/if}
 
-				{#if calendarDocs.length}
-					<div class="rounded-xl border border-black/10 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/5">
-						<div class="mb-2 text-xs font-bold tracking-widest text-slate-400 dark:text-slate-500">
-							TAKVİM DOSYALARI
-						</div>
-						<div class="space-y-2">
+				<div class="rounded-xl border border-black/10 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/5">
+					<div class="mb-2 text-xs font-bold tracking-widest text-slate-400 dark:text-slate-500">
+						TAKVİM DOSYALARI
+					</div>
+					{#if calendarDocs.length}
+						<div class="divide-y divide-black/5 overflow-hidden rounded-xl border border-black/10 dark:divide-white/10 dark:border-white/10">
 							{#each calendarDocs as f}
 								{@const title = String((f.meta?.display_name ?? '') || f.filename)}
 								<a
-									class="block rounded-lg border border-black/10 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-white/10 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10"
+									class="flex items-center gap-3 bg-white px-3 py-3 text-sm hover:bg-slate-50 dark:bg-transparent dark:hover:bg-white/5"
 									href={`${WEBUI_API_BASE_URL}/files/${f.id}/content`}
 									target="_blank"
 									rel="noreferrer"
 								>
-									{title}
+									<div class="shrink-0 rounded-lg border border-black/10 bg-slate-50 px-2 py-2 text-slate-600 dark:border-white/10 dark:bg-white/5 dark:text-slate-200">
+										<span class="text-xs font-black">PDF</span>
+									</div>
+									<div class="min-w-0 flex-1">
+										<div class="truncate font-semibold text-slate-800 dark:text-slate-100">
+											{title}
+										</div>
+										<div class="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+											{f.size ? fmtBytes(f.size) : 'PDF'}
+										</div>
+									</div>
+									<div class="shrink-0 rounded-lg border border-black/10 px-3 py-1.5 text-[11px] font-bold text-slate-600 dark:border-white/10 dark:text-slate-200">
+										İndir
+									</div>
 								</a>
 							{/each}
 						</div>
-					</div>
-				{/if}
+					{:else}
+						<div class="py-6 text-center text-sm text-slate-400">
+							Bu dönem için takvim dosyası yok.
+						</div>
+					{/if}
+				</div>
 
 				<div class="rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5">
 					<div class="mb-3 text-xs font-bold tracking-widest text-slate-400 dark:text-slate-500">

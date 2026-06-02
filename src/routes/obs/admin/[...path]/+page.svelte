@@ -272,9 +272,9 @@
 	let calendarTermId = '';
 	let calDocUploading = false;
 	let calDocErr: string | null = null;
-	let calDocs: Array<{ id: string; filename: string; meta?: Record<string, unknown> }> = [];
-	let calDocDisplayName = '';
-	let calDocPickedFiles: File[] = [];
+	let calDocs: Array<{ id: string; filename: string; meta?: Record<string, unknown>; size?: number }> =
+		[];
+	let calDocPickedFiles: Array<{ file: File; displayName: string }> = [];
 	let calDocDeletingId = '';
 
 	async function resolveOrCreateAcademicCalendarKbId(token: string): Promise<string | null> {
@@ -340,10 +340,11 @@
 			id: string;
 			filename: string;
 			meta?: Record<string, unknown>;
+			size?: number;
 		}>;
 		calDocs = items
 			.filter((f) => !calendarTermId || !fileTermId(f) || fileTermId(f) === calendarTermId)
-			.map((f) => ({ id: f.id, filename: f.filename, meta: f.meta }));
+			.map((f) => ({ id: f.id, filename: f.filename, meta: f.meta, size: f.size }));
 	}
 
 	async function onAdminCalendarTermChange(nextId: string) {
@@ -362,8 +363,9 @@
 			const kbId = await resolveOrCreateAcademicCalendarKbId(token);
 			if (!kbId) throw new Error('Dosya alanı hazırlanamadı.');
 
-			for (const file of calDocPickedFiles) {
-				const displayName = (calDocDisplayName || file.name).trim();
+			for (const picked of calDocPickedFiles) {
+				const file = picked.file;
+				const displayName = (picked.displayName || file.name).trim();
 				// PDF sadece görüntülenecek; içerik çıkarımı gerekmediği için process=false
 				const uploaded = await uploadFile(
 					token,
@@ -382,7 +384,6 @@
 			}
 
 			calDocPickedFiles = [];
-			calDocDisplayName = '';
 			await reloadCalendarDocs();
 		} catch (e: unknown) {
 			calDocErr = e instanceof Error ? e.message : 'Takvim dosyası yüklenemedi.';
@@ -423,6 +424,19 @@
 		return Number.isNaN(d.getTime())
 			? iso
 			: d.toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', year: 'numeric' });
+	}
+
+	function fmtBytes(n: number | null | undefined) {
+		const v = Number(n ?? 0);
+		if (!Number.isFinite(v) || v <= 0) return '';
+		const units = ['B', 'KB', 'MB', 'GB'];
+		let idx = 0;
+		let val = v;
+		while (val >= 1024 && idx < units.length - 1) {
+			val /= 1024;
+			idx += 1;
+		}
+		return `${val.toFixed(val >= 10 || idx === 0 ? 0 : 1)} ${units[idx]}`;
 	}
 
 	function applyRegistrationRow(row: Record<string, unknown>) {
@@ -3576,19 +3590,7 @@
 					{/if}
 
 					<div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-12">
-						<label class="md:col-span-5 block">
-							<span class="mb-1 block text-xs font-semibold text-slate-600 dark:text-slate-300">Görünen ad</span>
-							<input
-								bind:value={calDocDisplayName}
-								placeholder="Örn: 2025-2026 Lisansüstü Akademik Takvimi"
-								class="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-900/30"
-								disabled={calDocUploading}
-							/>
-							<div class="mt-1 text-[11px] text-slate-400">
-								Boş bırakırsan dosya adı kullanılır.
-							</div>
-						</label>
-						<label class="md:col-span-5 block">
+						<label class="md:col-span-10 block">
 							<span class="mb-1 block text-xs font-semibold text-slate-600 dark:text-slate-300">PDF seç</span>
 							<input
 								type="file"
@@ -3597,13 +3599,15 @@
 								class="block w-full text-xs"
 								on:change={(e) => {
 									const files = (e.target as HTMLInputElement).files;
-									calDocPickedFiles = files ? Array.from(files) : [];
+									calDocPickedFiles = files
+										? Array.from(files).map((f) => ({ file: f, displayName: f.name }))
+										: [];
 								}}
 								disabled={calDocUploading}
 							/>
 							{#if calDocPickedFiles.length}
 								<div class="mt-1 text-[11px] text-slate-500">
-									{calDocPickedFiles.length} dosya seçildi.
+									{calDocPickedFiles.length} dosya seçildi. Aşağıdan görünen adları düzenleyebilirsin.
 								</div>
 							{/if}
 						</label>
@@ -3619,6 +3623,52 @@
 						</div>
 					</div>
 
+					{#if calDocPickedFiles.length}
+						<div class="mt-3 space-y-2">
+							{#each calDocPickedFiles as p, idx (p.file.name + idx)}
+								<div class="grid grid-cols-1 gap-2 rounded-xl border border-black/10 bg-white p-3 dark:border-white/10 dark:bg-slate-900/30 md:grid-cols-12">
+									<div class="md:col-span-4 min-w-0">
+										<div class="truncate text-xs font-semibold text-slate-700 dark:text-slate-200">
+											{p.file.name}
+										</div>
+										<div class="mt-0.5 text-[11px] text-slate-400">
+											{p.file.type || 'application/pdf'}{p.file.size ? ` · ${fmtBytes(p.file.size)}` : ''}
+										</div>
+									</div>
+									<label class="md:col-span-7 block">
+										<div class="mb-1 text-[11px] font-semibold text-slate-500">
+											Görünen ad
+										</div>
+										<input
+											value={p.displayName}
+											on:input={(e) => {
+												const v = (e.target as HTMLInputElement).value;
+												calDocPickedFiles = calDocPickedFiles.map((x, i) =>
+													i === idx ? { ...x, displayName: v } : x
+												);
+											}}
+											placeholder="Örn: 2025-2026 Lisansüstü Akademik Takvimi"
+											class="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-900/30"
+											disabled={calDocUploading}
+										/>
+									</label>
+									<div class="md:col-span-1 flex items-end">
+										<button
+											type="button"
+											class="w-full rounded-xl border border-black/10 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/5"
+											on:click={() => {
+												calDocPickedFiles = calDocPickedFiles.filter((_, i) => i !== idx);
+											}}
+											disabled={calDocUploading}
+										>
+											Kaldır
+										</button>
+									</div>
+								</div>
+							{/each}
+						</div>
+					{/if}
+
 					<div class="mt-4">
 						{#if calDocs.length}
 							<div class="grid grid-cols-1 gap-2 md:grid-cols-2">
@@ -3633,6 +3683,9 @@
 										>
 											{title}
 										</a>
+										{#if f.size}
+											<span class="shrink-0 text-[11px] text-slate-400">{fmtBytes(f.size)}</span>
+										{/if}
 										<button
 											type="button"
 											on:click={() => void deleteCalendarDoc(f.id)}
@@ -3654,7 +3707,7 @@
 
 				{#if !calendarEvents.length}
 					<div class="py-8 text-center text-sm text-slate-400">
-						Bu dönem için takvim kaydı yok. Veriler veritabanından gelir.
+						Bu dönem için takvim kaydı yok.
 					</div>
 				{:else}
 					{#if editingCalEventId}
