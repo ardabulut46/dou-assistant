@@ -72,8 +72,6 @@
 	} from '$lib/apis/douAcademic';
 
 	const ACADEMIC_CAL_KB_NAME = 'Akademik Takvim';
-	const ADMIN_CAL_TERM_LS_KEY = 'dou_admin_calendar_term_id';
-
 	/** `user` tablosu role — API ile aynı stringler (filtre/liste/create uyumu) */
 	const ADMIN_USER_ROLE_OPTIONS: { value: string; label: string }[] = [
 		{ value: 'user', label: 'Öğrenci' },
@@ -265,7 +263,6 @@
 	let termWindowsSaving = false;
 	let termWindowsMsg: string | null = null;
 	let termWindowsErr: string | null = null;
-	let calendarTermId = '';
 	let calDocUploading = false;
 	let calDocErr: string | null = null;
 	let calDocs: Array<{ id: string; filename: string; meta?: Record<string, unknown>; size?: number }> =
@@ -297,29 +294,6 @@
 		return (created?.id as string) ?? null;
 	}
 
-	function loadSavedAdminCalendarTermId(): string {
-		if (!browser) return '';
-		try {
-			return String(localStorage.getItem(ADMIN_CAL_TERM_LS_KEY) ?? '').trim();
-		} catch {
-			return '';
-		}
-	}
-
-	function persistAdminCalendarTermId(termId: string) {
-		if (!browser) return;
-		try {
-			localStorage.setItem(ADMIN_CAL_TERM_LS_KEY, String(termId ?? '').trim());
-		} catch {
-			/* ignore */
-		}
-	}
-
-	function fileTermId(file: { meta?: Record<string, unknown> } | null | undefined): string {
-		const m = (file?.meta ?? {}) as Record<string, unknown>;
-		return String((m.term_id ?? m.calendar_term_id ?? '') as string);
-	}
-
 	async function reloadCalendarDocs() {
 		if (!browser) return;
 		const token = localStorage.token ?? null;
@@ -338,15 +312,7 @@
 			meta?: Record<string, unknown>;
 			size?: number;
 		}>;
-		calDocs = items
-			.filter((f) => !calendarTermId || !fileTermId(f) || fileTermId(f) === calendarTermId)
-			.map((f) => ({ id: f.id, filename: f.filename, meta: f.meta, size: f.size }));
-	}
-
-	async function onAdminCalendarTermChange(nextId: string) {
-		calendarTermId = nextId;
-		persistAdminCalendarTermId(nextId);
-		await reloadCalendarDocs();
+		calDocs = items.map((f) => ({ id: f.id, filename: f.filename, meta: f.meta, size: f.size }));
 	}
 
 	async function uploadCalendarPdfs() {
@@ -369,7 +335,6 @@
 					file,
 					{
 						feature: 'academic_calendar',
-						term_id: calendarTermId || '',
 						display_name: displayName
 					},
 					false
@@ -731,15 +696,7 @@
 				if (tRes.status === 'fulfilled') terms = tRes.value;
 				if (clRes.status === 'fulfilled') classrooms = clRes.value;
 			},
-			calendar: async (t) => {
-				const tr = await getDouTerms(t);
-				terms = tr;
-				const saved = loadSavedAdminCalendarTermId();
-				const resolved =
-					(saved && tr.some((x) => x.id === saved) && saved) ||
-					(tr.find((x) => x.is_active)?.id ?? tr[0]?.id ?? '');
-				calendarTermId = resolved;
-				persistAdminCalendarTermId(resolved);
+			calendar: async () => {
 				await reloadCalendarDocs();
 			},
 			'reg-rules': async (t) => {
@@ -3466,9 +3423,9 @@
 			<!-- ============================================================ -->
 		{:else if apiKey === 'calendar'}
 			<div class="space-y-4">
-				<!-- Başlık + dönem seçimi -->
+				<!-- Başlık -->
 				<div
-					class="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-black/10 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/5"
+					class="rounded-2xl border border-black/10 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/5"
 				>
 					<div class="min-w-0">
 						<div class="text-sm font-bold text-slate-800 dark:text-slate-100">Akademik Takvim</div>
@@ -3476,21 +3433,6 @@
 							PDF yükle; öğrenciler bu dosyaları görüntüleyip indirebilir.
 						</div>
 					</div>
-					{#if terms.length}
-						<label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-							<span class="text-xs font-semibold text-slate-500">Dönem</span>
-							<select
-								bind:value={calendarTermId}
-								on:change={(e) =>
-									void onAdminCalendarTermChange((e.target as HTMLSelectElement).value)}
-								class="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-400/20 dark:border-white/10 dark:bg-white/5"
-							>
-								{#each terms as tm}
-									<option value={tm.id}>{tm.name}{tm.is_active ? ' (Aktif)' : ''}</option>
-								{/each}
-							</select>
-						</label>
-					{/if}
 				</div>
 
 				<!-- Yükleme alanı -->
