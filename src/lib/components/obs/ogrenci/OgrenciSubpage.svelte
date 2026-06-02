@@ -1935,13 +1935,14 @@
 						</div>
 						<div class="space-y-2">
 							{#each calendarDocs as f}
+								{@const title = String((f.meta?.display_name ?? '') || f.filename)}
 								<a
 									class="block rounded-lg border border-black/10 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-white/10 dark:bg-white/5 dark:text-slate-200 dark:hover:bg-white/10"
 									href={`${WEBUI_API_BASE_URL}/files/${f.id}/content`}
 									target="_blank"
 									rel="noreferrer"
 								>
-									{f.filename}
+									{title}
 								</a>
 							{/each}
 						</div>

@@ -6,7 +6,7 @@
 	import ObsShell from '$lib/components/obs/ObsShell.svelte';
 	import { user } from '$lib/stores';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
-	import { uploadFile } from '$lib/apis/files';
+	import { uploadFile, deleteFileById } from '$lib/apis/files';
 	import {
 		addFileToKnowledgeById,
 		createNewKnowledge,
@@ -273,6 +273,9 @@
 	let calDocUploading = false;
 	let calDocErr: string | null = null;
 	let calDocs: Array<{ id: string; filename: string; meta?: Record<string, unknown> }> = [];
+	let calDocDisplayName = '';
+	let calDocPickedFiles: File[] = [];
+	let calDocDeletingId = '';
 
 	async function resolveOrCreateAcademicCalendarKbId(token: string): Promise<string | null> {
 		const res = await searchKnowledgeBases(token, ACADEMIC_CAL_KB_NAME, null, 1).catch(() => null);
@@ -349,36 +352,58 @@
 		await reloadCalendarEvents();
 	}
 
-	async function uploadCalendarPdf(file: File | null) {
-		if (!browser || !file) return;
+	async function uploadCalendarPdfs() {
+		if (!browser) return;
 		const token = localStorage.token ?? null;
-		if (!token || !calendarTermId) return;
+		if (!token || !calendarTermId || !calDocPickedFiles.length) return;
 		calDocUploading = true;
 		calDocErr = null;
 		try {
 			const kbId = await resolveOrCreateAcademicCalendarKbId(token);
 			if (!kbId) throw new Error('Dosya alanı hazırlanamadı.');
 
-			// PDF sadece görüntülenecek; içerik çıkarımı gerekmediği için process=false
-			const uploaded = await uploadFile(
-				token,
-				file,
-				{
-					feature: 'academic_calendar',
-					term_id: calendarTermId
-				},
-				false
-			).catch((e) => {
-				throw new Error(typeof e === 'string' ? e : 'Yüklenemedi.');
-			});
-			if (!uploaded?.id) throw new Error('Dosya yükleme yanıtı alınamadı.');
+			for (const file of calDocPickedFiles) {
+				const displayName = (calDocDisplayName || file.name).trim();
+				// PDF sadece görüntülenecek; içerik çıkarımı gerekmediği için process=false
+				const uploaded = await uploadFile(
+					token,
+					file,
+					{
+						feature: 'academic_calendar',
+						term_id: calendarTermId,
+						display_name: displayName
+					},
+					false
+				).catch((e) => {
+					throw new Error(typeof e === 'string' ? e : 'Yüklenemedi.');
+				});
+				if (!uploaded?.id) throw new Error('Dosya yükleme yanıtı alınamadı.');
+				await addFileToKnowledgeById(token, kbId, uploaded.id);
+			}
 
-			await addFileToKnowledgeById(token, kbId, uploaded.id);
+			calDocPickedFiles = [];
+			calDocDisplayName = '';
 			await reloadCalendarDocs();
 		} catch (e: unknown) {
 			calDocErr = e instanceof Error ? e.message : 'Takvim dosyası yüklenemedi.';
 		} finally {
 			calDocUploading = false;
+		}
+	}
+
+	async function deleteCalendarDoc(fileId: string) {
+		if (!browser || !fileId) return;
+		const token = localStorage.token ?? null;
+		if (!token) return;
+		calDocDeletingId = fileId;
+		calDocErr = null;
+		try {
+			await deleteFileById(token, fileId);
+			await reloadCalendarDocs();
+		} catch (e: unknown) {
+			calDocErr = e instanceof Error ? e.message : 'Dosya silinemedi.';
+		} finally {
+			calDocDeletingId = '';
 		}
 	}
 
@@ -3531,42 +3556,100 @@
 					{/if}
 				</div>
 
-				<!-- Takvim PDF dosyaları -->
-				<div class="mb-4 rounded-xl border border-black/10 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/5">
-					<div class="mb-2 text-xs font-bold tracking-widest text-slate-400 dark:text-slate-500">
-						TAKVİM DOSYALARI (PDF)
+				<!-- Takvim PDF dosyaları (Admin) -->
+				<div class="mb-4 rounded-2xl border border-black/10 bg-slate-50 p-4 shadow-sm dark:border-white/10 dark:bg-white/5">
+					<div class="flex flex-wrap items-center justify-between gap-3">
+						<div>
+							<div class="text-xs font-bold tracking-widest text-slate-400 dark:text-slate-500">
+								TAKVİM PDF’LERİ
+							</div>
+							<div class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+								Seçili döneme göre yüklenir ve öğrenci ekranında görünür.
+							</div>
+						</div>
 					</div>
+
 					{#if calDocErr}
-						<div class="mb-2 text-xs text-red-600 dark:text-red-300">{calDocErr}</div>
+						<div class="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-950/25 dark:text-red-200">
+							{calDocErr}
+						</div>
 					{/if}
-					<div class="flex flex-wrap items-center gap-2">
-						<input
-							type="file"
-							accept="application/pdf"
-							class="block w-full max-w-xs text-xs"
-							on:change={(e) => uploadCalendarPdf((e.target as HTMLInputElement).files?.[0] ?? null)}
-							disabled={calDocUploading}
-						/>
-						{#if calDocUploading}
-							<span class="text-xs text-slate-500">Yükleniyor…</span>
+
+					<div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-12">
+						<label class="md:col-span-5 block">
+							<span class="mb-1 block text-xs font-semibold text-slate-600 dark:text-slate-300">Görünen ad</span>
+							<input
+								bind:value={calDocDisplayName}
+								placeholder="Örn: 2025-2026 Lisansüstü Akademik Takvimi"
+								class="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-slate-900/30"
+								disabled={calDocUploading}
+							/>
+							<div class="mt-1 text-[11px] text-slate-400">
+								Boş bırakırsan dosya adı kullanılır.
+							</div>
+						</label>
+						<label class="md:col-span-5 block">
+							<span class="mb-1 block text-xs font-semibold text-slate-600 dark:text-slate-300">PDF seç</span>
+							<input
+								type="file"
+								multiple
+								accept="application/pdf"
+								class="block w-full text-xs"
+								on:change={(e) => {
+									const files = (e.target as HTMLInputElement).files;
+									calDocPickedFiles = files ? Array.from(files) : [];
+								}}
+								disabled={calDocUploading}
+							/>
+							{#if calDocPickedFiles.length}
+								<div class="mt-1 text-[11px] text-slate-500">
+									{calDocPickedFiles.length} dosya seçildi.
+								</div>
+							{/if}
+						</label>
+						<div class="md:col-span-2 flex items-end">
+							<button
+								type="button"
+								on:click={() => void uploadCalendarPdfs()}
+								disabled={calDocUploading || !calDocPickedFiles.length || !calendarTermId}
+								class="w-full rounded-xl bg-sky-500 px-3 py-2 text-sm font-bold text-white hover:bg-sky-400 disabled:opacity-50"
+							>
+								{calDocUploading ? 'Yükleniyor…' : 'Yükle'}
+							</button>
+						</div>
+					</div>
+
+					<div class="mt-4">
+						{#if calDocs.length}
+							<div class="grid grid-cols-1 gap-2 md:grid-cols-2">
+								{#each calDocs as f}
+									{@const title = String((f.meta?.display_name ?? '') || f.filename)}
+									<div class="flex items-center justify-between gap-3 rounded-xl border border-black/10 bg-white px-3 py-2 dark:border-white/10 dark:bg-slate-900/30">
+										<a
+											class="min-w-0 flex-1 truncate text-sm font-semibold text-slate-700 hover:underline dark:text-slate-200"
+											href={`${WEBUI_API_BASE_URL}/files/${f.id}/content`}
+											target="_blank"
+											rel="noreferrer"
+										>
+											{title}
+										</a>
+										<button
+											type="button"
+											on:click={() => void deleteCalendarDoc(f.id)}
+											disabled={calDocDeletingId === f.id}
+											class="rounded-lg border border-red-200 px-2 py-1 text-xs font-bold text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-900/40 dark:text-red-300 dark:hover:bg-red-950/30"
+										>
+											{calDocDeletingId === f.id ? 'Siliniyor…' : 'Sil'}
+										</button>
+									</div>
+								{/each}
+							</div>
+						{:else}
+							<div class="rounded-xl border border-black/10 bg-white px-4 py-4 text-sm text-slate-400 dark:border-white/10 dark:bg-slate-900/30">
+								Bu dönem için henüz PDF eklenmemiş.
+							</div>
 						{/if}
 					</div>
-					{#if calDocs.length}
-						<div class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-							{#each calDocs as f}
-								<a
-									class="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-white/10 dark:bg-slate-900/40 dark:text-slate-200 dark:hover:bg-white/10"
-									href={`${WEBUI_API_BASE_URL}/files/${f.id}/content`}
-									target="_blank"
-									rel="noreferrer"
-								>
-									{f.filename}
-								</a>
-							{/each}
-						</div>
-					{:else}
-						<div class="mt-3 text-xs text-slate-400">Bu dönem için dosya eklenmemiş.</div>
-					{/if}
 				</div>
 
 				{#if !calendarEvents.length}
