@@ -6,6 +6,14 @@
 	import ObsShell from '$lib/components/obs/ObsShell.svelte';
 	import { user } from '$lib/stores';
 	import { updateUserPassword } from '$lib/apis/auths';
+	import { WEBUI_API_BASE_URL } from '$lib/constants';
+	import { uploadFile, deleteFileById } from '$lib/apis/files';
+	import {
+		createNewKnowledge,
+		searchKnowledgeBases,
+		searchKnowledgeFilesById,
+		addFilesToKnowledgeBatch
+	} from '$lib/apis/knowledge';
 	import {
 		getDouAcademicSections,
 		getDouSectionStudents,
@@ -58,6 +66,7 @@
 		'/obs/akademisyen/not-girisi': { title: 'Not Girişi', apiKey: 'grades-entry' },
 		'/obs/akademisyen/yoklama-girisi': { title: 'Yoklama Girişi', apiKey: 'attendance-entry' },
 		'/obs/akademisyen/sinav-tanimlama': { title: 'Sınav Tanımlama', apiKey: 'exam-define' },
+		'/obs/akademisyen/ders-notlari': { title: 'Ders Notları', apiKey: 'course-notes' },
 		'/obs/akademisyen/danismanlik-ogrencilerim': {
 			title: 'Danışmanlık Öğrencilerim',
 			apiKey: 'advisees'
@@ -95,6 +104,18 @@
 	let selectedSection = '';
 	$: selectedSectionMeta =
 		sections.find((s) => String(s.id) === String(selectedSection)) ?? null;
+
+	// --- Ders Notları (course-notes) ---
+	const COURSE_NOTES_KB_NAME = 'Ders Notları';
+	/** Ders notları: seçili dönem (şube listesini filtreler). */
+	let selectedNotesTermId = '';
+	/** Ders notları: seçili şube (akademisyenin kendi şubeleri). */
+	let selectedNoteSection = '';
+	let noteDocs: Array<{ id: string; filename: string; meta?: Record<string, unknown>; size?: number }> = [];
+	let notePickedFiles: Array<{ file: File; displayName: string }> = [];
+	let noteUploading = false;
+	let noteDeletingId = '';
+	let noteErr: string | null = null;
 	$: examDefineTermRow =
 		selectedSectionMeta && terms.length
 			? terms.find((t) => t.id === selectedSectionMeta.term_id)
@@ -327,6 +348,144 @@
 		return [...byCode.values()].sort((a, b) => a.code.localeCompare(b.code, 'tr'));
 	}
 
+	function fmtBytes(n: number | null | undefined): string {
+		const v = Number(n ?? 0);
+		if (!Number.isFinite(v) || v <= 0) return '';
+		const units = ['B', 'KB', 'MB', 'GB'];
+		let idx = 0;
+		let val = v;
+		while (val >= 1024 && idx < units.length - 1) {
+			val /= 1024;
+			idx += 1;
+		}
+		return `${val.toFixed(val >= 10 || idx === 0 ? 0 : 1)} ${units[idx]}`;
+	}
+
+	function fileSectionId(file: { meta?: Record<string, unknown> } | null | undefined): string {
+		const m = (file?.meta ?? {}) as Record<string, unknown>;
+		return String((m.section_id ?? '') as string);
+	}
+
+	/** Ders Notları paylaşımlı alanını bul; yoksa herkese okuma + yazma izniyle oluştur. */
+	async function resolveOrCreateCourseNotesKbId(token: string): Promise<string | null> {
+		const res = await searchKnowledgeBases(token, COURSE_NOTES_KB_NAME, null, 1).catch(() => null);
+		const items = (res?.items ?? res?.knowledges ?? res?.knowledge_bases ?? []) as Array<{
+			id: string;
+			name?: string;
+		}>;
+		const exact = items.find((k) => (k?.name ?? '').trim() === COURSE_NOTES_KB_NAME);
+		if (exact?.id) return exact.id;
+
+		const created = await createNewKnowledge(token, COURSE_NOTES_KB_NAME, 'OBS ders notları PDF dosyaları', [
+			{ principal_type: 'user', principal_id: '*', permission: 'read' },
+			{ principal_type: 'user', principal_id: '*', permission: 'write' }
+		]).catch(() => null);
+		return (created?.id as string) ?? null;
+	}
+
+	async function reloadNoteDocs() {
+		if (!browser) return;
+		const token = localStorage.token ?? null;
+		if (!token || !selectedNoteSection) {
+			noteDocs = [];
+			return;
+		}
+		const kbId = await resolveOrCreateCourseNotesKbId(token);
+		if (!kbId) {
+			noteDocs = [];
+			return;
+		}
+		const res = await searchKnowledgeFilesById(
+			token,
+			kbId,
+			null,
+			null,
+			'updated_at',
+			'desc',
+			1
+		).catch(() => null);
+		const items = (res?.items ?? res?.files ?? []) as Array<{
+			id: string;
+			filename: string;
+			meta?: Record<string, unknown>;
+			size?: number;
+		}>;
+		// Akademisyen yalnızca seçili kendi şubesinin notlarını görür.
+		noteDocs = items
+			.filter((f) => fileSectionId(f) === selectedNoteSection)
+			.map((f) => ({ id: f.id, filename: f.filename, meta: f.meta, size: f.size }));
+	}
+
+	function onNoteFilesPicked(e: Event) {
+		const input = e.target as HTMLInputElement;
+		const files = Array.from(input.files ?? []);
+		notePickedFiles = files.map((f) => ({
+			file: f,
+			displayName: f.name.replace(/\.pdf$/i, '')
+		}));
+	}
+
+	async function uploadNotePdfs() {
+		if (!browser) return;
+		const token = localStorage.token ?? null;
+		if (!token || !notePickedFiles.length || !selectedNoteSection) return;
+		const sec = sections.find((s) => String(s.id) === String(selectedNoteSection));
+		noteUploading = true;
+		noteErr = null;
+		try {
+			const kbId = await resolveOrCreateCourseNotesKbId(token);
+			if (!kbId) throw new Error('Dosya alanı hazırlanamadı.');
+
+			const addedIds: string[] = [];
+			for (const picked of notePickedFiles) {
+				const file = picked.file;
+				const displayName = (picked.displayName || file.name).trim();
+				const uploaded = await uploadFile(
+					token,
+					file,
+					{
+						feature: 'course_notes',
+						section_id: selectedNoteSection,
+						course_code: sec?.course_code ?? '',
+						course_name: sec?.course_name ?? '',
+						section_no: sec?.section_no ?? '',
+						term_id: sec?.term_id ?? selectedNotesTermId ?? '',
+						display_name: displayName
+					},
+					false
+				).catch((err) => {
+					throw new Error(typeof err === 'string' ? err : 'Yüklenemedi.');
+				});
+				if (!uploaded?.id) throw new Error('Dosya yükleme yanıtı alınamadı.');
+				addedIds.push(uploaded.id);
+			}
+
+			await addFilesToKnowledgeBatch(token, kbId, addedIds);
+			notePickedFiles = [];
+			await reloadNoteDocs();
+		} catch (e: unknown) {
+			noteErr = e instanceof Error ? e.message : 'Ders notu yüklenemedi.';
+		} finally {
+			noteUploading = false;
+		}
+	}
+
+	async function deleteNoteDoc(fileId: string) {
+		if (!browser || !fileId) return;
+		const token = localStorage.token ?? null;
+		if (!token) return;
+		noteDeletingId = fileId;
+		noteErr = null;
+		try {
+			await deleteFileById(token, fileId);
+			await reloadNoteDocs();
+		} catch (e: unknown) {
+			noteErr = e instanceof Error ? e.message : 'Dosya silinemedi.';
+		} finally {
+			noteDeletingId = '';
+		}
+	}
+
 	async function loadPage() {
 		if (!browser || !apiKey) return;
 		loading = true;
@@ -345,11 +504,19 @@
 				apiKey === 'sections' ||
 				apiKey === 'grades-entry' ||
 				apiKey === 'exam-define' ||
-				apiKey === 'attendance-entry'
+				apiKey === 'attendance-entry' ||
+				apiKey === 'course-notes'
 			) {
 				const tr = await Promise.allSettled([getDouTerms(token)]);
 				if (tr[0].status === 'fulfilled') {
 					terms = (tr[0].value as DouTerm[]) ?? [];
+				}
+			}
+
+			if (apiKey === 'course-notes') {
+				if (!selectedNotesTermId && terms.length) {
+					const sorted = sortTermsNewestFirst(terms);
+					selectedNotesTermId = sorted.find((t) => t.is_active)?.id ?? sorted[0]?.id ?? '';
 				}
 			}
 
@@ -394,7 +561,9 @@
 							? selectedExamsTermId || undefined
 							: apiKey === 'attendance-entry'
 								? selectedAttendanceTermId || undefined
-								: undefined;
+								: apiKey === 'course-notes'
+									? selectedNotesTermId || undefined
+									: undefined;
 			/** Sunucu include_classrooms ile yanıt verdiyse /me/classrooms yedeğine gerek yok (proxy/HTML kırığından kaçın) */
 			let sectionsPayloadHadClassrooms = false;
 			const secRes = await Promise.allSettled([
@@ -427,6 +596,13 @@
 				if (!sectionIds.has(selectedSection)) selectedSection = '';
 			}
 			if (!selectedSection && sections.length) selectedSection = sections[0].id;
+
+			if (apiKey === 'course-notes') {
+				const sectionIds = new Set(sections.map((s) => s.id));
+				if (selectedNoteSection && !sectionIds.has(selectedNoteSection)) selectedNoteSection = '';
+				if (!selectedNoteSection && sections.length) selectedNoteSection = sections[0].id;
+				await reloadNoteDocs();
+			}
 
 			if (apiKey === 'grades-entry') {
 				// Şube listesi (GET /me/sections) doğru ağırlığı taşır. GET /grades içindeki section bazen 40/60
@@ -2985,6 +3161,190 @@
 							</div>
 						</div>
 					</div>
+				</div>
+			{/if}
+
+			<!-- ============================================================ -->
+			<!-- DERS NOTLARI                                                -->
+			<!-- ============================================================ -->
+		{:else if apiKey === 'course-notes'}
+			<div class="flex flex-wrap items-center gap-3">
+				<span class="text-xs font-semibold text-slate-500">Akademik dönem:</span>
+				<select
+					bind:value={selectedNotesTermId}
+					on:change={() => loadPage()}
+					class="min-w-[14rem] rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+				>
+					{#each termsSortedForSections as t}
+						<option value={t.id}>{formatTermDropdownLabel(t)}</option>
+					{/each}
+				</select>
+				<span class="text-xs font-semibold text-slate-500">Şube:</span>
+				<select
+					bind:value={selectedNoteSection}
+					on:change={() => reloadNoteDocs()}
+					class="min-w-[14rem] rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm outline-none dark:border-white/10 dark:bg-white/5"
+				>
+					{#each sections as s}
+						<option value={s.id}>
+							{s.course_code} — {s.course_name}{s.section_no ? ` (Şube ${s.section_no})` : ''}
+						</option>
+					{/each}
+				</select>
+			</div>
+
+			{#if !sections.length}
+				<div
+					class="rounded-xl border border-dashed border-black/15 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500 dark:border-white/15 dark:bg-white/5"
+				>
+					Bu döneme ait şubeniz bulunmuyor.
+				</div>
+			{:else}
+				{@const sec = sections.find((s) => String(s.id) === String(selectedNoteSection)) ?? null}
+				<div
+					class="rounded-2xl border border-black/10 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/5 sm:p-5"
+				>
+					<div class="mb-4 flex items-center gap-3">
+						<div
+							class="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-300"
+						>
+							<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"
+								/>
+							</svg>
+						</div>
+						<div class="min-w-0 flex-1">
+							<div class="text-sm font-bold text-slate-800 dark:text-slate-100">Ders Notu Yükle</div>
+							<div class="text-xs text-slate-500 dark:text-slate-400">
+								{#if sec}
+									<span class="font-semibold text-slate-700 dark:text-slate-200">{sec.course_code}</span>
+									— {sec.course_name}{sec.section_no ? ` · Şube ${sec.section_no}` : ''} için PDF ekleyin.
+								{:else}
+									Seçili şube için PDF ekleyin.
+								{/if}
+							</div>
+						</div>
+					</div>
+
+					{#if noteErr}
+						<div
+							class="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300"
+						>
+							{noteErr}
+						</div>
+					{/if}
+
+					<div class="flex flex-wrap items-center gap-3">
+						<label
+							class="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-dashed border-black/20 bg-slate-50 px-4 py-2.5 text-xs font-semibold text-slate-600 transition-colors hover:border-indigo-400 hover:text-indigo-600 dark:border-white/15 dark:bg-white/5 dark:text-slate-300"
+						>
+							<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+								/>
+							</svg>
+							PDF seç
+							<input
+								type="file"
+								accept="application/pdf"
+								multiple
+								class="hidden"
+								on:change={onNoteFilesPicked}
+							/>
+						</label>
+						<button
+							type="button"
+							on:click={uploadNotePdfs}
+							disabled={noteUploading || !notePickedFiles.length || !selectedNoteSection}
+							class="inline-flex items-center gap-2 rounded-xl bg-indigo-500 px-4 py-2.5 text-xs font-bold text-white transition-colors hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-50"
+						>
+							{noteUploading ? 'Yükleniyor…' : `Yükle${notePickedFiles.length ? ` (${notePickedFiles.length})` : ''}`}
+						</button>
+					</div>
+
+					{#if notePickedFiles.length}
+						<div class="mt-3 space-y-1.5">
+							{#each notePickedFiles as p, i}
+								<div
+									class="flex items-center gap-2 rounded-lg border border-black/10 bg-slate-50 px-3 py-2 text-xs dark:border-white/10 dark:bg-slate-900/30"
+								>
+									<span class="shrink-0 font-black text-rose-500">PDF</span>
+									<input
+										class="min-w-0 flex-1 rounded border border-black/10 bg-white px-2 py-1 text-xs outline-none dark:border-white/10 dark:bg-white/5"
+										bind:value={notePickedFiles[i].displayName}
+										placeholder={p.file.name}
+									/>
+									<button
+										type="button"
+										class="shrink-0 text-slate-400 hover:text-red-500"
+										on:click={() =>
+											(notePickedFiles = notePickedFiles.filter((_, idx) => idx !== i))}
+									>
+										✕
+									</button>
+								</div>
+							{/each}
+						</div>
+					{/if}
+				</div>
+
+				<div
+					class="rounded-2xl border border-black/10 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/5 sm:p-5"
+				>
+					<div class="mb-3 text-sm font-bold text-slate-800 dark:text-slate-100">
+						Yüklü Notlar
+					</div>
+					{#if noteDocs.length}
+						<div class="space-y-2">
+							{#each noteDocs as f}
+								{@const title = String((f.meta?.display_name ?? '') || f.filename)}
+								<div
+									class="flex items-center gap-3 rounded-xl border border-black/10 bg-slate-50 px-3 py-3 dark:border-white/10 dark:bg-slate-900/30"
+								>
+									<div
+										class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-300"
+									>
+										<span class="text-[11px] font-black">PDF</span>
+									</div>
+									<div class="min-w-0 flex-1">
+										<div class="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">
+											{title}
+										</div>
+										<div class="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+											{f.size ? fmtBytes(f.size) : 'PDF dosyası'}
+										</div>
+									</div>
+									<a
+										class="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-sky-500 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-sky-400"
+										href={`${WEBUI_API_BASE_URL}/files/${f.id}/content`}
+										target="_blank"
+										rel="noreferrer"
+									>
+										İndir
+									</a>
+									<button
+										type="button"
+										on:click={() => deleteNoteDoc(f.id)}
+										disabled={noteDeletingId === f.id}
+										class="inline-flex shrink-0 items-center rounded-xl border border-red-200 px-3 py-2 text-xs font-bold text-red-600 transition-colors hover:bg-red-50 disabled:opacity-50 dark:border-red-900/40 dark:text-red-300 dark:hover:bg-red-950/30"
+									>
+										{noteDeletingId === f.id ? '…' : 'Sil'}
+									</button>
+								</div>
+							{/each}
+						</div>
+					{:else}
+						<div
+							class="rounded-xl border border-dashed border-black/15 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500 dark:border-white/15 dark:bg-slate-900/30"
+						>
+							Bu şube için henüz ders notu yüklenmemiş.
+						</div>
+					{/if}
 				</div>
 			{/if}
 

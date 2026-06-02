@@ -9,6 +9,7 @@ export const OGRENCI_PAGES = {
 	'/obs/ogrenci/sinav-takvimi': { title: 'Sınav Takvimi', apiKey: 'exams' },
 	'/obs/ogrenci/ders-kayit': { title: 'Ders Kayıt', apiKey: 'ders-kayit' },
 	'/obs/ogrenci/ders-ekle-birak': { title: 'Ders Ekle / Bırak', apiKey: 'ders-ekle' },
+	'/obs/ogrenci/ders-notlari': { title: 'Ders Notları', apiKey: 'course-notes' },
 	'/obs/ogrenci/not-listesi': { title: 'Not Listesi', apiKey: 'grades' },
 	'/obs/ogrenci/donem-ortalamalari': { title: 'Dönem Ortalamaları', apiKey: 'gpa' },
 	'/obs/ogrenci/transkript': { title: 'Transkript', apiKey: 'transcript' },

@@ -48,6 +48,7 @@
 			items: [
 				{ label: 'Ders Kayıt', href: '/obs/ogrenci/ders-kayit' },
 				{ label: 'Ders Ekle / Bırak', href: '/obs/ogrenci/ders-ekle-birak' },
+				{ label: 'Ders Notları', href: '/obs/ogrenci/ders-notlari' },
 				{ label: 'Not Listesi', href: '/obs/ogrenci/not-listesi' },
 				{ label: 'Dönem Ortalamaları', href: '/obs/ogrenci/donem-ortalamalari' },
 				{ label: 'Not Hesaplama', href: '/obs/ogrenci/not-hesaplama' },
@@ -76,7 +77,8 @@
 				{ label: 'Şubelerim', href: '/obs/akademisyen/subelerim' },
 				{ label: 'Not Girişi', href: '/obs/akademisyen/not-girisi' },
 				{ label: 'Yoklama Girişi', href: '/obs/akademisyen/yoklama-girisi' },
-				{ label: 'Sınav Tanımlama', href: '/obs/akademisyen/sinav-tanimlama' }
+				{ label: 'Sınav Tanımlama', href: '/obs/akademisyen/sinav-tanimlama' },
+				{ label: 'Ders Notları', href: '/obs/akademisyen/ders-notlari' }
 			]
 		},
 		{
