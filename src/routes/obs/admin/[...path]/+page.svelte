@@ -118,7 +118,7 @@
 	let userSearch = '';
 	let userRoleFilter = '';
 	let showUserModal = false;
-	/** WebUI’de oluşmuş öğrenciye sonradan obs_student_profiles */
+	/** WebUI’de oluşmuş öğrenciye sonradan öğrenci özlük kaydı */
 	let showOzlukModal = false;
 	let ozlukErr: string | null = null;
 	let ozlukSaving = false;
@@ -244,7 +244,7 @@
 	};
 	let regSaved = false;
 	let regRulesTermId = '';
-	/** Dönem Yönetimi: obs_terms kayıt / ekle-bırak pencereleri (tek kaynak) */
+	/** Dönem Yönetimi: kayıt / ekle-bırak pencereleri (tek kaynak) */
 	let termWindowsEditId = '';
 	let termWindowsForm = {
 		registration_open: true,
@@ -782,7 +782,7 @@
 				add_drop_end: termWindowsForm.add_drop_end || undefined
 			});
 			terms = await getDouTerms(token);
-			termWindowsMsg = 'Kayıt pencereleri güncellendi (obs_terms).';
+			termWindowsMsg = 'Kayıt pencereleri güncellendi.';
 			setTimeout(() => {
 				termWindowsMsg = null;
 			}, 3500);
@@ -1569,7 +1569,7 @@
 													on:click={() => openOzlukModal(u)}
 													type="button"
 													class="rounded-lg border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-medium text-sky-800 hover:bg-sky-100 dark:border-sky-800/50 dark:bg-sky-950/40 dark:text-sky-200 dark:hover:bg-sky-900/40 transition-colors"
-													title="obs_student_profiles kaydı oluştur veya tamamla"
+													title="Öğrenci özlük kaydı oluştur veya tamamla"
 												>
 													Özlük
 												</button>
@@ -1610,9 +1610,7 @@
 							<div>
 								<div class="font-bold">Yeni kullanıcı</div>
 								<p class="mt-0.5 text-[11px] text-slate-400">
-									Öğrenci → <code class="rounded bg-slate-100 px-1 dark:bg-white/10">obs_student_profiles</code>
-									· Akademisyen →
-									<code class="rounded bg-slate-100 px-1 dark:bg-white/10">obs_academic_profiles</code>
+									Öğrenci veya akademisyen hesabı oluşturma
 								</p>
 							</div>
 							<button
@@ -1630,9 +1628,7 @@
 								</div>
 							{/if}
 							<div class="space-y-4">
-								<div class="text-xs font-bold uppercase tracking-wide text-slate-400">
-									Hesap (user tablosu)
-								</div>
+								<div class="text-xs font-bold uppercase tracking-wide text-slate-400">Hesap</div>
 								<div class="grid gap-3 sm:grid-cols-2">
 									<label class="block sm:col-span-2">
 										<div class="mb-1 text-xs font-semibold text-slate-500">Ad Soyad *</div>
@@ -1738,7 +1734,7 @@
 											</label>
 										</div>
 										<div class="mt-3 text-xs font-bold uppercase tracking-wide text-slate-400">
-											İsteğe bağlı (obs_student_profiles)
+											İsteğe bağlı
 										</div>
 										<div class="mt-2 grid gap-3 sm:grid-cols-2">
 											<label class="block">
@@ -2036,8 +2032,7 @@
 								</div>
 							{/if}
 							<p class="mb-4 text-xs text-slate-500 dark:text-slate-400">
-								Kayıt <code class="rounded bg-slate-100 px-1 dark:bg-white/10">obs_student_profiles</code>
-								tablosuna yazılır; zaten varsa mevcut kayıt korunur.
+								Kayıt öğrenci özlük verisine yazılır; zaten varsa mevcut kayıt korunur.
 							</p>
 							<div class="border-t border-black/5 pt-4 dark:border-white/10">
 								<div class="mb-2 text-xs font-bold uppercase tracking-wide text-sky-600 dark:text-sky-400">
@@ -2352,8 +2347,7 @@
 					class="rounded-lg border border-sky-200 bg-sky-50/80 px-4 py-3 text-xs text-sky-900 dark:border-sky-900/40 dark:bg-sky-950/30 dark:text-sky-200"
 				>
 					<strong>Ders kayıt</strong> ve <strong>ekle-bırak</strong> pencereleri yalnızca buradan yönetilir
-					(<code class="rounded bg-white/60 px-1 dark:bg-black/30">obs_terms</code>). Kayıt Kuralları sayfası
-					yalnızca AKTS/GNO limitlerini içerir.
+					. Kayıt Kuralları sayfası yalnızca AKTS/GNO limitlerini içerir.
 				</div>
 			<div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
 				<div
@@ -2810,7 +2804,7 @@
 					<div class="mb-3 flex items-center justify-between">
 						<div>
 							<div class="text-sm font-bold text-slate-800 dark:text-slate-100">
-								Öğrenci → Danışman (obs_student_advisors)
+								Öğrenci → Danışman
 							</div>
 							<p class="text-xs text-slate-500">
 								Tablodaki "Danışman" sütunu salt okunurdur — sadece mevcut atamayı
@@ -3031,7 +3025,7 @@
 		{:else if apiKey === 'section-assignments'}
 			<div class="rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5">
 					<div class="mb-4 text-sm font-bold text-slate-800 dark:text-slate-100">
-						Şube → Öğretim üyesi (obs_course_sections)
+						Şube → Öğretim üyesi
 					</div>
 					<p class="mb-4 text-xs text-slate-500">
 						Döneme göre şubeleri listeleyip öğretim üyesi atayın.
@@ -3410,8 +3404,7 @@
 				</div>
 				{#if !calendarEvents.length}
 					<div class="py-8 text-center text-sm text-slate-400">
-						Bu dönem için takvim kaydı yok. Veriler veritabanındaki obs_calendar_events tablosundan
-						gelir.
+						Bu dönem için takvim kaydı yok. Veriler veritabanından gelir.
 					</div>
 				{:else}
 					{#if editingCalEventId}

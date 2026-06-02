@@ -103,7 +103,7 @@ export type DouAdvisor = {
 	department_name?: string;
 	office?: string;
 	phone?: string;
-	/** Danışmanlık / ofis görüşme saatleri (obs_academic_profiles.consulting_hours) */
+	/** Danışmanlık / ofis görüşme saatleri */
 	consulting_hours?: string;
 };
 
@@ -506,7 +506,7 @@ export type DouStudentRegistrationLimits = {
 	add_drop_akts_min?: number;
 	/** Ders ekle-bırak: GNO ≥ 2,50 ise 35, aksi 30 (hazırlıkta farklı olabilir). */
 	add_drop_akts_max?: number;
-	/** Program yarıyılı (obs_student_profiles.program_semester_number) için henüz döneme eklenmemiş zorunlular */
+	/** Program yarıyılı için henüz döneme eklenmemiş zorunlular */
 	curriculum_mandatory_remaining?: CurriculumMandatoryBrief[];
 	/** Seçmeli eklemeden önce listedeki zorunlular tamamlanmalı (zorunlu kapısı açık) */
 	curriculum_elective_locked?: boolean;
@@ -1901,7 +1901,7 @@ export const updateDouAdminAcademicProfile = (
 	);
 
 // ---------------------------------------------------------------------------
-// Admin — Danışman Atama (obs_student_advisors)
+// Admin — Danışman Atama
 // ---------------------------------------------------------------------------
 export type AdminStudentAdvisorRow = {
 	student_profile_id: string | null;
