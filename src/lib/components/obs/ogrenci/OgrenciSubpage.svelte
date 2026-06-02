@@ -11,7 +11,6 @@
 	export let meta: OgrenciPageMeta;
 	import {
 		getDouTerms,
-		getDouTermCalendar,
 		getDouStudentProfile,
 		getDouStudentAdvisor,
 		getDouStudentRegistrationLimits,
@@ -45,7 +44,6 @@
 		type DouScheduleRow,
 		type DouAnnouncement,
 		type DouMessage,
-		type DouCalendarEvent,
 		type DouDocumentRequest,
 		type AvailableCourse,
 		type DouAvailableCoursesResponse,
@@ -65,8 +63,6 @@
 	// veritipleri
 	let profile: DouStudentProfile | null = null;
 	let terms: DouTerm[] = [];
-	let calendarEvents: DouCalendarEvent[] = [];
-	let calendarTermId = '';
 	let calendarDocs: Array<{ id: string; filename: string; meta?: Record<string, unknown>; size?: number }> =
 		[];
 	let advisor: DouAdvisorResponse | null = null;
@@ -115,23 +111,12 @@
 		return `${val.toFixed(val >= 10 || idx === 0 ? 0 : 1)} ${units[idx]}`;
 	}
 
-	async function reloadCalendar() {
+	async function reloadCalendarDocs() {
 		if (!browser) return;
 		const token = localStorage.token ?? null;
 		if (!token) return;
-		if (!calendarTermId) {
-			calendarEvents = [];
-			calendarDocs = [];
-			return;
-		}
 
-		const [calRes, kbId] = await Promise.all([
-			getDouTermCalendar(token, calendarTermId).catch(() => null),
-			resolveAcademicCalendarKbId(token)
-		]);
-
-		calendarEvents = (calRes?.events ?? []) as DouCalendarEvent[];
-
+		const kbId = await resolveAcademicCalendarKbId(token);
 		if (!kbId) {
 			calendarDocs = [];
 			return;
@@ -147,9 +132,9 @@
 			size?: number;
 		}>;
 
-		calendarDocs = items
-			.filter((f) => !fileTermId(f) || fileTermId(f) === calendarTermId)
-			.map((f) => ({ id: f.id, filename: f.filename, meta: f.meta, size: f.size }));
+		// Öğrenci ekranında sadece PDF listesi gösterilir.
+		// Dönem filtresi zorunlu değil; meta.term_id varsa admin tarafında dönem bazlı yüklenebilir.
+		calendarDocs = items.map((f) => ({ id: f.id, filename: f.filename, meta: f.meta, size: f.size }));
 	}
 
 	function floorPct30Quota(weeks: number): number {
@@ -978,12 +963,10 @@
 					};
 				}
 			}
-			if (apiKey === 'terms' || apiKey === 'calendar') terms = await getDouTerms(token).catch(() => []);
 			if (apiKey === 'calendar') {
-				const active = terms.find((t) => t.is_active) ?? terms[terms.length - 1] ?? null;
-				calendarTermId = calendarTermId || active?.id || (terms[0]?.id ?? '');
-				await reloadCalendar();
+				await reloadCalendarDocs();
 			}
+			if (apiKey === 'terms') terms = await getDouTerms(token).catch(() => []);
 			if (apiKey === 'advisor') advisor = await getDouStudentAdvisor(token).catch(() => null);
 			if (apiKey === 'enrollments') {
 				const r = await getDouStudentEnrollments(token).catch(() => null);
@@ -1930,25 +1913,6 @@
 			<!-- ================================================================ -->
 		{:else if apiKey === 'calendar'}
 			<div class="space-y-4">
-				{#if terms.length}
-					<div class="flex flex-wrap items-center gap-3">
-						<span class="text-sm font-semibold text-slate-700 dark:text-slate-200">Dönem</span>
-						<select
-							bind:value={calendarTermId}
-							on:change={() => void reloadCalendar()}
-							class="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none dark:border-white/10 dark:bg-white/5"
-						>
-							{#each terms as tm}
-								<option value={tm.id}>{tm.name}{tm.is_active ? ' (Aktif)' : ''}</option>
-							{/each}
-						</select>
-					</div>
-				{:else}
-					<div class="rounded-xl border border-black/10 bg-white p-5 text-sm text-slate-500 shadow-sm dark:border-white/10 dark:bg-white/5 dark:text-slate-400">
-						Dönem listesi yükleniyor…
-					</div>
-				{/if}
-
 				<div class="rounded-xl border border-black/10 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/5">
 					<div class="mb-2 text-xs font-bold tracking-widest text-slate-400 dark:text-slate-500">
 						TAKVİM DOSYALARI
@@ -1983,27 +1947,6 @@
 					{:else}
 						<div class="py-6 text-center text-sm text-slate-400">
 							Bu dönem için takvim dosyası yok.
-						</div>
-					{/if}
-				</div>
-
-				<div class="rounded-xl border border-black/10 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/5">
-					<div class="mb-3 text-xs font-bold tracking-widest text-slate-400 dark:text-slate-500">
-						ETKİNLİKLER
-					</div>
-					{#if !calendarEvents.length}
-						<div class="py-6 text-center text-sm text-slate-400">Bu dönem için takvim kaydı yok.</div>
-					{:else}
-						<div class="space-y-2">
-							{#each calendarEvents as ev}
-								<div class="rounded-lg border border-black/10 px-3 py-2 text-sm dark:border-white/10">
-									<div class="font-semibold">{ev.title}</div>
-									<div class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-										{ev.start_date}{ev.end_date && ev.end_date !== ev.start_date ? ` → ${ev.end_date}` : ''}
-										{ev.event_type ? ` · ${ev.event_type}` : ''}
-									</div>
-								</div>
-							{/each}
 						</div>
 					{/if}
 				</div>

@@ -45,9 +45,6 @@
 		createDouAdminSection,
 		updateDouAdminSection,
 		deleteDouAdminSection,
-		updateDouAdminCalendarEvent,
-		deleteDouAdminCalendarEvent,
-		getDouAdminCalendarEvents,
 		getDouAdminRegistrationSettings,
 		postDouAdminRegistrationSettings,
 		createDouAdminAnnouncement,
@@ -67,7 +64,6 @@
 		type DouTerm,
 		type DouCourse,
 		type DouClassroom,
-		type DouCalendarEvent,
 		type DouAnnouncement,
 		type DouAdminCreateUserBody,
 		type DouStudentProfileCreateInput,
@@ -269,7 +265,6 @@
 	let termWindowsSaving = false;
 	let termWindowsMsg: string | null = null;
 	let termWindowsErr: string | null = null;
-	let calendarEvents: DouCalendarEvent[] = [];
 	let calendarTermId = '';
 	let calDocUploading = false;
 	let calDocErr: string | null = null;
@@ -351,7 +346,7 @@
 	async function onAdminCalendarTermChange(nextId: string) {
 		calendarTermId = nextId;
 		persistAdminCalendarTermId(nextId);
-		await reloadCalendarEvents();
+		await reloadCalendarDocs();
 	}
 
 	async function uploadCalendarPdfs() {
@@ -413,24 +408,6 @@
 		}
 	}
 
-	const CAL_EVENT_STYLES = [
-		'bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200',
-		'bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200',
-		'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200',
-		'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200',
-		'bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-200',
-		'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-200'
-	];
-
-	function fmtCalDate(iso: string) {
-		if (!iso) return '—';
-		const s = iso.length <= 10 ? `${iso}T12:00:00` : iso;
-		const d = new Date(s);
-		return Number.isNaN(d.getTime())
-			? iso
-			: d.toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', year: 'numeric' });
-	}
-
 	function fmtBytes(n: number | null | undefined) {
 		const v = Number(n ?? 0);
 		if (!Number.isFinite(v) || v <= 0) return '';
@@ -482,8 +459,6 @@
 	let editingCourseId = '';
 	let editingClassId = '';
 	let editingSectionId = '';
-	let editingCalEventId = '';
-	let calEditForm = { event_type: '', title: '', start_date: '', end_date: '' };
 
 	// Şube açma
 	let instructors: AdminInstructor[] = [];
@@ -765,7 +740,7 @@
 					(tr.find((x) => x.is_active)?.id ?? tr[0]?.id ?? '');
 				calendarTermId = resolved;
 				persistAdminCalendarTermId(resolved);
-				await reloadCalendarEvents();
+				await reloadCalendarDocs();
 			},
 			'reg-rules': async (t) => {
 				const tr = await getDouTerms(t);
@@ -960,69 +935,6 @@
 			termWindowsErr = e instanceof Error ? e.message : 'Kaydedilemedi.';
 		} finally {
 			termWindowsSaving = false;
-		}
-	}
-
-	async function reloadCalendarEvents() {
-		if (!browser) return;
-		const token = localStorage.token ?? null;
-		if (!token || !calendarTermId) return;
-		try {
-			calendarEvents = await getDouAdminCalendarEvents(token, calendarTermId);
-			await reloadCalendarDocs();
-		} catch {
-			/* ignore */
-		}
-	}
-
-	function calDateInput(iso: string) {
-		if (!iso) return '';
-		return iso.length > 10 ? iso.slice(0, 10) : iso;
-	}
-
-	function startCalEdit(ev: DouCalendarEvent) {
-		editingCalEventId = ev.id;
-		calEditForm = {
-			event_type: ev.event_type ?? '',
-			title: ev.title ?? '',
-			start_date: calDateInput(ev.start_date),
-			end_date: calDateInput(ev.end_date)
-		};
-	}
-
-	function cancelCalEdit() {
-		editingCalEventId = '';
-	}
-
-	async function saveCalCatalogEdit() {
-		const token = localStorage.token ?? null;
-		if (!token || !editingCalEventId) return;
-		loadErr = null;
-		try {
-			await updateDouAdminCalendarEvent(token, editingCalEventId, {
-				term_id: calendarTermId,
-				event_type: calEditForm.event_type,
-				title: calEditForm.title,
-				start_date: calEditForm.start_date,
-				end_date: calEditForm.end_date
-			});
-			editingCalEventId = '';
-			await reloadCalendarEvents();
-		} catch (e: unknown) {
-			loadErr = e instanceof Error ? e.message : 'Takvim güncellenemedi.';
-		}
-	}
-
-	async function removeCalendarEventRow(id: string) {
-		if (!browser || !confirm('Bu takvim kaydını silmek istediğinize emin misiniz?')) return;
-		const token = localStorage.token ?? null;
-		loadErr = null;
-		try {
-			await deleteDouAdminCalendarEvent(token, id);
-			if (editingCalEventId === id) cancelCalEdit();
-			await reloadCalendarEvents();
-		} catch (e: unknown) {
-			loadErr = e instanceof Error ? e.message : 'Silinemedi.';
 		}
 	}
 
@@ -3710,106 +3622,7 @@
 					</div>
 				</div>
 
-				{#if !calendarEvents.length}
-					<div class="py-8 text-center text-sm text-slate-400">
-						Bu dönem için takvim kaydı yok.
-					</div>
-				{:else}
-					{#if editingCalEventId}
-						<div
-							class="mb-4 rounded-lg border border-sky-200 bg-sky-50/60 p-4 dark:border-sky-900/40 dark:bg-sky-950/25"
-						>
-							<div class="mb-3 text-xs font-bold text-slate-600 dark:text-slate-300">
-								Takvim kaydı düzenle
-							</div>
-							<div class="grid gap-3 sm:grid-cols-2">
-								<label class="block sm:col-span-2">
-									<div class="mb-1 text-xs font-semibold text-slate-500">Başlık</div>
-									<input
-										bind:value={calEditForm.title}
-										class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm dark:border-white/10 dark:bg-white/5"
-									/>
-								</label>
-								<label class="block">
-									<div class="mb-1 text-xs font-semibold text-slate-500">Tür</div>
-									<input
-										bind:value={calEditForm.event_type}
-										class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm dark:border-white/10 dark:bg-white/5"
-									/>
-								</label>
-								<label class="block">
-									<div class="mb-1 text-xs font-semibold text-slate-500">Başlangıç</div>
-									<input
-										type="date"
-										bind:value={calEditForm.start_date}
-										class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm dark:border-white/10 dark:bg-white/5"
-									/>
-								</label>
-								<label class="block">
-									<div class="mb-1 text-xs font-semibold text-slate-500">Bitiş</div>
-									<input
-										type="date"
-										bind:value={calEditForm.end_date}
-										class="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm dark:border-white/10 dark:bg-white/5"
-									/>
-								</label>
-							</div>
-							<div class="mt-3 flex flex-wrap gap-2">
-								<button
-									type="button"
-									on:click={cancelCalEdit}
-									class="rounded-lg border border-black/10 px-4 py-2 text-sm font-semibold text-slate-600 dark:border-white/10"
-								>
-									İptal
-								</button>
-								<button
-									type="button"
-									on:click={saveCalCatalogEdit}
-									class="rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-400"
-								>
-									Kaydet
-								</button>
-							</div>
-						</div>
-					{/if}
-					{#each calendarEvents as ev, i}
-						<div
-							class="flex flex-wrap items-center justify-between gap-4 border-t border-black/5 py-3 dark:border-white/10"
-						>
-							<div class="flex min-w-0 flex-1 flex-wrap items-center gap-4">
-								<div
-									class="min-w-[10rem] shrink-0 text-xs font-mono text-slate-500 dark:text-slate-400"
-								>
-									{fmtCalDate(ev.start_date)} – {fmtCalDate(ev.end_date)}
-								</div>
-								<span
-									class="rounded-full px-2.5 py-0.5 text-xs font-medium {CAL_EVENT_STYLES[
-										i % CAL_EVENT_STYLES.length
-									]}"
-								>
-									{ev.title || ev.event_type || 'Etkinlik'}
-								</span>
-								{#if ev.event_type}<span class="text-xs text-slate-400">{ev.event_type}</span>{/if}
-							</div>
-							<div class="flex shrink-0 gap-1">
-								<button
-									type="button"
-									on:click={() => startCalEdit(ev)}
-									class="rounded-lg border border-sky-200 px-2.5 py-1 text-xs font-semibold text-sky-600 dark:border-sky-900/40 dark:text-sky-400"
-								>
-									Düzenle
-								</button>
-								<button
-									type="button"
-									on:click={() => removeCalendarEventRow(ev.id)}
-									class="rounded-lg border border-red-200 px-2.5 py-1 text-xs font-semibold text-red-600 dark:border-red-900/40 dark:text-red-400"
-								>
-									Sil
-								</button>
-							</div>
-						</div>
-					{/each}
-				{/if}
+				<!-- Not: Admin ekranında akademik takvim sadece PDF yönetimidir. -->
 			</div>
 
 			<!-- ============================================================ -->
