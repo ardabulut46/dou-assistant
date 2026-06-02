@@ -608,7 +608,7 @@
 	let profileSaved = false;
 	let profileError: string | null = null;
 
-	// Ders Kayıt — taslaklar obs_course_enrollments (status=draft)
+	// Ders Kayıt — taslaklar (status=draft)
 	let enrollSubmitting = false;
 	let enrollSuccess: string | null = null;
 	let enrollError: string | null = null;
@@ -993,7 +993,7 @@
 						console.warn('[OBS Dev] available-courses yükleme hatası:', avRes.reason);
 					}
 					console.log(
-						`Açılan şube satırı: ${sec.length} (SQL: seçilen akademik süre → obs_course_sections.term_id)`
+						`Açılan şube satırı: ${sec.length} (SQL: seçilen akademik süre eşlemesi)`
 					);
 					console.log('[OBS Dev] Şube/teşhis', {
 						sections_in_terms_total: avPayload?.sections_in_terms_total,
@@ -1013,7 +1013,7 @@
 						}))
 					);
 					console.info(
-						'Tür/Zorunlu etiketi: obs_courses.type + is_mandatory (DB). Yanlışsa SQL ile düzelt; UI sadece API’yi yansıtır.'
+						'Tür/Zorunlu etiketi: API tarafından sağlanır. Yanlışsa veri kaynağı güncellenmelidir; UI sadece API’yi yansıtır.'
 					);
 					console.groupEnd();
 				}
@@ -1255,7 +1255,7 @@
 			!String(course.id || '').trim()
 		) {
 			enrollError =
-				'Bu satır OBS’te `obs_course_sections` gerektirir — şubesiz seçim yapılamaz.';
+				'Bu satır için şube tanımı gerekir — şubesiz seçim yapılamaz.';
 			setTimeout(() => (enrollError = null), 5000);
 			return;
 		}
@@ -1374,7 +1374,7 @@
 			!String(course.id || '').trim()
 		) {
 			dropError =
-				'Bu satır OBS’te `obs_course_sections` kaydı gerektirir — şubesiz seçim yapılamaz.';
+				'Bu satır için şube tanımı gerekir — şubesiz seçim yapılamaz.';
 			setTimeout(() => (dropError = null), 5000);
 			return;
 		}
@@ -1641,8 +1641,7 @@
 					>
 						<div class="font-semibold">Öğrenci özlük kaydı eksik</div>
 						<p class="mt-1 text-xs leading-relaxed opacity-90">
-							<code class="rounded bg-amber-100/80 px-1 dark:bg-white/10">obs_student_profiles</code>
-							tablosunda satırınız yok. <strong>OBS Yönetim → Kullanıcı Yönetimi</strong>’nde hesabınız
+							Özlük kaydınız bulunamadı. <strong>OBS Yönetim → Kullanıcı Yönetimi</strong>’nde hesabınız
 							için <strong>Özlük</strong> ile kayıt oluşturun veya hesabı (öğrenci numarası + bölüm ile)
 							<strong>+ Kullanıcı Ekle</strong> üzerinden oluşturun. Open WebUI’nin genel “kullanıcı ekle”
 							ekranı özlük oluşturmaz.
@@ -1842,8 +1841,7 @@
 			>
 				<p class="font-medium text-slate-700 dark:text-slate-200">Öğrenci profili bulunamadı</p>
 				<p class="mt-2 text-xs">
-					Kayıt <code class="rounded bg-slate-100 px-1 dark:bg-white/10">obs_student_profiles</code>
-					tablosunda yoksa yönetimden profil oluşturulmalıdır.
+					Özlük kaydı yoksa yönetimden profil oluşturulmalıdır.
 				</p>
 			</div>
 
@@ -2299,7 +2297,7 @@
 							{#if registrationSectionsInTermTotal !== null || registrationSectionsQueryRowsStudent !== null}
 								<p class="text-[11px] leading-snug text-slate-400">
 									Dönem öbeğinde toplam
-									<span class="font-mono text-slate-500 dark:text-slate-300">obs_course_sections</span>:
+									<span class="font-mono text-slate-500 dark:text-slate-300">açık şube</span>:
 									<strong>{registrationSectionsInTermTotal ?? '—'}</strong>
 									· Uygun şube satırı (öğrenci sorgusu):
 									<strong>{registrationSectionsQueryRowsStudent ?? '—'}</strong>
@@ -2372,7 +2370,7 @@
 													type="button"
 													on:click={() => toggleCart(c)}
 													class="inline-flex shrink-0 items-center justify-center rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors bg-slate-100 text-slate-600 hover:bg-sky-50 hover:text-sky-700 dark:bg-white/10 dark:hover:bg-sky-900/20 whitespace-nowrap"
-													title="Şube seçilebilmesi için `obs_course_sections` kaydı gerekir; yine de denediğinizde sistem uyarısı alırsınız."
+													title="Şube seçilebilmesi için şube kaydı gerekir; yine de denediğinizde sistem uyarısı alırsınız."
 												>
 													Ders ekle
 												</button>
@@ -2790,7 +2788,7 @@
 													type="button"
 													on:click={() => toggleAddDropCart(c)}
 													class="inline-flex shrink-0 items-center justify-center rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors bg-slate-100 text-slate-600 hover:bg-sky-50 hover:text-sky-700 dark:bg-white/10 dark:hover:bg-sky-900/20 whitespace-nowrap"
-													title="Şube seçilebilmesi için `obs_course_sections` kaydı gerekir; yine de denediğinizde sistem uyarısı alırsınız."
+													title="Şube seçilebilmesi için şube kaydı gerekir; yine de denediğinizde sistem uyarısı alırsınız."
 												>
 													Ders ekle
 												</button>

@@ -309,7 +309,7 @@
 	let examErr: string | null = null;
 	let approvalErr: string | null = null;
 
-	/** obs_classrooms boş olsa bile tanımlı sınav satırlarındaki derslik metinlerini seçenek olarak birleştir */
+	/** Derslik listesi boş olsa bile tanımlı sınav satırlarındaki derslik metinlerini seçenek olarak birleştir */
 	function mergeDouClassroomsWithExamStrings(
 		base: DouClassroomOption[],
 		examsList: AcademicExam[]

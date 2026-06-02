@@ -1510,7 +1510,7 @@
 
 			<p class="mb-3 text-xs text-slate-500 dark:text-slate-400">
 				<strong>Open WebUI</strong> (Ayarlar → Kullanıcı ekle / <code class="rounded bg-slate-100 px-1 dark:bg-white/10">/api/v1/auths/add</code>)
-				yalnızca <code class="rounded bg-slate-100 px-1 dark:bg-white/10">user</code> tablosuna yazar; OBS özlük için bu sayfadan
+				yalnızca kullanıcı hesabını oluşturur; OBS özlük için bu sayfadan
 				<strong>+ Kullanıcı Ekle</strong> kullanın veya listede ilgili öğrenci için <strong>Özlük</strong> ile kayıt oluşturun.
 			</p>
 
@@ -2346,8 +2346,8 @@
 				<div
 					class="rounded-lg border border-sky-200 bg-sky-50/80 px-4 py-3 text-xs text-sky-900 dark:border-sky-900/40 dark:bg-sky-950/30 dark:text-sky-200"
 				>
-					<strong>Ders kayıt</strong> ve <strong>ekle-bırak</strong> pencereleri yalnızca buradan yönetilir
-					. Kayıt Kuralları sayfası yalnızca AKTS/GNO limitlerini içerir.
+					<strong>Ders kayıt</strong> ve <strong>ekle-bırak</strong> pencereleri yalnızca buradan yönetilir.
+					Kayıt Kuralları sayfası yalnızca AKTS/GNO limitlerini içerir.
 				</div>
 			<div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
 				<div

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
 	import { goto, afterNavigate } from '$app/navigation';
+	import { page } from '$app/stores';
 	import { onDestroy, onMount } from 'svelte';
 	import { user } from '$lib/stores';
 	import { userSignOut } from '$lib/apis/auths';
@@ -156,7 +157,8 @@
 	$: panelLabel = roleLabel[role] ?? 'OBS';
 
 	/** Sondaki / tutarsızlığını kaldır; menüde yalnızca en spesifik (en uzun) eşleşen öğe aktif olsun */
-	$: normalizedActive = (activePath ?? '').replace(/\/+$/, '') || dashHref;
+	$: resolvedPath = (($page?.url?.pathname ?? '') as string).replace(/\/+$/, '');
+	$: normalizedActive = (resolvedPath || (activePath ?? '')).replace(/\/+$/, '') || dashHref;
 	$: navFlat = navGroups.flatMap((g) => g.items);
 	$: activeNavHref = (() => {
 		const p = normalizedActive;

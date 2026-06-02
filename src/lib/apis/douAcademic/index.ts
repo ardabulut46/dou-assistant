@@ -90,7 +90,7 @@ export type DouStudentProfile = {
 	enrollment_date?: string;
 	is_financially_eligible?: boolean;
 	_mock?: boolean;
-	/** obs_student_profiles satırı yok; yönetimden özlük eklenmeli */
+	/** Özlük kaydı yok; yönetimden özlük eklenmeli */
 	_obs_profile_missing?: boolean;
 };
 
@@ -135,7 +135,7 @@ export type DouEnrollment = {
 	language?: string;
 	class_year?: number;
 	type?: string;
-	/** API: obs_courses.is_mandatory + type (zorunlu/required). */
+	/** API: zorunlu ders işareti + ders türü birleşik bilgisi. */
 	is_mandatory_course?: boolean;
 	status: string;
 	/** Taslak satırda: registration | add_drop | advisor_added … */
@@ -478,7 +478,7 @@ export type CurriculumMandatoryBrief = {
 	course_code: string;
 	course_name: string;
 	akts: number;
-	/** obs_courses.curriculum_semester; müfredat kartı sırası (yüksek lisans dahil doğrudan sıra kullanılacaksa null olabilir). */
+	/** Müfredat kartı sırası (yüksek lisans dahil doğrudan sıra kullanılacaksa null olabilir). */
 	curriculum_semester?: number | null;
 };
 
@@ -1328,17 +1328,17 @@ export type AvailableCourse = {
 	enrolled: number;
 	registration_priority_tier?: number;
 	registration_priority_label?: string;
-	/** obs_courses.type (zorunlu, teknik_secmeli vb.) */
+	/** Ders türü (zorunlu, teknik seçmeli vb.) */
 	type?: string;
 	/** Müfredatta zorunlu mu (type / is_mandatory birleşik). */
 	is_mandatory_course?: boolean;
-	/** obs_courses.curriculum_semester (müfredat yarıyılı indeksi). */
+	/** Müfredat yarıyılı indeksi. */
 	curriculum_semester?: number | null;
 	/** Tablo için: «4. sınıf» (API: catalog_class_label). */
 	catalog_class_label?: string;
 	/** Tablo için: Güz / Bahar (API: catalog_half_label). */
 	catalog_half_label?: string;
-	/** Ekle-bırak: seçilen süre için obs_course_sections satırı yok; seçim yapılamaz. */
+	/** Ekle-bırak: seçilen dönemde şube yoksa seçim yapılamaz. */
 	offer_placeholder?: boolean;
 };
 
@@ -1369,7 +1369,7 @@ export type DouAvailableCoursesResponse = {
 	department_id?: string;
 	/** Bölüm + program yarıyılı filtresi uygulanıyor mu */
 	curriculum_filter_active?: boolean;
-	/** Süre öbeğinde toplam `obs_course_sections` satırı (öğrenci filtresi yok). */
+	/** Seçilen dönemde toplam şube satırı (öğrenci filtresi yok). */
 	sections_in_terms_total?: number;
 	/** Şube seçme sorgusundan sonra kalan uygun şube satırı (aynı süre grubunda bloklar dahil). */
 	sections_query_rows_student?: number;
@@ -1700,7 +1700,7 @@ export const getDouAdminUsers = (
 export const DOU_ADMIN_USER_ROLES = ['user', 'academician', 'admin', 'pending'] as const;
 export type DouAdminAssignableRole = (typeof DOU_ADMIN_USER_ROLES)[number];
 
-/** POST /admin/users — backend `UserCreate` + `obs_student_profiles` / `obs_academic_profiles` */
+/** POST /admin/users — backend `UserCreate` + özlük kayıtları */
 export type DouStudentProfileCreateInput = {
 	student_number: string;
 	department_id: string;
@@ -1752,7 +1752,7 @@ export type DouAdminCreateUserBody = {
 export const createDouAdminUser = (token: string | null, body: DouAdminCreateUserBody) =>
 	authFetch<AdminUser>('/admin/users', token, { method: 'POST', body: JSON.stringify(body) });
 
-/** Mevcut öğrenci hesabına obs_student_profiles kaydı (auths/add ile oluşanlar için) */
+/** Mevcut öğrenci hesabına özlük kaydı (auths/add ile oluşanlar için) */
 export const postDouAdminUserStudentProfile = (
 	token: string | null,
 	userId: string,
@@ -1856,7 +1856,7 @@ export const deleteDouAdminSection = (token: string | null, sectionId: string) =
 	);
 
 // ---------------------------------------------------------------------------
-// Admin — Akademisyen listesi (şube öğretim üyesi ataması için obs_academic_profiles)
+// Admin — Akademisyen listesi (şube öğretim üyesi ataması için)
 // ---------------------------------------------------------------------------
 export type AdvisorAssignmentInstructorRow = {
 	academic_profile_id: string | null;
@@ -2031,7 +2031,7 @@ export const devSeedUsers = (token: string | null) =>
 export const devGetObsRole = (token: string | null) =>
 	authFetch<{ obs_role: string; email: string }>('/dev/obs-role', token);
 
-/** [DEV] Oturumdaki öğrencinin obs_course_enrollments + not + yoklama kayıtlarını siler. */
+/** [DEV] Oturumdaki öğrencinin ders kayıtları + not + yoklama kayıtlarını siler. */
 export const devClearMyStudentEnrollments = (token: string | null) =>
 	authFetch<{ ok: boolean; deleted_enrollments: number; detail?: string }>(
 		'/dev/clear-my-student-enrollments',
