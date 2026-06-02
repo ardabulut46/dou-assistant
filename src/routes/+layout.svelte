@@ -81,6 +81,12 @@
 		return false;
 	};
 
+	// PWA cache bazı ortamlarda eski bundle'ları döndürebiliyor.
+	// Bu proje için offline/PWA gerekmediğinden, her açılışta SW'leri devre dışı bırakıyoruz.
+	onMount(() => {
+		void unregisterServiceWorkers();
+	});
+
 	let obsRouteLoader = false;
 
 	// handle frontend updates (https://svelte.dev/docs/kit/configuration#version)

@@ -9,6 +9,7 @@
 	import { uploadFile, deleteFileById } from '$lib/apis/files';
 	import {
 		addFileToKnowledgeById,
+		addFilesToKnowledgeBatch,
 		createNewKnowledge,
 		searchKnowledgeBases,
 		searchKnowledgeFilesById
@@ -363,6 +364,7 @@
 			const kbId = await resolveOrCreateAcademicCalendarKbId(token);
 			if (!kbId) throw new Error('Dosya alanı hazırlanamadı.');
 
+			const addedIds: string[] = [];
 			for (const picked of calDocPickedFiles) {
 				const file = picked.file;
 				const displayName = (picked.displayName || file.name).trim();
@@ -380,8 +382,11 @@
 					throw new Error(typeof e === 'string' ? e : 'Yüklenemedi.');
 				});
 				if (!uploaded?.id) throw new Error('Dosya yükleme yanıtı alınamadı.');
-				await addFileToKnowledgeById(token, kbId, uploaded.id);
+				addedIds.push(uploaded.id);
 			}
+
+			// Knowledge tarafında ekleme + batch processing
+			await addFilesToKnowledgeBatch(token, kbId, addedIds);
 
 			calDocPickedFiles = [];
 			await reloadCalendarDocs();
